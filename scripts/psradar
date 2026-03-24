@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+VENV_PYTHON="$ROOT_DIR/.venv/bin/python"
+
+if [ -x "$VENV_PYTHON" ]; then
+  PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" exec "$VENV_PYTHON" -m penny_stock_radar "$@"
+fi
+
+PYTHONPATH="$ROOT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m penny_stock_radar "$@"
