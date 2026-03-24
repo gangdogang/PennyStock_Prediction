@@ -851,7 +851,7 @@ def _render_live_mode(
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown("<h3 class='section-title'>실시간 모니터</h3>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='small-note'>설정된 Polygon/Alpaca provider에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다.</div>",
+        "<div class='small-note'>설정된 Polygon/Alpaca provider에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다. `시장 데이터 시각`은 마지막 실제 체결/스냅샷 시각이라 거래가 없으면 고정될 수 있습니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -929,7 +929,9 @@ def _render_live_snapshot_table(
                 "ask_price": row.ask_price,
                 "spread_pct": row.spread_pct,
                 "market_status": row.market_status,
-                "updated_at": row.updated_at.isoformat() if row.updated_at else "-",
+                "market_data_at": row.market_data_at.isoformat() if row.market_data_at else "-",
+                "polled_at": row.polled_at.isoformat(),
+                "data_age_seconds": round(row.data_age_seconds, 1) if row.data_age_seconds is not None else "-",
             }
             for row in rows
         ]

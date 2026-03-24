@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.providers.live_market import (
@@ -50,6 +51,18 @@ def test_live_monitor_fetch_formats_snapshot(monkeypatch) -> None:
     )
 
     monitor = LiveMonitor(AppSettings())
+    monkeypatch.setattr(
+        monitor,
+        "_now_utc",
+        lambda: datetime(2026, 3, 24, 13, 46, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_now_eastern",
+        lambda: datetime(2026, 3, 24, 13, 46, tzinfo=timezone.utc).astimezone(
+            ZoneInfo("America/New_York")
+        ),
+    )
     rows = monitor.fetch(["AAA", "BBB"], limit=1)
 
     assert len(rows) == 1
@@ -61,6 +74,9 @@ def test_live_monitor_fetch_formats_snapshot(monkeypatch) -> None:
     assert row.ask_price == 1.26
     assert row.market_phase == "정규장"
     assert row.spread_pct is not None and row.spread_pct > 0
+    assert row.market_data_at == datetime(2026, 3, 24, 13, 45, tzinfo=timezone.utc)
+    assert row.polled_at == datetime(2026, 3, 24, 13, 46, tzinfo=timezone.utc)
+    assert row.data_age_seconds == 60.0
 
 
 def test_live_monitor_provider_status_reports_unavailable(monkeypatch) -> None:

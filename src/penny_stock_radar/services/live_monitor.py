@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
 from ..config import AppSettings
@@ -21,7 +21,9 @@ class LiveSnapshotView:
     ask_price: float | None
     spread_pct: float | None
     market_status: str | None
-    updated_at: datetime | None
+    market_data_at: datetime | None
+    polled_at: datetime
+    data_age_seconds: float | None
 
 
 class LiveMonitor:
@@ -43,37 +45,40 @@ class LiveMonitor:
             raise RuntimeError(reason)
 
         views: list[LiveSnapshotView] = []
+        polled_at = self._now_utc()
         try:
             for symbol in symbols[:limit]:
                 snapshot = provider.latest_snapshot(symbol)
                 if snapshot is None:
                     continue
-                views.append(self._to_view(snapshot))
+                views.append(self._to_view(snapshot, polled_at))
         finally:
             self._close_provider(provider)
         return views
 
-    def _to_view(self, snapshot: LiveSnapshot) -> LiveSnapshotView:
+    def _to_view(self, snapshot: LiveSnapshot, polled_at: datetime) -> LiveSnapshotView:
         bid_price = snapshot.latest_quote.bid_price if snapshot.latest_quote else None
         ask_price = snapshot.latest_quote.ask_price if snapshot.latest_quote else None
-        updated_at = snapshot.updated_at or (
+        market_data_at = snapshot.updated_at or (
             snapshot.latest_trade.timestamp if snapshot.latest_trade else None
         )
         return LiveSnapshotView(
             symbol=snapshot.symbol,
             source=snapshot.source,
-            market_phase=self._market_phase(updated_at),
+            market_phase=self._market_phase(),
             trade_price=snapshot.latest_trade.price if snapshot.latest_trade else None,
             trade_size=snapshot.latest_trade.size if snapshot.latest_trade else None,
             bid_price=bid_price,
             ask_price=ask_price,
             spread_pct=self._spread_pct(bid_price, ask_price),
             market_status=snapshot.market_status,
-            updated_at=updated_at,
+            market_data_at=market_data_at,
+            polled_at=polled_at,
+            data_age_seconds=self._data_age_seconds(polled_at, market_data_at),
         )
 
-    def _market_phase(self, updated_at: datetime | None) -> str:
-        current = updated_at.astimezone(EASTERN) if updated_at else datetime.now(EASTERN)
+    def _market_phase(self) -> str:
+        current = self._now_eastern()
         if current.weekday() >= 5:
             return "주말/휴장"
 
@@ -85,6 +90,21 @@ class LiveMonitor:
         if time(16, 0) <= session_time < time(20, 0):
             return "애프터장"
         return "장외/대기"
+
+    def _data_age_seconds(
+        self,
+        polled_at: datetime,
+        market_data_at: datetime | None,
+    ) -> float | None:
+        if market_data_at is None:
+            return None
+        return max((polled_at - market_data_at).total_seconds(), 0.0)
+
+    def _now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _now_eastern(self) -> datetime:
+        return datetime.now(EASTERN)
 
     def _spread_pct(self, bid: float | None, ask: float | None) -> float | None:
         if bid is None or ask is None:
