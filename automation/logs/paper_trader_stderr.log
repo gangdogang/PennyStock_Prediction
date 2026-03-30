@@ -1,0 +1,974 @@
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:783 in   │
+│ paper_trader                                                                 │
+│                                                                              │
+│   780 │   try:                                                               │
+│   781 │   │   while True:                                                    │
+│   782 │   │   │   try:                                                       │
+│ ❱ 783 │   │   │   │   result = engine.run_once(phase=phase, export_csv=True) │
+│   784 │   │   │   except RuntimeError as exc:                                │
+│   785 │   │   │   │   console.print(f"[yellow]{exc}[/yellow]")               │
+│   786 │   │   │   │   if run_once:                                           │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1056 in run_once                                                  │
+│                                                                              │
+│   1053 │   │   if not rows and market_phase in {"premarket", "regular"}:     │
+│   1054 │   │   │   scan_result = self.primary_engine.scanner.scan(phase=mark │
+│   1055 │   │   │   rows = scan_result.activity                               │
+│ ❱ 1056 │   │   return self.process_market_activity(                          │
+│   1057 │   │   │   market_phase=market_phase,                                │
+│   1058 │   │   │   activity=rows,                                            │
+│   1059 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:1069 in process_market_activity                                   │
+│                                                                              │
+│   1066 │   │   activity: list[MarketActivity],                               │
+│   1067 │   │   export_csv: bool = True,                                      │
+│   1068 │   ) -> PaperTradingStepResult:                                      │
+│ ❱ 1069 │   │   primary_result = self.primary_engine.process_market_activity( │
+│   1070 │   │   │   market_phase=market_phase,                                │
+│   1071 │   │   │   activity=activity,                                        │
+│   1072 │   │   │   export_csv=export_csv,                                    │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:238 in process_market_activity                                    │
+│                                                                              │
+│    235 │   │   insert_paper_run_snapshot(self.settings.database_path, snapsh │
+│    236 │   │                                                                 │
+│    237 │   │   if export_csv:                                                │
+│ ❱  238 │   │   │   self.export_run_csv(run.run_id)                           │
+│    239 │   │                                                                 │
+│    240 │   │   return PaperTradingStepResult(                                │
+│    241 │   │   │   run_id=run.run_id,                                        │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:283 in export_run_csv                                             │
+│                                                                              │
+│    280 │   │   │   │   self.export_dir / "paper_run_summary.csv",            │
+│    281 │   │   │   │   [target_run.model_dump(mode="json")],                 │
+│    282 │   │   │   )                                                         │
+│ ❱  283 │   │   self._write_csv(                                              │
+│    284 │   │   │   self.export_dir / "paper_positions.csv",                  │
+│    285 │   │   │   [row.model_dump(mode="json") for row in positions],       │
+│    286 │   │   )                                                             │
+│                                                                              │
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/services/paper_ │
+│ trading.py:988 in _write_csv                                                 │
+│                                                                              │
+│    985 │   │   │   for key in row.keys():                                    │
+│    986 │   │   │   │   if key not in fieldnames:                             │
+│    987 │   │   │   │   │   fieldnames.append(key)                            │
+│ ❱  988 │   │   with path.open("w", encoding="utf-8", newline="") as handle:  │
+│    989 │   │   │   writer = csv.DictWriter(handle, fieldnames=fieldnames)    │
+│    990 │   │   │   writer.writeheader()                                      │
+│    991 │   │   │   for row in rows:                                          │
+│                                                                              │
+│ /opt/homebrew/Cellar/python@3.14/3.14.0_1/Frameworks/Python.framework/Versio │
+│ ns/3.14/lib/python3.14/pathlib/__init__.py:776 in open                       │
+│                                                                              │
+│    773 │   │   """                                                           │
+│    774 │   │   if "b" not in mode:                                           │
+│    775 │   │   │   encoding = io.text_encoding(encoding)                     │
+│ ❱  776 │   │   return io.open(self, mode, buffering, encoding, errors, newli │
+│    777 │                                                                     │
+│    778 │   def read_bytes(self):                                             │
+│    779 │   │   """                                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+OSError: [Errno 11] Resource deadlock avoided: 
+'sample_outputs/paper_trading/paper_positions.csv'
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()

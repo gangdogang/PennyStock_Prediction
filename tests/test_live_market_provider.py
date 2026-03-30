@@ -139,6 +139,34 @@ def test_alpaca_live_provider_parses_rest_payloads() -> None:
                     },
                 },
             )
+        if request.url.path.endswith("/v1beta1/screener/stocks/movers"):
+            return httpx.Response(
+                200,
+                json={
+                    "last_updated": "2026-03-24T00:02:06Z",
+                    "gainers": [
+                        {
+                            "symbol": "AAA",
+                            "price": 2.35,
+                            "percent_change": 17.25,
+                        }
+                    ],
+                },
+            )
+        if request.url.path.endswith("/v1beta1/screener/stocks/most-actives"):
+            return httpx.Response(
+                200,
+                json={
+                    "last_updated": "2026-03-24T00:02:07Z",
+                    "most_actives": [
+                        {
+                            "symbol": "AAA",
+                            "volume": 123456,
+                            "trade_count": 987,
+                        }
+                    ],
+                },
+            )
         return httpx.Response(404, json={"error": "not found"})
 
     client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://data.alpaca.markets")
@@ -152,11 +180,17 @@ def test_alpaca_live_provider_parses_rest_payloads() -> None:
     trade = provider.latest_trade("AAA")
     quote = provider.latest_quote("AAA")
     snapshot = provider.latest_snapshot("AAA")
+    gainers = provider.top_gainers(limit=20)
+    actives = provider.most_active(limit=20)
 
     assert trade is not None and trade.price == 2.34 and trade.source == "alpaca"
     assert quote is not None and quote.ask_price == 2.40 and quote.bid_size == 80
     assert snapshot is not None and snapshot.latest_trade is not None
     assert snapshot.latest_trade.price == 2.35
     assert snapshot.latest_quote is not None and snapshot.latest_quote.ask_price == 2.41
+    assert gainers and gainers[0].symbol == "AAA" and gainers[0].pct_change == 17.25
+    assert actives and actives[0].symbol == "AAA" and actives[0].volume == 123456
     assert any(path.endswith("/v2/stocks/AAA/trades/latest") for path, _, _ in requests)
     assert any(headers.get("APCA-API-KEY-ID") == "alpaca-key" for _, _, headers in requests)
+    assert any(path.endswith("/v1beta1/screener/stocks/movers") for path, _, _ in requests)
+    assert any(path.endswith("/v1beta1/screener/stocks/most-actives") for path, _, _ in requests)

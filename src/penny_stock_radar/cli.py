@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from .ai_supervisor import AISupervisor, build_gemini_reviewer
 from .dashboard import launch_dashboard
 from .config import get_settings
 from .db import (
     fetch_latest_candidates,
+    fetch_latest_paper_trading_run,
+    fetch_latest_paper_strategy_runs,
     fetch_latest_premarket_signals,
     fetch_latest_replay_report,
     fetch_latest_scan_id,
     fetch_latest_session_decisions,
     fetch_latest_social_signals,
     fetch_latest_watchlist,
+    fetch_paper_orders,
+    fetch_paper_positions,
     init_database,
     insert_social_signals,
 )
@@ -24,12 +30,27 @@ from .providers.live_market import build_live_market_provider
 from .providers.social import SocialMentionsCSVProvider
 from .services.replay_pipeline import ReplayPipeline
 from .services.report_builder import ReportBuilder
+from .services.market_activity import MarketActivityScanner
+from .services.paper_trading import (
+    PAPER_STRATEGY_LABELS,
+    PRIMARY_PAPER_STRATEGY,
+    PaperTradingCoordinator,
+)
 from .services.social_monitor import SocialMonitor
 from .services.universe_builder import UniverseBuilder
 from .services.watchlist_builder import WatchlistBuilder
+from .snapshot_dashboard import launch_snapshot_dashboard
 
 app = typer.Typer(help="Penny stock radar CLI.")
 console = Console()
+
+TRADE_CALL_MAP = {
+    "OPENING_RANGE_CANDIDATE": "시초 후보",
+    "CONDITIONAL_ENTRY": "조건부 진입",
+    "NEWS_CHECK_FIRST": "재료 확인 전",
+    "WAIT_PULLBACK": "눌림 대기",
+    "NO_CHASE": "추격 금지",
+}
 
 
 @app.command("init-db")
@@ -139,6 +160,7 @@ def show_watchlist(limit: int = typer.Option(20, help="Rows to display.")) -> No
     table.add_column("Catalyst")
     table.add_column("Technical")
     table.add_column("Sympathy")
+    table.add_column("Context")
     table.add_column("Reasons")
     for row in rows:
         table.add_row(
@@ -147,6 +169,7 @@ def show_watchlist(limit: int = typer.Option(20, help="Rows to display.")) -> No
             f"{row['catalyst_score']:.2f}",
             f"{row['technical_score']:.2f}",
             f"{row['sympathy_score']:.2f}",
+            f"{row['market_context_score']:.2f}" if row["market_context_score"] is not None else "0.00",
             row["reasons"],
         )
     console.print(table)
@@ -455,6 +478,118 @@ def show_live_market(
         console.print(f"Live snapshot JSON written to [bold]{export_json}[/bold]")
 
 
+@app.command("scan-market-activity")
+def scan_market_activity(
+    phase: str = typer.Option(
+        "auto",
+        help="Which phase to scan: auto, premarket, or regular.",
+    ),
+    scan_limit: int | None = typer.Option(
+        None,
+        help="Optional cap on how many symbols to scan from the current market scope.",
+    ),
+    top_limit: int = typer.Option(
+        10,
+        help="How many symbols count as top leaders for prediction-vs-outcome matching.",
+    ),
+    comparison_csv: Path | None = typer.Option(
+        None,
+        help="Optional CSV path for prediction-vs-outcome export. Defaults to sample_outputs/<phase>_prediction_vs_actual.csv.",
+    ),
+) -> None:
+    """Rank the latest in-scope market movers by live % change and volume, then compare them with the watchlist."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    scanner = MarketActivityScanner(settings)
+    if comparison_csv is None:
+        resolved_phase = scanner.resolve_market_phase(phase)
+        if resolved_phase in {"premarket", "regular"}:
+            comparison_csv = Path("sample_outputs") / f"{resolved_phase}_prediction_vs_actual.csv"
+
+    try:
+        result = scanner.scan(
+            phase=phase,
+            scan_limit=scan_limit,
+            top_limit=top_limit,
+            comparison_csv=comparison_csv,
+        )
+    except RuntimeError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    pct_table = Table(title=f"Live {result.market_phase.title()} Movers · % Change")
+    pct_table.add_column("Rank")
+    pct_table.add_column("Symbol")
+    pct_table.add_column("Pred")
+    pct_table.add_column("Price")
+    pct_table.add_column("%Chg")
+    pct_table.add_column("Volume")
+    pct_table.add_column("DV")
+    pct_table.add_column("Spread")
+    pct_table.add_column("Read")
+    for row in sorted(result.activity, key=lambda item: (item.pct_rank, item.symbol))[:top_limit]:
+        pct_table.add_row(
+            str(row.pct_rank),
+            row.symbol,
+            "Y" if row.predicted else "-",
+            _format_optional_number(row.last_price, 4),
+            _format_optional_number(row.pct_change, 2),
+            _format_optional_number(row.volume, 0),
+            _format_optional_number(row.dollar_volume, 0),
+            _format_optional_percent(row.spread_pct),
+            _trade_call_label(row.analysis_label),
+        )
+
+    volume_table = Table(title=f"Live {result.market_phase.title()} Movers · Volume")
+    volume_table.add_column("Rank")
+    volume_table.add_column("Symbol")
+    volume_table.add_column("Pred")
+    volume_table.add_column("Volume")
+    volume_table.add_column("DV")
+    volume_table.add_column("%Chg")
+    volume_table.add_column("Spread")
+    volume_table.add_column("Read")
+    for row in sorted(result.activity, key=lambda item: (item.volume_rank, item.symbol))[:top_limit]:
+        volume_table.add_row(
+            str(row.volume_rank),
+            row.symbol,
+            "Y" if row.predicted else "-",
+            _format_optional_number(row.volume, 0),
+            _format_optional_number(row.dollar_volume, 0),
+            _format_optional_number(row.pct_change, 2),
+            _format_optional_percent(row.spread_pct),
+            _trade_call_label(row.analysis_label),
+        )
+
+    outcome_table = Table(title=f"Prediction vs Outcome · {result.market_phase.title()}")
+    outcome_table.add_column("Symbol")
+    outcome_table.add_column("Pred")
+    outcome_table.add_column("WRank")
+    outcome_table.add_column("%Rank")
+    outcome_table.add_column("VRank")
+    outcome_table.add_column("Outcome")
+    outcome_table.add_column("Read")
+    for row in result.outcomes[: max(top_limit * 2, 12)]:
+        outcome_table.add_row(
+            row.symbol,
+            "Y" if row.predicted else "-",
+            str(row.watchlist_rank or "-"),
+            str(row.pct_rank or "-"),
+            str(row.volume_rank or "-"),
+            row.outcome,
+            _trade_call_label(row.analysis_label),
+        )
+
+    console.print(
+        f"Scanned {result.scanned_symbol_count} symbols from the {settings.market_scope_label} scope for the {result.market_phase} phase."
+    )
+    console.print(pct_table)
+    console.print(volume_table)
+    console.print(outcome_table)
+    if result.comparison_csv is not None:
+        console.print(f"Prediction comparison CSV written to [bold]{result.comparison_csv}[/bold]")
+
+
 @app.command("export-summary")
 def export_summary(
     json_output: Path = typer.Option(
@@ -475,6 +610,299 @@ def export_summary(
     builder.export_markdown(settings.database_path, markdown_output, limit=limit)
     console.print(
         f"Exported summary to [bold]{json_output}[/bold] and [bold]{markdown_output}[/bold]"
+    )
+
+
+@app.command("export-dashboard-html")
+def export_dashboard_html(
+    output_path: Path = typer.Option(
+        Path("sample_outputs/radar_dashboard.html"),
+        help="Path to export a standalone snapshot dashboard HTML file.",
+    ),
+    limit: int = typer.Option(20, help="Rows to include from each latest snapshot."),
+) -> None:
+    """Export a standalone HTML snapshot dashboard without launching Streamlit."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    builder = ReportBuilder()
+    builder.export_html(settings.database_path, output_path, limit=limit)
+    console.print(f"Exported standalone dashboard to [bold]{output_path}[/bold]")
+
+
+@app.command("snapshot-dashboard")
+def snapshot_dashboard(
+    output_path: Path = typer.Option(
+        Path("sample_outputs/radar_dashboard.html"),
+        help="Path to export the snapshot dashboard HTML file.",
+    ),
+    limit: int = typer.Option(20, help="Rows to include from each latest snapshot."),
+    open_browser: bool = typer.Option(
+        True,
+        "--open-browser/--no-open-browser",
+        help="Open the exported HTML file after generating it.",
+    ),
+) -> None:
+    """Build and optionally open the standalone snapshot dashboard."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    html_path, opened = launch_snapshot_dashboard(
+        settings.database_path,
+        output_path=output_path,
+        limit=limit,
+        open_browser=open_browser,
+    )
+    console.print(f"Snapshot dashboard exported to [bold]{html_path}[/bold]")
+    if open_browser:
+        if opened:
+            console.print("Opened the snapshot dashboard in your default browser.")
+        else:
+            console.print(
+                "Automatic browser open did not succeed. Open the exported HTML file manually."
+            )
+
+
+@app.command("ai-supervisor")
+def ai_supervisor(
+    check_interval_seconds: int = typer.Option(
+        3600,
+        help="How often to re-check the workspace when running continuously.",
+    ),
+    refresh_if_older_than_minutes: int = typer.Option(
+        15,
+        help="Run the full pipeline when the latest scan is older than this many minutes.",
+    ),
+    snapshot_output: Path = typer.Option(
+        Path("sample_outputs/radar_dashboard.html"),
+        help="Snapshot dashboard HTML path.",
+    ),
+    review_output: Path = typer.Option(
+        Path("automation/inbox/gemini_review.md"),
+        help="Markdown path where the Gemini sidecar review is written.",
+    ),
+    prompt_path: Path = typer.Option(
+        Path("automation/prompts/gemini_reviewer.md"),
+        help="Prompt template path for the Gemini reviewer.",
+    ),
+    log_path: Path = typer.Option(
+        Path("automation/logs/ai_supervisor.log"),
+        help="Log file path for the local AI supervisor.",
+    ),
+    run_once: bool = typer.Option(
+        False,
+        "--run-once/--watch",
+        help="Run a single supervisor pass and exit instead of staying in a loop.",
+    ),
+) -> None:
+    """Run the local Gemini sidecar supervisor for this workspace."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    supervisor = AISupervisor(
+        settings,
+        check_interval_seconds=check_interval_seconds,
+        refresh_if_older_than_minutes=refresh_if_older_than_minutes,
+        snapshot_output=snapshot_output,
+        review_output=review_output,
+        prompt_path=prompt_path,
+        log_path=log_path,
+        reviewer=build_gemini_reviewer(settings),
+    )
+
+    try:
+        while True:
+            result = supervisor.run_once()
+            if result.ok:
+                console.print(result.message)
+            else:
+                console.print(f"[red]{result.message}[/red]")
+                if run_once:
+                    raise typer.Exit(code=1)
+
+            if run_once:
+                break
+
+            console.print(f"Sleeping for {check_interval_seconds} seconds.")
+            time.sleep(check_interval_seconds)
+    except KeyboardInterrupt:
+        console.print("AI supervisor stopped by user.")
+
+
+@app.command("run-paper-trading")
+def run_paper_trading(
+    phase: str = typer.Option(
+        "auto",
+        help="Which market phase to evaluate: auto, premarket, regular, afterhours, or closed.",
+    ),
+    export_csv: bool = typer.Option(
+        True,
+        "--export-csv/--no-export-csv",
+        help="Refresh the paper-trading CSV logs after this pass.",
+    ),
+) -> None:
+    """Run one automated paper-trading pass using the latest live market ranking."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    engine = PaperTradingCoordinator(settings)
+    try:
+        result = engine.run_once(phase=phase, export_csv=export_csv)
+    except RuntimeError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"Paper trading [{result.market_phase}] actions={','.join(result.actions)} "
+        f"equity={result.equity:.2f} realized={result.realized_pnl:.2f} "
+        f"unrealized={result.unrealized_pnl:.2f} profit_factor={result.profit_factor:.2f}"
+    )
+    console.print(f"CSV logs written to [bold]{result.export_dir}[/bold]")
+
+
+@app.command("paper-trader")
+def paper_trader(
+    check_interval_seconds: int = typer.Option(
+        60,
+        help="How often to poll live market data when running continuously.",
+    ),
+    phase: str = typer.Option(
+        "auto",
+        help="Which market phase to evaluate each loop.",
+    ),
+    run_once: bool = typer.Option(
+        False,
+        "--run-once/--watch",
+        help="Run a single paper-trading pass and exit instead of looping.",
+    ),
+) -> None:
+    """Continuously run the automated paper-trading engine."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    engine = PaperTradingCoordinator(settings)
+
+    try:
+        while True:
+            try:
+                result = engine.run_once(phase=phase, export_csv=True)
+            except RuntimeError as exc:
+                console.print(f"[yellow]{exc}[/yellow]")
+                if run_once:
+                    raise typer.Exit(code=1)
+            else:
+                console.print(
+                    f"[{result.market_phase}] actions={','.join(result.actions)} "
+                    f"open={result.open_position_count} closed={result.closed_trade_count} "
+                    f"equity={result.equity:.2f} realized={result.realized_pnl:.2f} "
+                    f"unrealized={result.unrealized_pnl:.2f}"
+                )
+            if run_once:
+                break
+            console.print(f"Sleeping for {check_interval_seconds} seconds.")
+            time.sleep(check_interval_seconds)
+    except KeyboardInterrupt:
+        console.print("Paper trader stopped by user.")
+
+
+@app.command("show-paper-summary")
+def show_paper_summary(
+    order_limit: int = typer.Option(10, help="Recent paper orders to display."),
+) -> None:
+    """Show the latest paper-trading performance summary."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    run = fetch_latest_paper_trading_run(settings.database_path, PRIMARY_PAPER_STRATEGY)
+    if run is None:
+        console.print("No paper-trading run found. Run `psradar run-paper-trading` first.")
+        raise typer.Exit(code=1)
+
+    positions = fetch_paper_positions(settings.database_path, run.run_id)
+    orders = fetch_paper_orders(settings.database_path, run.run_id)
+    strategy_runs = fetch_latest_paper_strategy_runs(settings.database_path, limit=10)
+
+    summary = Table(title="Paper Trading Summary")
+    summary.add_column("Run")
+    summary.add_column("Status")
+    summary.add_column("Cash")
+    summary.add_column("Equity")
+    summary.add_column("Realized")
+    summary.add_column("Unrealized")
+    summary.add_column("Return%")
+    summary.add_column("Win Rate")
+    summary.add_column("Profit Factor")
+    summary.add_column("R/R")
+    summary.add_row(
+        run.run_id[:8],
+        f"{PAPER_STRATEGY_LABELS.get(run.strategy_name, run.strategy_name)} · {run.status}",
+        f"{run.cash_balance:.2f}",
+        f"{run.equity:.2f}",
+        f"{run.realized_pnl:.2f}",
+        f"{run.unrealized_pnl:.2f}",
+        f"{run.total_return_pct:.2f}",
+        f"{run.win_rate:.2f}",
+        f"{run.profit_factor:.2f}",
+        f"{run.reward_risk_ratio:.2f}",
+    )
+
+    comparison = Table(title="Paper Strategy Comparison")
+    comparison.add_column("Strategy")
+    comparison.add_column("Equity")
+    comparison.add_column("Return%")
+    comparison.add_column("Closed")
+    comparison.add_column("Win Rate")
+    comparison.add_column("Profit Factor")
+    comparison.add_column("Max DD%")
+    for strategy_run in strategy_runs:
+        comparison.add_row(
+            PAPER_STRATEGY_LABELS.get(strategy_run.strategy_name, strategy_run.strategy_name),
+            f"{strategy_run.equity:.2f}",
+            f"{strategy_run.total_return_pct:.2f}",
+            str(strategy_run.closed_trade_count),
+            f"{strategy_run.win_rate:.2f}",
+            f"{strategy_run.profit_factor:.2f}",
+            f"{strategy_run.max_drawdown_pct:.2f}",
+        )
+
+    position_table = Table(title="Paper Positions")
+    position_table.add_column("Symbol")
+    position_table.add_column("Status")
+    position_table.add_column("Qty")
+    position_table.add_column("Avg")
+    position_table.add_column("Last")
+    position_table.add_column("PnL")
+    position_table.add_column("Stop")
+    for row in positions:
+        position_table.add_row(
+            row.symbol,
+            row.status,
+            str(row.quantity),
+            f"{row.average_entry_price:.4f}",
+            _format_optional_number(row.last_price, 4),
+            f"{row.total_pnl:.2f}",
+            _format_optional_number(row.stop_price, 4),
+        )
+
+    order_table = Table(title="Recent Paper Orders")
+    order_table.add_column("Time")
+    order_table.add_column("Symbol")
+    order_table.add_column("Action")
+    order_table.add_column("Intent")
+    order_table.add_column("Qty")
+    order_table.add_column("Price")
+    order_table.add_column("PnL")
+    for row in orders[-order_limit:]:
+        order_table.add_row(
+            str(row.created_at),
+            row.symbol,
+            row.action,
+            row.intent,
+            str(row.quantity),
+            f"{row.price:.4f}",
+            _format_optional_number(row.realized_pnl, 2),
+        )
+
+    console.print(summary)
+    console.print(comparison)
+    console.print(position_table)
+    console.print(order_table)
+    console.print(
+        f"CSV logs are in [bold]{settings.paper_trade_dir.resolve()}[/bold]"
     )
 
 
@@ -506,13 +934,21 @@ def _format_optional_number(value: object, precision: int = 2) -> str:
 def _format_optional_percent(value: float | None) -> str:
     if value is None:
         return "-"
-    return f"{value * 100:.2f}"
+    return f"{value * 100:.2f}%"
 
 
 def _spread_pct(bid: float | None, ask: float | None) -> float | None:
     if bid is None or ask is None:
         return None
+    if bid <= 0 or ask <= 0 or ask < bid:
+        return None
     midpoint = (bid + ask) / 2
     if midpoint <= 0:
         return None
     return (ask - bid) / midpoint
+
+
+def _trade_call_label(value: str | None) -> str:
+    if not value:
+        return "-"
+    return TRADE_CALL_MAP.get(value, value)

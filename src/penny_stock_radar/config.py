@@ -35,14 +35,19 @@ class AppSettings(BaseSettings):
     sec_user_agent: str = "PennyStockRadar/0.1 research-tool@example.com"
     sec_contact_email: str | None = None
 
+    market_scope: str = "penny"
     universe_price_min: float = 0.30
     universe_price_max: float = 5.00
     universe_max_market_cap: int = 250_000_000
     universe_max_float_shares: int = 30_000_000
+    small_cap_price_max: float = 25.00
+    small_cap_max_market_cap: int = 2_000_000_000
+    small_cap_max_float_shares: int = 150_000_000
     universe_max_seed_symbols: int = 250
     universe_metadata_workers: int = 8
     filings_lookback_hours: int = 48
     watchlist_limit: int = 10
+    watchlist_market_context_limit: int = 20
     replay_dir: Path = Path("data/replay")
     market_data_mode: str = "replay"
     live_market_provider: str = "auto"
@@ -55,6 +60,27 @@ class AppSettings(BaseSettings):
     premarket_max_spread_pct: float = 0.08
     regular_opening_range_minutes: int = 5
     regular_extension_z_threshold: float = 2.0
+    paper_trading_enabled: bool = True
+    paper_trade_dir: Path = Path("sample_outputs/paper_trading")
+    paper_initial_capital: float = 10_000.0
+    paper_max_open_positions: int = 3
+    paper_entry_size_fraction: float = 0.20
+    paper_add_size_fraction: float = 0.10
+    paper_add_trigger_pct: float = 3.0
+    paper_max_adds_per_position: int = 1
+    paper_entry_score_min: float = 3.25
+    paper_news_entry_score_min: float = 3.0
+    paper_stop_loss_pct: float = 4.0
+    paper_profit_activation_pct: float = 6.0
+    paper_trailing_stop_pct: float = 3.0
+    paper_ai_consensus_enabled: bool = True
+    paper_ai_consensus_limit: int = 3
+    paper_ai_refresh_seconds: int = 180
+    paper_ai_escalation_enabled: bool = True
+    paper_ai_escalation_model: str = "gemini-3.1-pro-preview"
+    paper_ai_escalation_limit: int = 1
+    paper_ai_escalation_min_confidence: float = 45.0
+    paper_ai_escalation_max_confidence: float = 75.0
 
     exclude_etfs: bool = True
     exclude_preferred: bool = True
@@ -69,6 +95,9 @@ class AppSettings(BaseSettings):
     reddit_client_secret: str | None = Field(default=None, repr=False)
     stocktwits_access_token: str | None = Field(default=None, repr=False)
     x_bearer_token: str | None = Field(default=None, repr=False)
+    gemini_api_key: str | None = Field(default=None, repr=False)
+    gemini_model: str = "gemini-3-flash-preview"
+    gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
 
     @property
     def database_path(self) -> Path:
@@ -82,6 +111,63 @@ class AppSettings(BaseSettings):
     def universe_max_price(self) -> float:
         return self.universe_price_max
 
+    @property
+    def market_scope_label(self) -> str:
+        labels = {
+            "penny": "Penny",
+            "small_cap": "Small Cap",
+            "all": "All Market",
+        }
+        return labels.get(self.market_scope, self.market_scope.title())
+
+    @property
+    def scope_price_max(self) -> float | None:
+        if self.market_scope == "all":
+            return None
+        if self.market_scope == "small_cap":
+            return self.small_cap_price_max
+        return self.universe_price_max
+
+    @property
+    def scope_market_cap_max(self) -> int | None:
+        if self.market_scope == "all":
+            return None
+        if self.market_scope == "small_cap":
+            return self.small_cap_max_market_cap
+        return self.universe_max_market_cap
+
+    @property
+    def scope_float_shares_max(self) -> int | None:
+        if self.market_scope == "all":
+            return None
+        if self.market_scope == "small_cap":
+            return self.small_cap_max_float_shares
+        return self.universe_max_float_shares
+
+    def in_price_scope(self, price: float | None) -> bool:
+        if price is None or price < self.universe_price_min:
+            return False
+        upper_bound = self.scope_price_max
+        return upper_bound is None or price <= upper_bound
+
+    def market_cap_in_scope(self, market_cap: int | None) -> bool:
+        limit = self.scope_market_cap_max
+        return market_cap is None or limit is None or market_cap <= limit
+
+    def float_shares_in_scope(self, float_shares: int | None) -> bool:
+        limit = self.scope_float_shares_max
+        return float_shares is None or limit is None or float_shares <= limit
+
+    def supports_news_driven_entries(self) -> bool:
+        return self.market_scope in {"small_cap", "all"}
+
+    def can_escalate_ai_review(self) -> bool:
+        return (
+            self.paper_ai_escalation_enabled
+            and bool(self.paper_ai_escalation_model)
+            and self.paper_ai_escalation_model != self.gemini_model
+        )
+
     @field_validator("universe_price_min", "universe_price_max")
     @classmethod
     def _prices_must_be_positive(cls, value: float) -> float:
@@ -94,8 +180,16 @@ class AppSettings(BaseSettings):
         "universe_metadata_workers",
         "filings_lookback_hours",
         "watchlist_limit",
+        "watchlist_market_context_limit",
         "premarket_min_trade_count",
         "regular_opening_range_minutes",
+        "small_cap_max_market_cap",
+        "small_cap_max_float_shares",
+        "paper_max_open_positions",
+        "paper_max_adds_per_position",
+        "paper_ai_consensus_limit",
+        "paper_ai_refresh_seconds",
+        "paper_ai_escalation_limit",
     )
     @classmethod
     def _positive_integers(cls, value: int) -> int:
@@ -108,6 +202,18 @@ class AppSettings(BaseSettings):
         "premarket_max_spread_pct",
         "regular_extension_z_threshold",
         "live_market_timeout_seconds",
+        "paper_initial_capital",
+        "paper_entry_size_fraction",
+        "paper_add_size_fraction",
+        "paper_add_trigger_pct",
+        "paper_entry_score_min",
+        "paper_news_entry_score_min",
+        "paper_stop_loss_pct",
+        "paper_profit_activation_pct",
+        "paper_trailing_stop_pct",
+        "small_cap_price_max",
+        "paper_ai_escalation_min_confidence",
+        "paper_ai_escalation_max_confidence",
     )
     @classmethod
     def _positive_floats(cls, value: float) -> float:
@@ -115,17 +221,34 @@ class AppSettings(BaseSettings):
             raise ValueError("Expected a positive float.")
         return value
 
-    @field_validator("live_market_provider", "alpaca_market_data_feed")
+    @field_validator(
+        "market_scope",
+        "live_market_provider",
+        "alpaca_market_data_feed",
+        "gemini_model",
+        "paper_ai_escalation_model",
+        "gemini_api_base_url",
+    )
     @classmethod
     def _nonempty_strings(cls, value: str) -> str:
         if not value or not value.strip():
             raise ValueError("Expected a non-empty string.")
         return value.strip().lower()
 
+    @field_validator("market_scope")
+    @classmethod
+    def _known_market_scope(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        allowed = {"penny", "small_cap", "all"}
+        if normalized not in allowed:
+            raise ValueError(f"Expected one of {sorted(allowed)}.")
+        return normalized
+
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.replay_dir.mkdir(parents=True, exist_ok=True)
+        self.paper_trade_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

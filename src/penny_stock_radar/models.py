@@ -88,6 +88,7 @@ class WatchlistEntry(BaseModel):
     catalyst_score: float
     technical_score: float
     sympathy_score: float
+    market_context_score: float = 0.0
     low_float_bonus: float
     social_score: float = 0.0
     themes: list[str] = Field(default_factory=list)
@@ -164,4 +165,142 @@ class SocialSignal(BaseModel):
     engagement_total: float
     social_score: float
     reasons: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class MarketActivity(BaseModel):
+    symbol: str
+    market_phase: str
+    source: str
+    last_price: float | None = None
+    previous_close: float | None = None
+    pct_change: float | None = None
+    volume: float | None = None
+    dollar_volume: float | None = None
+    trade_size: int | None = None
+    spread_pct: float | None = None
+    market_status: str | None = None
+    market_data_at: datetime | None = None
+    pct_rank: int = 0
+    volume_rank: int = 0
+    watchlist_rank: int | None = None
+    watchlist_score: float | None = None
+    predicted: bool = False
+    leader_persistence_score: float = 0.0
+    pullback_absorption_score: float = 0.0
+    trap_score: float = 0.0
+    behavioral_score: float = 0.0
+    analysis_label: str
+    analysis_score: float
+    reasons: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PredictionOutcome(BaseModel):
+    symbol: str
+    market_phase: str
+    predicted: bool
+    watchlist_rank: int | None = None
+    watchlist_score: float | None = None
+    pct_rank: int | None = None
+    volume_rank: int | None = None
+    pct_change: float | None = None
+    volume: float | None = None
+    dollar_volume: float | None = None
+    analysis_label: str = ""
+    outcome: str
+    reasons: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class PaperTradingRun(BaseModel):
+    run_id: str
+    strategy_name: str
+    status: str = "ACTIVE"
+    initial_capital: float
+    cash_balance: float
+    equity: float
+    equity_peak: float
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    total_return_pct: float = 0.0
+    max_drawdown_pct: float = 0.0
+    closed_trade_count: int = 0
+    winning_trade_count: int = 0
+    losing_trade_count: int = 0
+    win_rate: float = 0.0
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+    profit_factor: float = 0.0
+    average_win: float = 0.0
+    average_loss: float = 0.0
+    reward_risk_ratio: float = 0.0
+    last_phase: str | None = None
+    last_market_date: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    ended_at: datetime | None = None
+
+
+class PaperPosition(BaseModel):
+    position_id: str
+    run_id: str
+    symbol: str
+    status: str = "OPEN"
+    entry_phase: str
+    entry_label: str | None = None
+    exit_reason: str | None = None
+    quantity: int
+    average_entry_price: float
+    last_price: float | None = None
+    cost_basis: float
+    market_value: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    total_pnl: float = 0.0
+    stop_price: float | None = None
+    highest_price: float | None = None
+    add_count: int = 0
+    entry_reasons: list[str] = Field(default_factory=list)
+    exit_reasons: list[str] = Field(default_factory=list)
+    opened_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    closed_at: datetime | None = None
+
+
+class PaperOrder(BaseModel):
+    order_id: str
+    run_id: str
+    position_id: str | None = None
+    symbol: str
+    market_phase: str
+    action: str
+    intent: str
+    quantity: int
+    price: float
+    notional: float
+    analysis_label: str | None = None
+    analysis_score: float | None = None
+    reasons: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    realized_pnl: float | None = None
+    realized_pnl_pct: float | None = None
+
+
+class PaperRunSnapshot(BaseModel):
+    run_id: str
+    market_phase: str
+    cash_balance: float
+    equity: float
+    realized_pnl: float
+    unrealized_pnl: float
+    total_return_pct: float
+    max_drawdown_pct: float
+    open_position_count: int
+    closed_trade_count: int
+    win_rate: float
+    profit_factor: float
+    reward_risk_ratio: float
+    notes: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)

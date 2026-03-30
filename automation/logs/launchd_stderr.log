@@ -1,0 +1,6 @@
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()
+/Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/providers/live_market.py:44: UserWarning: Discarding nonzero nanoseconds in conversion.
+  return parsed.to_pydatetime()

@@ -1,0 +1,13 @@
+{
+  "updated_at": "2026-03-30T07:03:19.798301+00:00",
+  "actions": [
+    "full_refresh",
+    "snapshot_export",
+    "gemini_review"
+  ],
+  "scan_id": "92c5fcf5-76cf-4973-8aa5-f8de157f5a4c",
+  "scan_age_minutes": 18.836960833333332,
+  "review_fingerprint": "63207f93d987b16ff2d9193a0a70c8a41c2aef9043f7589e9620fbccc0e6d91d",
+  "snapshot_output": "/Users/wondokyeong/Desktop/Penny_Stock/sample_outputs/radar_dashboard.html",
+  "review_output": "/Users/wondokyeong/Desktop/Penny_Stock/automation/inbox/gemini_review.md"
+}

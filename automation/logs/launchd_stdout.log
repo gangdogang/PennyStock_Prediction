@@ -1,0 +1,199 @@
+AI supervisor finished with 
+actions=full_refresh,snapshot_export,gemini_missing_api_key 
+scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=0.14
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=noop 
+scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=10.58
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=gemini_review 
+scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=11.47
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=gemini_review 
+scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=13.32
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=52548898-b312-423c-961f-588e4cea2a90 age_minutes=0.12
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=abfd3568-06ac-4bf7-9180-7cb057f87324 age_minutes=0.13
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=a7471a6a-77c9-4ad2-937a-81dcd268ee6f age_minutes=0.13
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=83d58266-1020-4cf2-aa4a-3fcb73974904 age_minutes=0.14
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=6ef7e9a2-3bac-45a7-aad4-f98edb0d8351 age_minutes=0.13
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: 
+{"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote 
+not found for symbol: ABR$F"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=16dbf45e-e9e8-477f-bfc1-0a04cc339c26 age_minutes=0.67
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=8a655dfe-b544-4b29-873e-460c556dd9c6 age_minutes=0.62
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=8a4e226d-2b57-4a9e-8fff-366563a948e7 age_minutes=0.70
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=a3e1fce1-3afe-4608-9fe6-f0fdf97a77a2 age_minutes=0.64
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=aa754e46-373e-4a20-9b3f-f20489545c83 age_minutes=0.57
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=7e01e986-f57d-4c12-b145-b0e025812a23 age_minutes=0.72
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=d385fe12-5df4-472b-8b1c-cbca6dc6e465 age_minutes=0.64
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=6cc3ac3f-9e34-4acd-95bd-2f152c7af541 age_minutes=1.21
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: 
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=e5635710-a25a-47ea-a086-18e71ff9574d age_minutes=0.63
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=588ce469-5f2c-405f-bdb1-98cb18e492eb age_minutes=0.62
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=41b3243b-e2bc-4c00-b716-4d82d75ded31 age_minutes=0.77
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=344f3681-e71f-4c0f-806d-3f98c03e0e6e age_minutes=0.60
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=a94cf426-b0a1-48be-8775-7c4b02271146 age_minutes=0.64
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=gemini_review 
+scan_id=6e71e58b-bc50-4828-bfaa-2bf5b8aa6cc8 age_minutes=5.73
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=8d82e9c1-7063-4f53-9647-bbbc94adc68b age_minutes=9.98
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=c53a3cc5-62e8-412d-bea8-0c2e2d4679d5 age_minutes=0.63
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=b5839ca3-18e1-4d79-af16-2dd1b6469f1d age_minutes=0.72
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=01a7cdf5-2d14-4aec-8db6-4f1f62e559dc age_minutes=0.73
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=daa1cfca-e503-4c5f-9a51-b5d572610a40 age_minutes=1.39
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=ffc78d89-99fb-44a9-a582-141881e10548 age_minutes=0.80
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=gemini_review 
+scan_id=8952cf21-6d4c-4888-a0b7-70a26910046a age_minutes=10.14
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=0c06a48f-22db-4a29-86e4-517597003f21 age_minutes=0.66
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: 
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: 
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: 
+{"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote 
+not found for symbol: ABR$D"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,live_market_scan:regular,paper_trade:hold,snapshot_export,g
+emini_review scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=2.33
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=live_market_scan:regular,paper_trade:hold,snapshot_export,gemini_review 
+scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=9.82
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=live_market_scan:regular,paper_trade:hold,snapshot_export,gemini_review_
+failed scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=13.58
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,snapshot_export,gemini_review_failed 
+scan_id=84af918a-b98a-4ee1-81ac-e04bc0dc2be0 age_minutes=2.37
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,snapshot_export,gemini_review_failed 
+scan_id=2c9ff141-dc0a-4640-ba5d-8a701c43c58e age_minutes=2.57
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=b25cb55d-a7f2-47e2-b62c-103e2dba8d20 age_minutes=2.07
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=1c004844-730e-40c3-863c-9aef7d3f3249 age_minutes=2.30
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=8d8590c3-dc45-41f1-93ce-ee0659f61d49 age_minutes=146.83
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: 
+╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+Sleeping for 3600 seconds.
+AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: 
+{"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote 
+not found for symbol: ABR$E"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=f553688e-ceb8-45b3-8b36-3fd67ffa0505 age_minutes=2.12
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=155681fb-1cc6-433c-82d6-c3cf3020a37b age_minutes=2.27
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=8d39fab3-a596-4c6a-88a0-beca0b3c2c12 age_minutes=2.21
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=2e62a22c-ce08-4587-b815-6fc6ae8dbd8f age_minutes=1.99
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=b6707d1f-6b86-4d5a-8081-0c7f63213a91 age_minutes=2.86
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,snapshot_export,gemini_review_failed 
+scan_id=b5804b63-7c25-4414-8691-8409fd49841f age_minutes=2.17
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=b60009cd-eb70-46b5-96d7-5fd1bbbc3c44 age_minutes=19.56
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=24465559-e537-4142-b772-6a7d93ad261a age_minutes=2.03
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=30639a17-e2b6-417c-92cd-43498c523e14 age_minutes=2.17
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=2c8393d2-b298-4914-931c-8f813f1467b3 age_minutes=1.96
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,snapshot_export,gemini_review_failed 
+scan_id=0eb5a0fd-836d-4259-a6f7-36aa085b4699 age_minutes=2.18
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=15b76385-aa56-4f09-a6d8-be5a6cb98238 age_minutes=2.33
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=92c5fcf5-76cf-4973-8aa5-f8de157f5a4c age_minutes=18.84
+Sleeping for 3600 seconds.

@@ -95,6 +95,19 @@ class LiveSnapshot:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class LiveMover:
+    symbol: str
+    source: str
+    price: float | None = None
+    pct_change: float | None = None
+    volume: float | None = None
+    trade_count: int | None = None
+    rank: int = 0
+    updated_at: datetime | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
 class LiveMarketProvider(Protocol):
     source_name: str
 
@@ -105,6 +118,10 @@ class LiveMarketProvider(Protocol):
     def latest_quote(self, symbol: str) -> LiveQuote | None: ...
 
     def latest_snapshot(self, symbol: str) -> LiveSnapshot | None: ...
+
+    def top_gainers(self, limit: int = 20) -> list[LiveMover]: ...
+
+    def most_active(self, limit: int = 20) -> list[LiveMover]: ...
 
 
 class NullLiveMarketProvider:
@@ -124,6 +141,12 @@ class NullLiveMarketProvider:
 
     def latest_snapshot(self, symbol: str) -> LiveSnapshot | None:
         return None
+
+    def top_gainers(self, limit: int = 20) -> list[LiveMover]:
+        return []
+
+    def most_active(self, limit: int = 20) -> list[LiveMover]:
+        return []
 
 
 class _BaseHttpLiveMarketProvider:
@@ -241,6 +264,12 @@ class PolygonLiveMarketProvider(_BaseHttpLiveMarketProvider):
             updated_at=_coerce_datetime(_first_value(payload, "updated", "updatedAt", "last_updated")),
             raw=data,
         )
+
+    def top_gainers(self, limit: int = 20) -> list[LiveMover]:
+        return []
+
+    def most_active(self, limit: int = 20) -> list[LiveMover]:
+        return []
 
     def _parse_trade_payload(
         self, symbol: str, payload: dict[str, Any], raw: dict[str, Any]
@@ -375,6 +404,70 @@ class AlpacaLiveMarketProvider(_BaseHttpLiveMarketProvider):
             updated_at=_coerce_datetime(_first_value(data, "updated", "updatedAt")),
             raw=data,
         )
+
+    def top_gainers(self, limit: int = 20) -> list[LiveMover]:
+        data = self._get_json(
+            "/v1beta1/screener/stocks/movers",
+            params={"top": max(int(limit), 1)},
+            headers=self._auth_headers,
+        )
+        if not data:
+            return []
+        updated_at = _coerce_datetime(data.get("last_updated"))
+        gainers = data.get("gainers")
+        if not isinstance(gainers, list):
+            return []
+        rows: list[LiveMover] = []
+        for index, item in enumerate(gainers[: max(int(limit), 1)], start=1):
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            rows.append(
+                LiveMover(
+                    symbol=symbol,
+                    source=self.source_name,
+                    price=_coerce_float(item.get("price")),
+                    pct_change=_coerce_float(item.get("percent_change")),
+                    rank=index,
+                    updated_at=updated_at,
+                    raw=item,
+                )
+            )
+        return rows
+
+    def most_active(self, limit: int = 20) -> list[LiveMover]:
+        data = self._get_json(
+            "/v1beta1/screener/stocks/most-actives",
+            params={"top": max(int(limit), 1)},
+            headers=self._auth_headers,
+        )
+        if not data:
+            return []
+        updated_at = _coerce_datetime(data.get("last_updated"))
+        actives = data.get("most_actives")
+        if not isinstance(actives, list):
+            return []
+        rows: list[LiveMover] = []
+        for index, item in enumerate(actives[: max(int(limit), 1)], start=1):
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            rows.append(
+                LiveMover(
+                    symbol=symbol,
+                    source=self.source_name,
+                    volume=_coerce_float(item.get("volume")),
+                    trade_count=_coerce_int(item.get("trade_count")),
+                    rank=index,
+                    updated_at=updated_at,
+                    raw=item,
+                )
+            )
+        return rows
 
     def _parse_trade_payload(self, symbol: str, data: dict[str, Any]) -> LiveTrade | None:
         payload = _first_mapping(data, "latestTrade", "trade", "result", "results")

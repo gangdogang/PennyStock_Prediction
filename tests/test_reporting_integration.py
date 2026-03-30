@@ -7,21 +7,27 @@ import pandas as pd
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.db import (
     create_snapshot_run,
+    fetch_latest_market_activity,
     fetch_latest_premarket_signals,
+    fetch_latest_prediction_outcomes,
     fetch_latest_replay_report,
     fetch_latest_scan_id,
     fetch_latest_session_decisions,
     fetch_latest_social_signals,
     fetch_latest_watchlist,
     init_database,
+    insert_market_activity,
     insert_premarket_signals,
+    insert_prediction_outcomes,
     insert_session_decisions,
     insert_social_signals,
     insert_universe_candidates,
     insert_watchlist,
 )
 from penny_stock_radar.models import (
+    MarketActivity,
     PremarketSignal,
+    PredictionOutcome,
     ReplayEvaluation,
     SessionDecision,
     SocialSignal,
@@ -204,16 +210,75 @@ def test_report_builder_exports_json_and_markdown(tmp_path: Path) -> None:
     init_database(db_path)
     snapshot = create_snapshot_run(db_path, source="export", symbol_count=1)
     _seed_scan(db_path, snapshot.snapshot_id, "EXP", 4_000_000, 4.0, 5.0, "ENTER", 3.0)
+    insert_market_activity(
+        db_path,
+        snapshot.snapshot_id,
+        "premarket",
+        [
+            MarketActivity(
+                symbol="EXP",
+                market_phase="premarket",
+                source="fake",
+                last_price=1.7,
+                previous_close=1.2,
+                pct_change=41.7,
+                volume=250_000,
+                dollar_volume=425_000,
+                trade_size=1000,
+                spread_pct=0.02,
+                pct_rank=1,
+                volume_rank=1,
+                watchlist_rank=1,
+                watchlist_score=4.0,
+                predicted=True,
+                analysis_label="SURGING",
+                analysis_score=4.0,
+                reasons=["watchlist_predicted"],
+            )
+        ],
+    )
+    insert_prediction_outcomes(
+        db_path,
+        snapshot.snapshot_id,
+        "premarket",
+        [
+            PredictionOutcome(
+                symbol="EXP",
+                market_phase="premarket",
+                predicted=True,
+                watchlist_rank=1,
+                watchlist_score=4.0,
+                pct_rank=1,
+                volume_rank=1,
+                pct_change=41.7,
+                volume=250_000,
+                dollar_volume=425_000,
+                analysis_label="SURGING",
+                outcome="matched_both",
+                reasons=["predicted_watchlist", "top_pct_change"],
+            )
+        ],
+    )
 
     builder = ReportBuilder()
     json_output = tmp_path / "summary.json"
     markdown_output = tmp_path / "summary.md"
+    html_output = tmp_path / "summary.html"
 
     payload = builder.export_json(db_path, json_output, limit=10)
     markdown = builder.export_markdown(db_path, markdown_output, limit=10)
+    html = builder.export_html(db_path, html_output, limit=10)
 
     assert json_output.exists()
     assert markdown_output.exists()
+    assert html_output.exists()
     assert payload["watchlist"]
+    assert payload["live_premarket"]
+    assert payload["prediction_premarket"]
     assert "EXP" in markdown
     assert "Penny Stock Radar Summary" in markdown
+    assert "Premarket Prediction Audit" in markdown
+    assert "Standalone Snapshot UI" in html
+    assert "Prediction Audit" in html
+    assert "EXP" in html
+    assert "진입" in html

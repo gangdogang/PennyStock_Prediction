@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.penny_stock_radar.paper_trader</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/wondokyeong/Desktop/Penny_Stock/.venv/bin/python</string>
+    <string>-m</string>
+    <string>penny_stock_radar</string>
+    <string>paper-trader</string>
+    <string>--check-interval-seconds</string>
+    <string>60</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/wondokyeong/Desktop/Penny_Stock</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>/Users/wondokyeong/Desktop/Penny_Stock/src</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/wondokyeong/Desktop/Penny_Stock/automation/logs/paper_trader_stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/wondokyeong/Desktop/Penny_Stock/automation/logs/paper_trader_stderr.log</string>
+</dict>
+</plist>

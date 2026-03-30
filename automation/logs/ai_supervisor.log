@@ -1,0 +1,84 @@
+2026-03-25 02:21:00,755 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_missing_api_key scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=0.14
+2026-03-25 02:31:26,736 INFO AI supervisor finished with actions=noop scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=10.58
+2026-03-25 02:32:24,116 INFO AI supervisor finished with actions=gemini_review scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=11.47
+2026-03-25 02:34:15,354 INFO AI supervisor finished with actions=gemini_review scan_id=f0d0135f-3a8a-41ba-9c22-f5b28e0a707f age_minutes=13.32
+2026-03-25 02:57:16,963 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:43 in    │
+│ init_db                          ...
+2026-03-25 02:57:57,183 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/src/penny_stock_radar/cli.py:43 in    │
+│ init_db                          ...
+2026-03-25 02:58:48,113 INFO AI supervisor finished with actions=live_market_scan:regular,snapshot_export,gemini_review scan_id=ed1e3035-2b10-4db8-9ebb-2c4fb94284bb age_minutes=0.27
+2026-03-25 03:18:01,087 INFO AI supervisor finished with actions=live_market_scan:regular,snapshot_export,gemini_review scan_id=ed1e3035-2b10-4db8-9ebb-2c4fb94284bb age_minutes=19.41
+2026-03-25 03:34:32,485 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=52548898-b312-423c-961f-588e4cea2a90 age_minutes=0.12
+2026-03-25 04:34:51,201 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=abfd3568-06ac-4bf7-9180-7cb057f87324 age_minutes=0.13
+2026-03-25 05:13:07,712 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-25 05:35:10,618 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=a7471a6a-77c9-4ad2-937a-81dcd268ee6f age_minutes=0.13
+2026-03-25 08:07:02,346 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=83d58266-1020-4cf2-aa4a-3fcb73974904 age_minutes=0.14
+2026-03-25 09:15:00,657 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-25 09:22:46,828 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=6ef7e9a2-3bac-45a7-aad4-f98edb0d8351 age_minutes=0.13
+2026-03-25 12:19:33,378 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: ABR$F"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+2026-03-25 13:35:46,297 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=16dbf45e-e9e8-477f-bfc1-0a04cc339c26 age_minutes=0.67
+2026-03-25 15:59:46,403 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=8a655dfe-b544-4b29-873e-460c556dd9c6 age_minutes=0.62
+2026-03-25 17:02:49,747 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=8a4e226d-2b57-4a9e-8fff-366563a948e7 age_minutes=0.70
+2026-03-25 18:04:02,512 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=a3e1fce1-3afe-4608-9fe6-f0fdf97a77a2 age_minutes=0.64
+2026-03-25 19:20:26,468 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=aa754e46-373e-4a20-9b3f-f20489545c83 age_minutes=0.57
+2026-03-26 00:14:06,091 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=7e01e986-f57d-4c12-b145-b0e025812a23 age_minutes=0.72
+2026-03-26 01:15:13,270 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=d385fe12-5df4-472b-8b1c-cbca6dc6e465 age_minutes=0.64
+2026-03-26 02:16:54,171 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=6cc3ac3f-9e34-4acd-95bd-2f152c7af541 age_minutes=1.21
+2026-03-26 03:16:56,951 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-26 04:42:16,385 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=e5635710-a25a-47ea-a086-18e71ff9574d age_minutes=0.63
+2026-03-26 05:43:22,485 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=588ce469-5f2c-405f-bdb1-98cb18e492eb age_minutes=0.62
+2026-03-26 06:44:38,855 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=41b3243b-e2bc-4c00-b716-4d82d75ded31 age_minutes=0.77
+2026-03-26 08:05:27,370 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=344f3681-e71f-4c0f-806d-3f98c03e0e6e age_minutes=0.60
+2026-03-26 09:36:35,980 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=a94cf426-b0a1-48be-8775-7c4b02271146 age_minutes=0.64
+2026-03-26 10:44:20,835 INFO AI supervisor finished with actions=gemini_review scan_id=6e71e58b-bc50-4828-bfaa-2bf5b8aa6cc8 age_minutes=5.73
+2026-03-26 11:54:50,827 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=8d82e9c1-7063-4f53-9647-bbbc94adc68b age_minutes=9.98
+2026-03-26 12:57:24,542 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=c53a3cc5-62e8-412d-bea8-0c2e2d4679d5 age_minutes=0.63
+2026-03-27 13:13:59,902 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=b5839ca3-18e1-4d79-af16-2dd1b6469f1d age_minutes=0.72
+2026-03-27 14:15:13,536 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=01a7cdf5-2d14-4aec-8db6-4f1f62e559dc age_minutes=0.73
+2026-03-27 15:17:05,522 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=daa1cfca-e503-4c5f-9a51-b5d572610a40 age_minutes=1.39
+2026-03-27 16:18:25,813 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=ffc78d89-99fb-44a9-a582-141881e10548 age_minutes=0.80
+2026-03-27 17:18:29,939 INFO AI supervisor finished with actions=gemini_review scan_id=8952cf21-6d4c-4888-a0b7-70a26910046a age_minutes=10.14
+2026-03-27 18:19:38,180 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=0c06a48f-22db-4a29-86e4-517597003f21 age_minutes=0.66
+2026-03-27 19:19:41,014 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-27 20:19:43,897 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-27 21:53:51,970 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: ABR$D"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+2026-03-28 04:48:57,981 INFO AI supervisor finished with actions=full_refresh,live_market_scan:regular,paper_trade:hold,snapshot_export,gemini_review scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=2.33
+2026-03-28 04:56:37,298 INFO AI supervisor finished with actions=live_market_scan:regular,paper_trade:hold,snapshot_export,gemini_review scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=9.82
+2026-03-28 05:00:18,873 INFO AI supervisor finished with actions=live_market_scan:regular,paper_trade:hold,snapshot_export,gemini_review_failed scan_id=94013ae0-e9c1-4307-aca4-1f24f8f05d7c age_minutes=13.58
+2026-03-28 05:08:11,224 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review_failed scan_id=84af918a-b98a-4ee1-81ac-e04bc0dc2be0 age_minutes=2.37
+2026-03-28 05:41:39,157 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review_failed scan_id=2c9ff141-dc0a-4640-ba5d-8a701c43c58e age_minutes=2.57
+2026-03-28 13:41:50,593 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=b25cb55d-a7f2-47e2-b62c-103e2dba8d20 age_minutes=2.07
+2026-03-28 14:45:06,463 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=1c004844-730e-40c3-863c-9aef7d3f3249 age_minutes=2.30
+2026-03-29 03:19:42,716 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=8d8590c3-dc45-41f1-93ce-ee0659f61d49 age_minutes=146.83
+2026-03-29 04:42:45,219 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: ╭───────────────────── Traceback (most recent call last) ──────────────────────╮
+│ /Users/wondokyeong/Desktop/Penny_Stock/.venv/lib/python3.14/site-packages/ht │
+│ tpx/_transports/default.py:101 in...
+2026-03-29 05:44:16,068 ERROR AI supervisor failed (full_refresh_failed) with exit code 1: HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: ABR$E"}}}
+HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
+2026-03-29 06:47:06,166 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=f553688e-ceb8-45b3-8b36-3fd67ffa0505 age_minutes=2.12
+2026-03-29 07:50:04,844 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=155681fb-1cc6-433c-82d6-c3cf3020a37b age_minutes=2.27
+2026-03-29 08:53:02,353 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=8d39fab3-a596-4c6a-88a0-beca0b3c2c12 age_minutes=2.21
+2026-03-29 09:55:53,097 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=2e62a22c-ce08-4587-b815-6fc6ae8dbd8f age_minutes=1.99
+2026-03-29 11:10:28,694 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=b6707d1f-6b86-4d5a-8081-0c7f63213a91 age_minutes=2.86
+2026-03-29 12:13:17,911 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review_failed scan_id=b5804b63-7c25-4414-8691-8409fd49841f age_minutes=2.17
+2026-03-29 13:38:32,764 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=b60009cd-eb70-46b5-96d7-5fd1bbbc3c44 age_minutes=19.56
+2026-03-29 19:32:04,388 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=24465559-e537-4142-b772-6a7d93ad261a age_minutes=2.03
+2026-03-30 10:40:21,574 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=30639a17-e2b6-417c-92cd-43498c523e14 age_minutes=2.17
+2026-03-30 11:43:02,434 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=2c8393d2-b298-4914-931c-8f813f1467b3 age_minutes=1.96
+2026-03-30 13:04:27,437 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review_failed scan_id=0eb5a0fd-836d-4259-a6f7-36aa085b4699 age_minutes=2.18
+2026-03-30 14:43:04,963 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=15b76385-aa56-4f09-a6d8-be5a6cb98238 age_minutes=2.33
+2026-03-30 16:03:19,803 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=92c5fcf5-76cf-4973-8aa5-f8de157f5a4c age_minutes=18.84

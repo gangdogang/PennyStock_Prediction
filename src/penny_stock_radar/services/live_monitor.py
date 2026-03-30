@@ -109,6 +109,8 @@ class LiveMonitor:
     def _spread_pct(self, bid: float | None, ask: float | None) -> float | None:
         if bid is None or ask is None:
             return None
+        if bid <= 0 or ask <= 0 or ask < bid:
+            return None
         midpoint = (bid + ask) / 2
         if midpoint <= 0:
             return None

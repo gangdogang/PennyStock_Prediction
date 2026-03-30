@@ -90,3 +90,23 @@ def test_live_monitor_provider_status_reports_unavailable(monkeypatch) -> None:
 
     assert available is False
     assert reason == "missing credentials"
+
+
+def test_live_monitor_treats_inverted_quotes_as_no_spread(monkeypatch) -> None:
+    class _BadQuoteProvider(_FakeProvider):
+        def latest_snapshot(self, symbol: str) -> LiveSnapshot | None:
+            snapshot = super().latest_snapshot(symbol)
+            assert snapshot is not None and snapshot.latest_quote is not None
+            snapshot.latest_quote.bid_price = 2.0
+            snapshot.latest_quote.ask_price = 1.0
+            return snapshot
+
+    monkeypatch.setattr(
+        "penny_stock_radar.services.live_monitor.build_live_market_provider",
+        lambda settings: _BadQuoteProvider(),
+    )
+
+    monitor = LiveMonitor(AppSettings())
+    rows = monitor.fetch(["AAA"], limit=1)
+
+    assert rows[0].spread_pct is None

@@ -91,7 +91,7 @@ class UniverseBuilder:
         return False
 
     def _price_in_range(self, price: float) -> bool:
-        return self.settings.universe_min_price <= price <= self.settings.universe_max_price
+        return self.settings.in_price_scope(price)
 
     def _build_candidate(
         self,
@@ -123,9 +123,9 @@ class UniverseBuilder:
             reasons.append("spac_security")
         if quote_type and quote_type.upper() not in {"EQUITY", "MUTUALFUND"}:
             reasons.append(f"quote_type:{quote_type}")
-        if market_cap and market_cap > self.settings.universe_max_market_cap:
+        if not self.settings.market_cap_in_scope(market_cap):
             reasons.append("market_cap_too_large")
-        if float_shares and float_shares > self.settings.universe_max_float_shares:
+        if not self.settings.float_shares_in_scope(float_shares):
             reasons.append("float_too_large")
 
         return UniverseCandidate(
@@ -171,9 +171,9 @@ class UniverseBuilder:
                     (),
                     {
                         "price_min": self.settings.universe_min_price,
-                        "price_max": self.settings.universe_max_price,
-                        "market_cap_max": self.settings.universe_max_market_cap,
-                        "float_shares_max": self.settings.universe_max_float_shares,
+                        "price_max": self.settings.scope_price_max,
+                        "market_cap_max": self.settings.scope_market_cap_max,
+                        "float_shares_max": self.settings.scope_float_shares_max,
                         "exclude_etf": self.settings.exclude_etfs,
                         "exclude_preferred": self.settings.exclude_preferred,
                         "exclude_warrants": self.settings.exclude_warrants,
