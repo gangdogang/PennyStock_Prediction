@@ -434,13 +434,13 @@ def _prepare_leaderboard(
         {"ENTER": 3.0, "WATCH": 1.5, "AVOID": -1.0}
     )
     leaderboard["decision_weight"] = decision_weight.fillna(0.0)
-    watchlist_score = _numeric_series(leaderboard, "watchlist_score")
-    quality_score = _numeric_series(leaderboard, "quality_score")
-    social_velocity_score = _numeric_series(leaderboard, "social_velocity_score")
+    leaderboard["watchlist_score"] = _numeric_series(leaderboard, "watchlist_score")
+    leaderboard["quality_score"] = _numeric_series(leaderboard, "quality_score")
+    leaderboard["social_velocity_score"] = _numeric_series(leaderboard, "social_velocity_score")
     leaderboard["radar_score"] = (
-        watchlist_score
-        + quality_score
-        + social_velocity_score
+        leaderboard["watchlist_score"]
+        + leaderboard["quality_score"]
+        + leaderboard["social_velocity_score"]
         + leaderboard["decision_weight"]
     )
     leaderboard = leaderboard.sort_values(
@@ -481,11 +481,12 @@ def _render_command_center(
     top_symbol = leaderboard.iloc[0]["symbol"]
     top_score = float(leaderboard.iloc[0]["radar_score"])
     enter_count = int((session["decision"] == "ENTER").sum()) if not session.empty else 0
-    top_social = (
-        str(social.sort_values("social_score", ascending=False).iloc[0]["symbol"])
-        if not social.empty
-        else "-"
-    )
+    if not social.empty:
+        social_rank = social.copy()
+        social_rank["social_score"] = _numeric_series(social_rank, "social_score")
+        top_social = str(social_rank.sort_values(["social_score", "symbol"], ascending=[False, True]).iloc[0]["symbol"])
+    else:
+        top_social = "-"
     report_label = _translate_label(replay.iloc[0]["label"]) if not replay.empty else "-"
 
     cols = st.columns(4)
@@ -962,6 +963,10 @@ def _render_premarket(
     if frame.empty:
         st.info("프리장 신호가 없습니다. 먼저 replay pipeline을 실행하세요.")
     else:
+        frame = frame.copy()
+        frame["quality_score"] = _numeric_series(frame, "quality_score")
+        frame["premarket_rvol"] = _numeric_series(frame, "premarket_rvol")
+        frame["dollar_volume"] = _numeric_series(frame, "dollar_volume")
         min_quality = st.slider(
             "최소 품질 점수",
             min_value=0.0,
@@ -1489,6 +1494,10 @@ def _render_social(frame: pd.DataFrame) -> None:
         st.info("소셜 신호가 없습니다. 먼저 `psradar analyze-social`을 실행하세요.")
         return
 
+    frame = frame.copy()
+    frame["social_score"] = _numeric_series(frame, "social_score")
+    frame["mention_velocity"] = _numeric_series(frame, "mention_velocity")
+    frame["cross_platform_count"] = _numeric_series(frame, "cross_platform_count")
     min_score = st.slider(
         "최소 소셜 점수",
         min_value=0.0,
