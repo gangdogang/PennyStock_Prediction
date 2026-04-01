@@ -1,13 +1,15 @@
 {
-  "updated_at": "2026-03-30T07:03:19.798301+00:00",
+  "updated_at": "2026-04-01T08:59:00.468897+00:00",
   "actions": [
     "full_refresh",
+    "live_market_scan:premarket",
+    "paper_trade:hold",
     "snapshot_export",
-    "gemini_review"
+    "gemini_review_failed"
   ],
-  "scan_id": "92c5fcf5-76cf-4973-8aa5-f8de157f5a4c",
-  "scan_age_minutes": 18.836960833333332,
-  "review_fingerprint": "63207f93d987b16ff2d9193a0a70c8a41c2aef9043f7589e9620fbccc0e6d91d",
+  "scan_id": "1bf5d2eb-0302-4a63-8829-2575ad853848",
+  "scan_age_minutes": 0.5228992499999999,
+  "review_fingerprint": "59bdd170a9e9d9ced38a7064351cf22af5b77bb956b84d98a16d6803ce980041",
   "snapshot_output": "/Users/wondokyeong/Desktop/Penny_Stock/sample_outputs/radar_dashboard.html",
   "review_output": "/Users/wondokyeong/Desktop/Penny_Stock/automation/inbox/gemini_review.md"
 }

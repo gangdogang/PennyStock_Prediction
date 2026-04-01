@@ -55,8 +55,15 @@ class MarketActivityScanner:
         if market_phase not in {"premarket", "regular"}:
             raise RuntimeError("Live market ranking is only available during premarket or regular hours.")
 
-        watchlist_rows = fetch_latest_watchlist(self.settings.database_path, limit=200)
-        passed_universe_rows = fetch_latest_passed_universe(self.settings.database_path)
+        watchlist_rows = fetch_latest_watchlist(
+            self.settings.database_path,
+            limit=200,
+            prefer_reportable=False,
+        )
+        passed_universe_rows = fetch_latest_passed_universe(
+            self.settings.database_path,
+            prefer_reportable=False,
+        )
         provider = build_live_market_provider(self.settings)
         if not provider.is_available():
             reason = getattr(provider, "reason", "No live market data provider is configured.")

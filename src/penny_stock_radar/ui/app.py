@@ -22,6 +22,7 @@ if __package__ in {None, ""}:
         load_paper_positions,
         load_paper_snapshots,
         load_paper_strategy_runs,
+        load_scan_selection_metadata,
         load_premarket,
         load_prediction_outcomes,
         load_replay_report,
@@ -42,6 +43,7 @@ else:
         load_paper_positions,
         load_paper_snapshots,
         load_paper_strategy_runs,
+        load_scan_selection_metadata,
         load_premarket,
         load_prediction_outcomes,
         load_replay_report,
@@ -303,6 +305,56 @@ def _overview_cards(overview: dict[str, int]) -> None:
     cols[4].metric("모의주문", overview.get("paper_orders", 0))
 
 
+def _render_scan_status(meta: dict[str, Any]) -> None:
+    selected_scan_id = str(meta.get("selected_scan_id") or "")
+    latest_scan_id = str(meta.get("latest_scan_id") or "")
+    market_phase = str(meta.get("market_phase") or "-")
+    missing_core = [
+        str(value).replace("_", " ") for value in meta.get("missing_core_sections") or []
+    ]
+    missing_supplemental = [
+        str(value).replace("_", " ")
+        for value in meta.get("missing_supplemental_sections") or []
+    ]
+
+    if not selected_scan_id:
+        st.warning(
+            "표시 가능한 complete scan이 아직 없습니다.\n\n"
+            "Universe, watchlist, premarket, session, replay core 섹션이 채워진 뒤 다시 새로고침하세요."
+        )
+        return
+
+    lines = [
+        f"표시 중 scan: `{selected_scan_id[:14]}`",
+        f"최신 raw scan: `{latest_scan_id[:14] or '-'}`",
+        f"미국장 구간: `{market_phase}`",
+    ]
+    if meta.get("is_fallback") and latest_scan_id:
+        lines.append("최신 raw scan이 incomplete라 마지막 complete scan으로 fallback했습니다.")
+    if missing_core:
+        lines.append("최신 raw scan의 누락 core 섹션: " + ", ".join(missing_core))
+    if missing_supplemental:
+        lines.append("현재 상태에서 비어 있는 supplemental 섹션: " + ", ".join(missing_supplemental))
+    if not meta.get("live_data_expected"):
+        lines.append("지금은 미국장 프리장/정규장이 아니어서 live movers / prediction audit 공백이 정상일 수 있습니다.")
+
+    renderer = st.warning if meta.get("is_fallback") else st.info
+    renderer("\n\n".join(lines))
+
+
+def _live_empty_message(meta: dict[str, Any], market_phase: str) -> str:
+    if not meta.get("live_data_expected"):
+        return (
+            "지금은 미국장 프리장/정규장이 아니어서 저장된 실시간 movers 랭킹이 비어 있을 수 있습니다."
+        )
+    if market_phase == "premarket":
+        return (
+            "오늘 프리장 시간에 저장된 실시간 랭킹이 아직 없습니다. "
+            "미국 동부 04:00-09:30(한국 17:00-22:30) 사이에 `scan-market-activity --phase auto` 또는 실시간 모드가 돌아야 채워집니다."
+        )
+    return "아직 저장된 정규장 실시간 랭킹이 없습니다. `scan-market-activity --phase regular` 또는 실시간 모드를 실행하면 채워집니다."
+
+
 def _prepare_display_frame(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -352,9 +404,17 @@ def _prepare_leaderboard(
     premarket: pd.DataFrame,
     session: pd.DataFrame,
     social: pd.DataFrame,
+    live_premarket: pd.DataFrame | None = None,
+    live_regular: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
+    active_live = pd.DataFrame()
+    if live_regular is not None and not live_regular.empty:
+        active_live = live_regular
+    elif live_premarket is not None and not live_premarket.empty:
+        active_live = live_premarket
+
     symbols = set()
-    for frame in (watchlist, premarket, session, social):
+    for frame in (watchlist, premarket, session, social, active_live):
         if not frame.empty and "symbol" in frame.columns:
             symbols.update(frame["symbol"].dropna().astype(str).tolist())
 
@@ -430,6 +490,47 @@ def _prepare_leaderboard(
         )
         leaderboard = leaderboard.merge(subset, on="symbol", how="left")
 
+    if not active_live.empty:
+        cols = [
+            "symbol",
+            "pct_rank",
+            "volume_rank",
+            "analysis_label",
+            "behavioral_score",
+            "leader_persistence_score",
+            "pullback_absorption_score",
+            "trap_score",
+            "pct_change",
+            "dollar_volume",
+        ]
+        available = [column for column in cols if column in active_live.columns]
+        subset = active_live[available].copy()
+        subset["live_best_rank"] = subset.apply(
+            lambda row: _best_live_rank(row.get("pct_rank"), row.get("volume_rank")),
+            axis=1,
+        )
+        subset["live_momentum_score"] = subset.apply(
+            lambda row: _live_momentum_score(
+                best_rank=row.get("live_best_rank"),
+                label=row.get("analysis_label"),
+                behavioral_score=row.get("behavioral_score"),
+                trap_score=row.get("trap_score"),
+            ),
+            axis=1,
+        )
+        subset = subset.rename(
+            columns={
+                "analysis_label": "live_analysis_label",
+                "behavioral_score": "live_behavioral_score",
+                "leader_persistence_score": "live_leader_persistence_score",
+                "pullback_absorption_score": "live_pullback_absorption_score",
+                "trap_score": "live_trap_score",
+                "pct_change": "live_pct_change",
+                "dollar_volume": "live_dollar_volume",
+            }
+        )
+        leaderboard = leaderboard.merge(subset, on="symbol", how="left")
+
     decision_weight = leaderboard.get("decision", pd.Series(index=leaderboard.index, dtype=object)).map(
         {"ENTER": 3.0, "WATCH": 1.5, "AVOID": -1.0}
     )
@@ -437,17 +538,82 @@ def _prepare_leaderboard(
     leaderboard["watchlist_score"] = _numeric_series(leaderboard, "watchlist_score")
     leaderboard["quality_score"] = _numeric_series(leaderboard, "quality_score")
     leaderboard["social_velocity_score"] = _numeric_series(leaderboard, "social_velocity_score")
+    leaderboard["live_momentum_score"] = _numeric_series(leaderboard, "live_momentum_score")
     leaderboard["radar_score"] = (
         leaderboard["watchlist_score"]
         + leaderboard["quality_score"]
         + leaderboard["social_velocity_score"]
         + leaderboard["decision_weight"]
+        + leaderboard["live_momentum_score"]
     )
     leaderboard = leaderboard.sort_values(
-        ["radar_score", "quality_score", "watchlist_score", "symbol"],
-        ascending=[False, False, False, True],
+        ["radar_score", "live_momentum_score", "quality_score", "watchlist_score", "symbol"],
+        ascending=[False, False, False, False, True],
     ).reset_index(drop=True)
     return leaderboard
+
+
+def _best_live_rank(*values: object) -> int:
+    ranks = []
+    for value in values:
+        try:
+            rank = int(value)
+        except (TypeError, ValueError):
+            continue
+        if rank > 0:
+            ranks.append(rank)
+    return min(ranks) if ranks else 9999
+
+
+def _live_momentum_score(
+    *,
+    best_rank: object,
+    label: object,
+    behavioral_score: object,
+    trap_score: object,
+) -> float:
+    score = 0.0
+    rank = _best_live_rank(best_rank)
+    if rank <= 1:
+        score += 4.0
+    elif rank <= 3:
+        score += 3.0
+    elif rank <= 5:
+        score += 2.25
+    elif rank <= 10:
+        score += 1.25
+    elif rank <= 15:
+        score += 0.5
+
+    normalized_label = str(label or "")
+    if normalized_label in {"OPENING_RANGE_CANDIDATE", "CONDITIONAL_ENTRY"}:
+        score += 1.25
+    elif normalized_label == "NEWS_CHECK_FIRST":
+        score += 0.75
+    elif normalized_label == "WAIT_PULLBACK":
+        score += 0.4
+    elif normalized_label == "NO_CHASE":
+        score -= 0.75
+
+    try:
+        behavioral = float(behavioral_score)
+    except (TypeError, ValueError):
+        behavioral = 0.0
+    if behavioral >= 70.0:
+        score += 0.75
+    elif behavioral >= 60.0:
+        score += 0.35
+
+    try:
+        trap = float(trap_score)
+    except (TypeError, ValueError):
+        trap = 0.0
+    if trap >= 70.0:
+        score -= 1.0
+    elif trap >= 55.0:
+        score -= 0.4
+
+    return round(max(score, 0.0), 2)
 
 
 def _decision_pill(decision: str | None) -> str:
@@ -467,13 +633,22 @@ def _render_command_center(
     universe: pd.DataFrame,
     watchlist: pd.DataFrame,
     premarket: pd.DataFrame,
+    live_premarket: pd.DataFrame,
     session: pd.DataFrame,
+    live_regular: pd.DataFrame,
     social: pd.DataFrame,
     replay: pd.DataFrame,
     paper_run: pd.DataFrame,
     paper_positions: pd.DataFrame,
 ) -> None:
-    leaderboard = _prepare_leaderboard(watchlist, premarket, session, social)
+    leaderboard = _prepare_leaderboard(
+        watchlist,
+        premarket,
+        session,
+        social,
+        live_premarket=live_premarket,
+        live_regular=live_regular,
+    )
     if leaderboard.empty:
         st.info("No dashboard-ready data yet. Run the pipeline first.")
         return
@@ -525,6 +700,9 @@ def _render_command_center(
         display_columns = [
             "symbol",
             "radar_score",
+            "live_momentum_score",
+            "live_best_rank",
+            "live_analysis_label",
             "watchlist_score",
             "quality_score",
             "social_velocity_score",
@@ -536,6 +714,9 @@ def _render_command_center(
         display = leaderboard[available].copy()
         display = display.rename(
             columns={
+                "live_momentum_score": "live",
+                "live_best_rank": "live_rank",
+                "live_analysis_label": "live_call",
                 "watchlist_score": "setup",
                 "quality_score": "pm_quality",
                 "social_velocity_score": "social",
@@ -879,8 +1060,17 @@ def _render_live_activity_panel(
         enriched_outcomes = outcomes.copy()
         if "analysis_label" in enriched_outcomes.columns:
             enriched_outcomes["trade_call"] = enriched_outcomes["analysis_label"]
+        enriched_outcomes["best_live_rank"] = enriched_outcomes.apply(
+            lambda row: _best_live_rank(row.get("pct_rank"), row.get("volume_rank")),
+            axis=1,
+        )
+        enriched_outcomes = enriched_outcomes.sort_values(
+            ["best_live_rank", "pct_rank", "volume_rank", "predicted", "symbol"],
+            ascending=[True, True, True, False, True],
+        )
         display = _prepare_display_frame(enriched_outcomes)
         preferred = [
+            "best_live_rank",
             "symbol",
             "predicted",
             "watchlist_rank",
@@ -959,6 +1149,7 @@ def _render_premarket(
     frame: pd.DataFrame,
     live_frame: pd.DataFrame,
     outcomes: pd.DataFrame,
+    meta: dict[str, Any],
 ) -> None:
     if frame.empty:
         st.info("프리장 신호가 없습니다. 먼저 replay pipeline을 실행하세요.")
@@ -1006,7 +1197,7 @@ def _render_premarket(
         "프리장 실시간 Top Movers",
         live_frame,
         outcomes,
-        empty_message="오늘 프리장 시간에 저장된 실시간 랭킹이 아직 없습니다. 현재 DB에는 정규장 실시간 랭킹만 저장돼 있습니다. 진짜 프리장 데이터는 미국 동부 04:00-09:30(한국 17:00-22:30) 사이에 `scan-market-activity --phase auto` 또는 실시간 모드가 돌아야 채워집니다.",
+        empty_message=_live_empty_message(meta, "premarket"),
     )
 
 
@@ -1014,6 +1205,7 @@ def _render_session(
     frame: pd.DataFrame,
     live_frame: pd.DataFrame,
     outcomes: pd.DataFrame,
+    meta: dict[str, Any],
 ) -> None:
     if frame.empty:
         st.info("정규장 판단 결과가 없습니다. 먼저 replay pipeline을 실행하세요.")
@@ -1048,7 +1240,7 @@ def _render_session(
         "정규장 실시간 Top Movers",
         live_frame,
         outcomes,
-        empty_message="아직 저장된 정규장 실시간 랭킹이 없습니다. `scan-market-activity --phase regular` 또는 실시간 모드를 실행하면 채워집니다.",
+        empty_message=_live_empty_message(meta, "regular"),
     )
 
 
@@ -1543,6 +1735,7 @@ def main() -> None:
     settings = get_settings()
     database_path, live_enabled, refresh_seconds, live_limit = _sidebar_controls(settings.db_path)
     overview = load_run_overview(database_path)
+    scan_meta = load_scan_selection_metadata(database_path)
 
     st.markdown(
         """
@@ -1555,6 +1748,7 @@ def main() -> None:
     )
     st.write("")
     _overview_cards(overview)
+    _render_scan_status(scan_meta)
 
     universe = _table_or_empty(load_universe(database_path), ["symbol"])
     watchlist = _table_or_empty(load_watchlist(database_path), ["symbol"])
@@ -1595,7 +1789,9 @@ def main() -> None:
             universe,
             watchlist,
             premarket,
+            live_premarket,
             session,
+            live_regular,
             social,
             replay,
             paper_run,
@@ -1606,9 +1802,9 @@ def main() -> None:
     with tabs[2]:
         _render_watchlist(watchlist)
     with tabs[3]:
-        _render_premarket(premarket, live_premarket, premarket_outcomes)
+        _render_premarket(premarket, live_premarket, premarket_outcomes, scan_meta)
     with tabs[4]:
-        _render_session(session, live_regular, regular_outcomes)
+        _render_session(session, live_regular, regular_outcomes, scan_meta)
     with tabs[5]:
         _render_paper_trading(
             paper_run,

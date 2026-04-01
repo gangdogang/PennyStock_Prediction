@@ -15,7 +15,7 @@ fi
 "$RUNNER" run-replay-pipeline \
   --output-csv "$ROOT_DIR/sample_outputs/mock_replay.sample.csv" \
   --export-json "$ROOT_DIR/sample_outputs/replay_report.sample.json"
-"$RUNNER" analyze-social --mentions-csv "$ROOT_DIR/sample_outputs/social_mentions.sample.csv"
+echo "Skipping sample social analysis. Run \`./scripts/psradar analyze-social --mentions-csv <real_social_mentions.csv>\` when you have real mention data."
 "$RUNNER" export-summary \
   --json-output "$ROOT_DIR/sample_outputs/radar_summary.json" \
   --markdown-output "$ROOT_DIR/sample_outputs/radar_summary.md"

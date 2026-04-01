@@ -58,32 +58,53 @@ if [ ! -f ".env" ] && [ -f ".env.example" ]; then
 fi
 
 echo "[4/5] Checking whether a full refresh is needed..."
-if [ -f "$DB_PATH" ] && "$VENV_PYTHON" - "$DB_PATH" <<'PY' >/dev/null 2>&1
+if [ -f "$DB_PATH" ] && "$VENV_PYTHON" - "$ROOT_DIR" "$DB_PATH" <<'PY' >/dev/null 2>&1
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import sqlite3
+from pathlib import Path
 import sys
 
-db_path = sys.argv[1]
-connection = sqlite3.connect(db_path)
-row = connection.execute(
-    "SELECT created_at FROM scan_runs ORDER BY created_at DESC LIMIT 1"
-).fetchone()
-connection.close()
+root_dir = Path(sys.argv[1])
+db_path = Path(sys.argv[2])
+sys.path.insert(0, str(root_dir / "src"))
 
-if row is None or not row[0]:
+from penny_stock_radar.db import fetch_scan_selection
+
+selection = fetch_scan_selection(db_path)
+created_at = selection.get("selected_created_at")
+if not created_at:
     raise SystemExit(1)
 
-created_at = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
-age_minutes = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+selected_at = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+age_minutes = (datetime.now(timezone.utc) - selected_at).total_seconds() / 60
 raise SystemExit(0 if age_minutes <= 15 else 1)
 PY
 then
-  echo "Recent data found in the last 15 minutes. Skipping startup refresh."
+  echo "Fresh complete data found in the last 15 minutes. Skipping startup refresh."
 else
   echo "Running the full pipeline. This can take a little while."
-  ./scripts/run_full_pipeline.sh
+  if ./scripts/run_full_pipeline.sh; then
+    :
+  elif "$VENV_PYTHON" - "$ROOT_DIR" "$DB_PATH" <<'PY' >/dev/null 2>&1
+from pathlib import Path
+import sys
+
+root_dir = Path(sys.argv[1])
+db_path = Path(sys.argv[2])
+sys.path.insert(0, str(root_dir / "src"))
+
+from penny_stock_radar.db import fetch_scan_selection
+
+selection = fetch_scan_selection(db_path)
+raise SystemExit(0 if selection.get("selected_scan_id") else 1)
+PY
+  then
+    echo "Refresh failed, but a complete cached scan is available. Continuing with fallback snapshot export."
+  else
+    echo "Full refresh failed and no complete cached scan is available."
+    exit 1
+  fi
 fi
 
 echo "[5/5] Exporting and opening snapshot dashboard..."

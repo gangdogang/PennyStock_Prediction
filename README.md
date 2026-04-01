@@ -65,12 +65,47 @@ launch_dashboard.bat
 .\launch_dashboard.ps1
 ```
 
+윈도우 데스크탑에서 맥으로 접속 가능한 LAN 대시보드 열기:
+
+```powershell
+.\launch_dashboard_lan.ps1
+```
+
+윈도우 데스크탑에서 24시간 모의투자 루프 실행:
+
+```powershell
+.\launch_paper_trader.ps1
+```
+
+윈도우 로그인 시 자동 시작되도록 작업 스케줄러 등록:
+
+```powershell
+.\install_paper_trader_task.ps1
+```
+
+윈도우 작업 스케줄러 상태 확인:
+
+```powershell
+.\paper_trader_task_status.ps1
+```
+
+윈도우 작업 스케줄러 제거:
+
+```powershell
+.\remove_paper_trader_task.ps1
+```
+
 처음 실행 시 자동으로:
 - `.venv` 생성
 - 필요한 패키지 설치
 - `.env` 생성
 - 필요 시 전체 파이프라인 최신화
 - Streamlit 대시보드 실행
+
+윈도우 데스크탑을 24시간 켜두는 경우:
+- `launch_paper_trader.ps1` 또는 `launch_paper_trader.bat` 로 모의투자 루프 실행
+- `install_paper_trader_task.ps1` 로 로그인 시 자동 시작 등록
+- `launch_dashboard_lan.ps1` 로 같은 네트워크의 맥에서 `http://데스크탑IP:8501` 접속
 
 ## API 키 설정
 

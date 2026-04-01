@@ -82,3 +82,10 @@ HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not F...
 2026-03-30 13:04:27,437 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review_failed scan_id=0eb5a0fd-836d-4259-a6f7-36aa085b4699 age_minutes=2.18
 2026-03-30 14:43:04,963 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=15b76385-aa56-4f09-a6d8-be5a6cb98238 age_minutes=2.33
 2026-03-30 16:03:19,803 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=92c5fcf5-76cf-4973-8aa5-f8de157f5a4c age_minutes=18.84
+2026-03-31 12:42:27,491 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=c89d283e-1945-45eb-bd48-6c8ca3fae559 age_minutes=2.62
+2026-03-31 13:54:51,604 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=e617a70b-419a-4330-846a-7f720787083d age_minutes=2.23
+2026-03-31 15:10:59,920 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=ff3af298-f5f8-4a0b-962e-29b6f94e8921 age_minutes=2.30
+2026-03-31 16:14:01,919 INFO AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review scan_id=c37ca1f8-fea1-4b70-8fe5-3bd494012685 age_minutes=2.02
+2026-03-31 17:17:07,496 INFO AI supervisor finished with actions=full_refresh,live_market_scan:premarket,paper_trade:hold,snapshot_export,gemini_review_failed scan_id=c55d698f-2a8e-4383-9636-139c9173a11b age_minutes=1.93
+2026-04-01 16:45:16,963 WARNING AI supervisor refresh failed; exported fallback snapshot from scan_id=c55d698f-2a8e-4383-9636-139c9173a11b
+2026-04-01 17:59:00,472 INFO AI supervisor finished with actions=full_refresh,live_market_scan:premarket,paper_trade:hold,snapshot_export,gemini_review_failed scan_id=1bf5d2eb-0302-4a63-8829-2575ad853848 age_minutes=0.52

@@ -60,7 +60,10 @@ class WatchlistBuilder:
         limit: int | None = None,
         lookback_hours: int | None = None,
     ) -> tuple[list[WatchlistEntry], list[FilingMatch], dict[str, SetupSignal]]:
-        universe_rows = fetch_latest_passed_universe(self.settings.database_path)
+        universe_rows = fetch_latest_passed_universe(
+            self.settings.database_path,
+            prefer_reportable=False,
+        )
         if not universe_rows:
             return [], [], {}
 

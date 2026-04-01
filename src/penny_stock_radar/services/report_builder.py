@@ -7,12 +7,12 @@ from string import Template
 from typing import Any, Callable
 
 from ..db import (
+    fetch_scan_selection,
     fetch_latest_candidates,
     fetch_latest_market_activity,
     fetch_latest_premarket_signals,
     fetch_latest_prediction_outcomes,
     fetch_latest_replay_report,
-    fetch_latest_scan_id,
     fetch_latest_session_decisions,
     fetch_latest_social_signals,
     fetch_latest_watchlist,
@@ -94,35 +94,100 @@ DECISION_WEIGHT = {"ENTER": 3.0, "WATCH": 1.5, "AVOID": -1.0}
 
 class ReportBuilder:
     def build_payload(self, database_path: Path, limit: int = 20) -> dict[str, object]:
-        latest_scan = fetch_latest_scan_id(database_path)
+        selection = fetch_scan_selection(database_path)
+        selected_scan_id = selection.get("selected_scan_id")
         return {
             "meta": {
-                "scan_id": latest_scan["scan_id"] if latest_scan is not None else None,
+                "scan_id": selected_scan_id,
+                "selected_scan_id": selected_scan_id,
+                "selected_created_at": selection.get("selected_created_at"),
+                "latest_scan_id": selection.get("latest_scan_id"),
+                "latest_created_at": selection.get("latest_created_at"),
+                "is_fallback": bool(selection.get("is_fallback")),
+                "missing_core_sections": list(selection.get("missing_core_sections") or []),
+                "missing_supplemental_sections": list(
+                    selection.get("missing_supplemental_sections") or []
+                ),
+                "market_phase": selection.get("market_phase"),
+                "live_data_expected": bool(selection.get("live_data_expected")),
                 "database_path": str(database_path),
                 "limit": limit,
             },
-            "universe": [dict(row) for row in fetch_latest_candidates(database_path, limit)],
-            "watchlist": [dict(row) for row in fetch_latest_watchlist(database_path, limit)],
-            "premarket": [dict(row) for row in fetch_latest_premarket_signals(database_path, limit)],
+            "universe": [
+                dict(row)
+                for row in fetch_latest_candidates(database_path, limit, scan_id=selected_scan_id)
+            ],
+            "watchlist": [
+                dict(row)
+                for row in fetch_latest_watchlist(database_path, limit, scan_id=selected_scan_id)
+            ],
+            "premarket": [
+                dict(row)
+                for row in fetch_latest_premarket_signals(
+                    database_path,
+                    limit,
+                    scan_id=selected_scan_id,
+                )
+            ],
             "live_premarket": [
                 dict(row)
-                for row in fetch_latest_market_activity(database_path, "premarket", limit=limit)
+                for row in fetch_latest_market_activity(
+                    database_path,
+                    "premarket",
+                    limit=limit,
+                    scan_id=selected_scan_id,
+                )
             ],
             "prediction_premarket": [
                 dict(row)
-                for row in fetch_latest_prediction_outcomes(database_path, "premarket", limit=limit)
+                for row in fetch_latest_prediction_outcomes(
+                    database_path,
+                    "premarket",
+                    limit=limit,
+                    scan_id=selected_scan_id,
+                )
             ],
-            "session": [dict(row) for row in fetch_latest_session_decisions(database_path, limit)],
+            "session": [
+                dict(row)
+                for row in fetch_latest_session_decisions(
+                    database_path,
+                    limit,
+                    scan_id=selected_scan_id,
+                )
+            ],
             "live_regular": [
                 dict(row)
-                for row in fetch_latest_market_activity(database_path, "regular", limit=limit)
+                for row in fetch_latest_market_activity(
+                    database_path,
+                    "regular",
+                    limit=limit,
+                    scan_id=selected_scan_id,
+                )
             ],
             "prediction_regular": [
                 dict(row)
-                for row in fetch_latest_prediction_outcomes(database_path, "regular", limit=limit)
+                for row in fetch_latest_prediction_outcomes(
+                    database_path,
+                    "regular",
+                    limit=limit,
+                    scan_id=selected_scan_id,
+                )
             ],
-            "social": [dict(row) for row in fetch_latest_social_signals(database_path, limit)],
-            "report": dict(fetch_latest_replay_report(database_path) or {}),
+            "social": [
+                dict(row)
+                for row in fetch_latest_social_signals(
+                    database_path,
+                    limit,
+                    scan_id=selected_scan_id,
+                )
+            ],
+            "report": dict(
+                fetch_latest_replay_report(
+                    database_path,
+                    scan_id=selected_scan_id,
+                )
+                or {}
+            ),
         }
 
     def export_json(self, database_path: Path, output_path: Path, limit: int = 20) -> dict[str, object]:
@@ -252,9 +317,12 @@ class ReportBuilder:
         hero_meta = [
             ("출력 형식", "Standalone snapshot UI"),
             ("데이터베이스", Path(str(meta.get("database_path") or "-")).name),
-            ("스캔 ID", str(meta.get("scan_id") or "-")[:14]),
+            ("표시 스캔", str(meta.get("selected_scan_id") or "-")[:14]),
+            ("최신 Raw", str(meta.get("latest_scan_id") or "-")[:14]),
             ("기준 시각", _find_generated_at(normalized)),
         ]
+        live_empty_message = _live_empty_message(meta)
+        prediction_empty_message = _prediction_empty_message(meta)
         template = Template(
             """
 <!doctype html>
@@ -644,6 +712,20 @@ class ReportBuilder:
       color: var(--muted);
       line-height: 1.6;
     }
+    .status-callout {
+      margin-top: 18px;
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(18, 48, 71, 0.12);
+      background: rgba(255, 251, 243, 0.82);
+      color: var(--ink);
+      line-height: 1.6;
+    }
+    .status-callout strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.95rem;
+    }
     @keyframes rise {
       from { opacity: 0; transform: translateY(10px); }
       to { opacity: 1; transform: translateY(0); }
@@ -686,6 +768,7 @@ class ReportBuilder:
       <div class="hero-meta">
         $hero_meta
       </div>
+      $status_callout
     </header>
 
     <section class="section" aria-labelledby="metric-title">
@@ -801,6 +884,7 @@ class ReportBuilder:
         )
         return template.substitute(
             hero_meta=_render_hero_meta(hero_meta),
+            status_callout=_render_status_callout(meta),
             metrics=_render_metric_cards(metrics),
             leaderboard=_render_leaderboard(leaderboard),
             report=_render_report_card(normalized["report"]),
@@ -853,7 +937,7 @@ class ReportBuilder:
                     ("판독", lambda row: _pill_html(row.get("analysis_label"))),
                     ("진입 근거", lambda row: _reason_html(_entry_basis_reasons(row))),
                 ],
-                "저장된 프리장 실시간 랭킹이 없습니다.",
+                live_empty_message,
             ),
             live_regular_table=_render_table(
                 normalized["live_regular"],
@@ -867,7 +951,7 @@ class ReportBuilder:
                     ("판독", lambda row: _pill_html(row.get("analysis_label"))),
                     ("진입 근거", lambda row: _reason_html(_entry_basis_reasons(row))),
                 ],
-                "저장된 정규장 실시간 랭킹이 없습니다.",
+                live_empty_message,
             ),
             prediction_table=_render_table(
                 normalized["prediction_premarket"] + normalized["prediction_regular"],
@@ -881,7 +965,7 @@ class ReportBuilder:
                     ("결과", lambda row: _escape_text(_translate_label(row.get("outcome")))),
                     ("판독", lambda row: _pill_html(row.get("analysis_label"))),
                 ],
-                "저장된 예측 비교 결과가 없습니다.",
+                prediction_empty_message,
             ),
             social_table=_render_table(
                 normalized["social"],
@@ -1047,6 +1131,75 @@ def _render_hero_meta(items: list[tuple[str, str]]) -> str:
         f"<div class='hero-chip'><strong>{escape(label)}</strong><span>{escape(value)}</span></div>"
         for label, value in items
     )
+
+
+def _render_status_callout(meta: dict[str, Any]) -> str:
+    lines = _status_lines(meta)
+    if not lines:
+        return ""
+    content = "".join(f"<div>{escape(line)}</div>" for line in lines)
+    return (
+        "<div class='status-callout'>"
+        "<strong>Data Status</strong>"
+        f"{content}"
+        "</div>"
+    )
+
+
+def _status_lines(meta: dict[str, Any]) -> list[str]:
+    selected_scan_id = str(meta.get("selected_scan_id") or "")
+    latest_scan_id = str(meta.get("latest_scan_id") or "")
+    market_phase = str(meta.get("market_phase") or "-")
+    missing_core = [
+        _humanize_section_name(value) for value in meta.get("missing_core_sections") or []
+    ]
+    missing_supplemental = [
+        _humanize_section_name(value)
+        for value in meta.get("missing_supplemental_sections") or []
+    ]
+
+    if not selected_scan_id:
+        return [
+            "표시 가능한 complete scan이 아직 없습니다.",
+            "Universe, watchlist, premarket, session, replay core 섹션이 모두 채워진 뒤 다시 export 하세요.",
+        ]
+
+    lines = [
+        f"표시 중 scan은 {selected_scan_id[:14]} 이고, 현재 미국장 구간은 {market_phase} 입니다.",
+    ]
+    if meta.get("is_fallback") and latest_scan_id:
+        lines.append(
+            f"최신 raw scan {latest_scan_id[:14]} 이 incomplete라 마지막 complete scan으로 fallback했습니다."
+        )
+    if missing_core:
+        lines.append("최신 raw scan의 누락 core 섹션: " + ", ".join(missing_core) + ".")
+    if missing_supplemental:
+        lines.append(
+            "현재 상태에서 비어 있는 supplemental 섹션: "
+            + ", ".join(missing_supplemental)
+            + "."
+        )
+    if not meta.get("live_data_expected"):
+        lines.append(
+            "지금은 미국장 프리장/정규장이 아니어서 live movers와 prediction audit 공백이 정상일 수 있습니다."
+        )
+    return lines
+
+
+def _live_empty_message(meta: dict[str, Any]) -> str:
+    if not meta.get("live_data_expected"):
+        return "지금은 미국장 프리장/정규장이 아니어서 저장된 실시간 movers 랭킹이 비어 있을 수 있습니다."
+    return "저장된 실시간 랭킹이 없습니다."
+
+
+def _prediction_empty_message(meta: dict[str, Any]) -> str:
+    if not meta.get("live_data_expected"):
+        return "지금은 미국장 프리장/정규장이 아니어서 prediction audit 결과가 비어 있을 수 있습니다."
+    return "저장된 예측 비교 결과가 없습니다."
+
+
+def _humanize_section_name(value: str) -> str:
+    return value.replace("_", " ")
 
 
 def _render_metric_cards(metrics: list[dict[str, str]]) -> str:
@@ -1221,6 +1374,7 @@ def _render_chip_list(values: Any) -> list[str]:
 
 
 def _find_generated_at(payload: dict[str, Any]) -> str:
+    meta = payload.get("meta") or {}
     report = payload.get("report") or {}
     if report.get("created_at"):
         return str(report["created_at"])
@@ -1238,6 +1392,8 @@ def _find_generated_at(payload: dict[str, Any]) -> str:
         rows = payload.get(key) or []
         if rows and rows[0].get("created_at"):
             return str(rows[0]["created_at"])
+    if meta.get("selected_created_at"):
+        return str(meta["selected_created_at"])
     return "-"
 
 

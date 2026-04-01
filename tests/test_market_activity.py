@@ -181,8 +181,18 @@ def test_market_activity_scan_persists_rankings_and_prediction_csv(
     assert result.market_phase == "premarket"
     assert output_csv.exists()
 
-    activity_rows = fetch_latest_market_activity(db_path, "premarket", limit=10)
-    outcome_rows = fetch_latest_prediction_outcomes(db_path, "premarket", limit=10)
+    activity_rows = fetch_latest_market_activity(
+        db_path,
+        "premarket",
+        limit=10,
+        prefer_reportable=False,
+    )
+    outcome_rows = fetch_latest_prediction_outcomes(
+        db_path,
+        "premarket",
+        limit=10,
+        prefer_reportable=False,
+    )
 
     assert [row["symbol"] for row in activity_rows][:2] == ["CCC", "AAA"]
     outcomes_by_symbol = {row["symbol"]: row for row in outcome_rows}

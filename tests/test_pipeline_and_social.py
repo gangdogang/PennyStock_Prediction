@@ -126,6 +126,6 @@ def test_social_monitor_scores_mentions_and_persists(tmp_path) -> None:
     from penny_stock_radar.db import insert_social_signals
 
     insert_social_signals(db_path, snapshot.snapshot_id, signals)
-    rows = fetch_latest_social_signals(db_path, limit=5)
+    rows = fetch_latest_social_signals(db_path, limit=5, prefer_reportable=False)
     assert len(rows) == 1
     assert rows[0]["symbol"] == "AAA"

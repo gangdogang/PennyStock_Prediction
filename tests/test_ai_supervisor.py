@@ -7,7 +7,22 @@ import sqlite3
 
 from penny_stock_radar.ai_supervisor import AISupervisor, CommandResult
 from penny_stock_radar.config import AppSettings
-from penny_stock_radar.db import create_snapshot_run, init_database
+from penny_stock_radar.db import (
+    create_snapshot_run,
+    init_database,
+    insert_premarket_signals,
+    insert_replay_report,
+    insert_session_decisions,
+    insert_universe_candidates,
+    insert_watchlist,
+)
+from penny_stock_radar.models import (
+    PremarketSignal,
+    ReplayEvaluation,
+    SessionDecision,
+    UniverseCandidate,
+    WatchlistEntry,
+)
 
 
 class FakeReviewer:
@@ -19,7 +34,106 @@ class FakeReviewer:
         return "## Overview\nready\n\n## Risks\nnone\n\n## Next Action\nhold"
 
 
-def _seed_scan(db_path: Path, created_at: datetime) -> None:
+def _seed_complete_scan(db_path: Path, created_at: datetime, symbol: str = "TEST") -> str:
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol=symbol,
+                company_name=f"{symbol} Corp",
+                exchange="Q",
+                price=1.25,
+                float_shares=5_000_000,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol=symbol,
+                total_score=4.2,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                low_float_bonus=0.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+    insert_premarket_signals(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            PremarketSignal(
+                symbol=symbol,
+                premarket_high=1.60,
+                premarket_low=1.10,
+                premarket_close=1.55,
+                premarket_vwap=1.30,
+                premarket_rvol=4.2,
+                dollar_volume=250_000.0,
+                trade_count=90,
+                tps=0.02,
+                size_mean=5000.0,
+                size_std=400.0,
+                size_cv=0.08,
+                spread_pct=0.025,
+                round_level_break=True,
+                tape_anomaly=True,
+                quality_score=5.0,
+                reasons=["seed"],
+            )
+        ],
+    )
+    insert_session_decisions(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            SessionDecision(
+                symbol=symbol,
+                decision="ENTER",
+                anchored_vwap=1.40,
+                opening_range_high=1.58,
+                opening_range_low=1.18,
+                regular_high=1.70,
+                regular_low=1.15,
+                regular_close=1.62,
+                extension_z=1.2,
+                mfe_pct=12.0,
+                mae_pct=-4.0,
+                reasons=["seed"],
+            )
+        ],
+    )
+    insert_replay_report(
+        db_path,
+        snapshot.snapshot_id,
+        ReplayEvaluation(
+            label="continuation",
+            expectancy=1.5,
+            profit_factor=1.7,
+            precision_at_k=0.8,
+            average_mfe_pct=10.0,
+            average_mae_pct=-3.0,
+            symbol_count=1,
+        ),
+    )
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE scan_runs SET created_at = ? WHERE scan_id = ?",
+            (created_at.isoformat(), snapshot.snapshot_id),
+        )
+        connection.commit()
+    return snapshot.snapshot_id
+
+
+def _seed_incomplete_scan(db_path: Path, created_at: datetime) -> str:
     snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
     with sqlite3.connect(db_path) as connection:
         connection.execute(
@@ -27,13 +141,14 @@ def _seed_scan(db_path: Path, created_at: datetime) -> None:
             (created_at.isoformat(), snapshot.snapshot_id),
         )
         connection.commit()
+    return snapshot.snapshot_id
 
 
 def test_ai_supervisor_refreshes_when_scan_is_stale(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
-    _seed_scan(db_path, now - timedelta(minutes=45))
+    _seed_complete_scan(db_path, now - timedelta(minutes=45))
 
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
@@ -85,7 +200,7 @@ def test_ai_supervisor_skips_refresh_when_scan_is_fresh(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
-    _seed_scan(db_path, now - timedelta(minutes=3))
+    _seed_complete_scan(db_path, now - timedelta(minutes=3))
 
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
@@ -122,7 +237,7 @@ def test_ai_supervisor_rebuilds_snapshot_when_database_is_newer(tmp_path: Path) 
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
-    _seed_scan(db_path, now - timedelta(minutes=3))
+    _seed_complete_scan(db_path, now - timedelta(minutes=3))
 
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
@@ -170,7 +285,7 @@ def test_ai_supervisor_skips_duplicate_gemini_review_when_nothing_changed(tmp_pa
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
-    _seed_scan(db_path, now - timedelta(minutes=2))
+    _seed_complete_scan(db_path, now - timedelta(minutes=2))
 
     snapshot_output = tmp_path / "dashboard.html"
     snapshot_output.write_text("<html>snapshot</html>", encoding="utf-8")
@@ -201,3 +316,79 @@ def test_ai_supervisor_skips_duplicate_gemini_review_when_nothing_changed(tmp_pa
     assert second.ok is True
     assert "gemini_review" not in second.actions
     assert reviewer.prompts and len(reviewer.prompts) == 1
+
+
+def test_ai_supervisor_skips_refresh_when_latest_raw_is_incomplete_but_complete_scan_is_fresh(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
+    _seed_complete_scan(db_path, now - timedelta(minutes=4), symbol="GOOD")
+    _seed_incomplete_scan(db_path, now - timedelta(minutes=1))
+
+    commands: list[list[str]] = []
+    snapshot_output = tmp_path / "dashboard.html"
+    review_output = tmp_path / "gemini_review.md"
+    snapshot_output.write_text("<html>snapshot</html>", encoding="utf-8")
+    review_output.write_text("existing", encoding="utf-8")
+
+    supervisor = AISupervisor(
+        AppSettings(db_path=db_path, live_market_provider="disabled"),
+        refresh_if_older_than_minutes=15,
+        snapshot_output=snapshot_output,
+        review_output=review_output,
+        prompt_path=tmp_path / "gemini_prompt.md",
+        log_path=tmp_path / "ai_supervisor.log",
+        state_path=tmp_path / "ai_supervisor_state.json",
+        command_runner=lambda command, cwd: commands.append(command) or CommandResult(0, "ok", ""),
+        reviewer=None,
+        now_fn=lambda: now,
+        git_status_provider=lambda root: "clean",
+    )
+
+    result = supervisor.run_once()
+
+    assert result.ok is True
+    assert result.actions == ["noop"]
+    assert commands == []
+
+
+def test_ai_supervisor_exports_fallback_snapshot_when_refresh_fails_with_complete_scan(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    now = datetime(2026, 3, 25, 1, 0, tzinfo=timezone.utc)
+    _seed_complete_scan(db_path, now - timedelta(minutes=45), symbol="GOOD")
+    _seed_incomplete_scan(db_path, now - timedelta(minutes=1))
+
+    snapshot_output = tmp_path / "dashboard.html"
+    review_output = tmp_path / "gemini_review.md"
+
+    def fake_snapshot_builder(output_path: Path) -> Path:
+        output_path.write_text("<html>fallback</html>", encoding="utf-8")
+        return output_path
+
+    supervisor = AISupervisor(
+        AppSettings(db_path=db_path, live_market_provider="disabled"),
+        refresh_if_older_than_minutes=15,
+        snapshot_output=snapshot_output,
+        review_output=review_output,
+        prompt_path=tmp_path / "gemini_prompt.md",
+        log_path=tmp_path / "ai_supervisor.log",
+        state_path=tmp_path / "ai_supervisor_state.json",
+        command_runner=lambda command, cwd: CommandResult(1, "", "offline"),
+        snapshot_builder=fake_snapshot_builder,
+        reviewer=None,
+        now_fn=lambda: now,
+        git_status_provider=lambda root: "clean",
+    )
+
+    result = supervisor.run_once()
+
+    assert result.ok is True
+    assert result.actions == ["full_refresh_failed", "fallback_export"]
+    assert result.snapshot_written is True
+    assert snapshot_output.read_text(encoding="utf-8") == "<html>fallback</html>"
+    assert "fallback" in review_output.read_text(encoding="utf-8").lower()

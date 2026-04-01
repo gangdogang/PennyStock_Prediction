@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-import sqlite3
 from string import Template
 import subprocess
 import time
@@ -15,7 +14,7 @@ from typing import Any, Callable
 import httpx
 
 from .config import AppSettings
-from .db import fetch_active_paper_trading_run, fetch_paper_positions
+from .db import fetch_active_paper_trading_run, fetch_paper_positions, fetch_scan_selection
 from .services.market_activity import MarketActivityScanner
 from .services.paper_trading import PaperTradingCoordinator, PaperTradingEngine
 from .services.report_builder import ReportBuilder
@@ -161,6 +160,45 @@ class AISupervisor:
         if needs_refresh:
             refresh = self._run_full_refresh()
             if refresh.returncode != 0:
+                if before["scan_id"] is not None:
+                    self.snapshot_builder(self.snapshot_output)
+                    actions.extend(["full_refresh_failed", "fallback_export"])
+                    self._write_review(
+                        self._local_status_note(
+                            title="Gemini Supervisor: Refresh Failed, Fallback Export Used",
+                            lines=[
+                                "전체 최신화 실행이 실패했지만 마지막 complete scan으로 snapshot을 다시 export했습니다.",
+                                "",
+                                f"- command: `./scripts/run_full_pipeline.sh`",
+                                f"- stderr: `{_truncate(refresh.stderr or refresh.stdout, 500)}`",
+                                f"- selected_scan_id: `{before['scan_id'] or '-'}`",
+                                f"- latest_raw_scan_id: `{before.get('latest_scan_id') or '-'}`",
+                                f"- snapshot: `{self.snapshot_output}`",
+                            ],
+                        )
+                    )
+                    self._save_state(
+                        actions=actions,
+                        scan_id=before["scan_id"],
+                        scan_age_minutes=before["age_minutes"],
+                        review_fingerprint=None,
+                    )
+                    message = (
+                        f"AI supervisor refresh failed; exported fallback snapshot from "
+                        f"scan_id={before['scan_id'] or '-'}"
+                    )
+                    result = AISupervisorResult(
+                        ok=True,
+                        actions=actions,
+                        scan_id=before["scan_id"],
+                        scan_age_minutes=before["age_minutes"],
+                        review_written=True,
+                        snapshot_written=True,
+                        message=message,
+                    )
+                    self.logger.warning(message)
+                    return result
+
                 message = self._build_failure_message("full_refresh_failed", refresh)
                 self._write_review(
                     self._local_status_note(
@@ -437,29 +475,28 @@ class AISupervisor:
         }
 
     def _read_scan_status(self) -> dict[str, Any]:
-        if not self.settings.database_path.exists():
-            return {"scan_id": None, "created_at": None, "age_minutes": None}
-
-        try:
-            with sqlite3.connect(self.settings.database_path) as connection:
-                row = connection.execute(
-                    """
-                    SELECT scan_id, created_at
-                    FROM scan_runs
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """
-                ).fetchone()
-        except sqlite3.Error:
-            return {"scan_id": None, "created_at": None, "age_minutes": None}
-
-        if row is None:
-            return {"scan_id": None, "created_at": None, "age_minutes": None}
-
-        scan_id = str(row[0]) if row[0] is not None else None
-        created_at_text = str(row[1]) if row[1] is not None else None
+        selection = fetch_scan_selection(self.settings.database_path, now=self.now_fn())
+        scan_id = str(selection["selected_scan_id"]) if selection.get("selected_scan_id") else None
+        created_at_text = (
+            str(selection["selected_created_at"])
+            if selection.get("selected_created_at")
+            else None
+        )
         if created_at_text is None:
-            return {"scan_id": scan_id, "created_at": None, "age_minutes": None}
+            return {
+                "scan_id": scan_id,
+                "created_at": None,
+                "age_minutes": None,
+                "latest_scan_id": selection.get("latest_scan_id"),
+                "latest_created_at": selection.get("latest_created_at"),
+                "is_fallback": bool(selection.get("is_fallback")),
+                "missing_core_sections": list(selection.get("missing_core_sections") or []),
+                "missing_supplemental_sections": list(
+                    selection.get("missing_supplemental_sections") or []
+                ),
+                "market_phase": selection.get("market_phase"),
+                "live_data_expected": bool(selection.get("live_data_expected")),
+            }
 
         created_at = datetime.fromisoformat(created_at_text.replace("Z", "+00:00"))
         age_minutes = (self.now_fn() - created_at).total_seconds() / 60.0
@@ -467,6 +504,13 @@ class AISupervisor:
             "scan_id": scan_id,
             "created_at": created_at.isoformat(),
             "age_minutes": max(age_minutes, 0.0),
+            "latest_scan_id": selection.get("latest_scan_id"),
+            "latest_created_at": selection.get("latest_created_at"),
+            "is_fallback": bool(selection.get("is_fallback")),
+            "missing_core_sections": list(selection.get("missing_core_sections") or []),
+            "missing_supplemental_sections": list(selection.get("missing_supplemental_sections") or []),
+            "market_phase": selection.get("market_phase"),
+            "live_data_expected": bool(selection.get("live_data_expected")),
         }
 
     def _review_fingerprint(

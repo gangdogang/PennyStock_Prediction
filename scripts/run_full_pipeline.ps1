@@ -51,5 +51,5 @@ Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock
 Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "build-universe", "--max-symbols", "40", "--export-json", (Join-Path $RootDir "sample_outputs\universe_candidates.sample.json"))
 Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "build-watchlist", "--limit", "10", "--lookback-hours", "48")
 Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "run-replay-pipeline", "--output-csv", (Join-Path $RootDir "sample_outputs\mock_replay.sample.csv"), "--export-json", (Join-Path $RootDir "sample_outputs\replay_report.sample.json"))
-Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "analyze-social", "--mentions-csv", (Join-Path $RootDir "sample_outputs\social_mentions.sample.csv"))
+Write-Host "Skipping sample social analysis. Run .\scripts\psradar analyze-social --mentions-csv <real_social_mentions.csv> when you have real mention data."
 Invoke-PythonCommand -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "export-summary", "--json-output", (Join-Path $RootDir "sample_outputs\radar_summary.json"), "--markdown-output", (Join-Path $RootDir "sample_outputs\radar_summary.md"))

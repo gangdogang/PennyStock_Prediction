@@ -143,7 +143,7 @@ def test_watchlist_builder_ranks_and_persists_entries(tmp_path: Path) -> None:
     assert len(filings) == 1
     assert "ABCD" in signals
 
-    persisted = fetch_latest_watchlist(db_path, limit=10)
+    persisted = fetch_latest_watchlist(db_path, limit=10, prefer_reportable=False)
     assert len(persisted) == 1
     assert persisted[0]["symbol"] == "ABCD"
 
@@ -226,7 +226,7 @@ def test_watchlist_builder_adds_live_market_context_symbols(monkeypatch, tmp_pat
     assert "live_pct_leader" in live_entry.reasons
     assert "live_volume_leader" in live_entry.reasons
 
-    persisted = fetch_latest_watchlist(db_path, limit=10)
+    persisted = fetch_latest_watchlist(db_path, limit=10, prefer_reportable=False)
     persisted_live = next(row for row in persisted if row["symbol"] == "LIVE")
     assert persisted_live["market_context_score"] > 0
 

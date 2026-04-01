@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from .models import (
     FilingMatch,
@@ -24,6 +25,30 @@ from .models import (
     WatchlistEntry,
 )
 
+EASTERN = ZoneInfo("America/New_York")
+CORE_REPORTABLE_SECTIONS = (
+    "universe",
+    "watchlist",
+    "premarket_signals",
+    "session_decisions",
+    "replay_reports",
+)
+SUPPLEMENTAL_REPORTABLE_SECTIONS = (
+    "social_signals",
+    "market_activity",
+    "prediction_outcomes",
+)
+_SCAN_SECTION_TABLES = {
+    "universe": "universe",
+    "watchlist": "watchlist",
+    "premarket_signals": "premarket_signals",
+    "session_decisions": "session_decisions",
+    "replay_reports": "replay_reports",
+    "social_signals": "social_signals",
+    "market_activity": "market_activity",
+    "prediction_outcomes": "prediction_outcomes",
+}
+
 
 def get_connection(database_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
@@ -36,6 +61,181 @@ def get_connection(database_path: Path) -> sqlite3.Connection:
         # Some SQLite environments do not allow changing the journal mode.
         pass
     return connection
+
+
+def resolve_market_phase(now: datetime | None = None) -> str:
+    current = now.astimezone(EASTERN) if now is not None else datetime.now(EASTERN)
+    if current.weekday() >= 5:
+        return "closed"
+    session_time = current.timetz().replace(tzinfo=None)
+    if time(4, 0) <= session_time < time(9, 30):
+        return "premarket"
+    if time(9, 30) <= session_time < time(16, 0):
+        return "regular"
+    if time(16, 0) <= session_time < time(20, 0):
+        return "afterhours"
+    return "closed"
+
+
+def fetch_scan_selection(
+    database_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    if not database_path.exists():
+        return _empty_scan_selection(now=now)
+    try:
+        with get_connection(database_path) as connection:
+            return _fetch_scan_selection(connection, now=now)
+    except sqlite3.Error:
+        return _empty_scan_selection(now=now)
+
+
+def fetch_latest_reportable_scan_id(database_path: Path) -> dict[str, str] | None:
+    selection = fetch_scan_selection(database_path)
+    scan_id = selection.get("selected_scan_id")
+    created_at = selection.get("selected_created_at")
+    if not scan_id or not created_at:
+        return None
+    return {
+        "scan_id": str(scan_id),
+        "created_at": str(created_at),
+    }
+
+
+def _empty_scan_selection(now: datetime | None = None) -> dict[str, object]:
+    market_phase = resolve_market_phase(now)
+    return {
+        "selected_scan_id": None,
+        "selected_created_at": None,
+        "latest_scan_id": None,
+        "latest_created_at": None,
+        "is_fallback": False,
+        "missing_core_sections": [],
+        "missing_supplemental_sections": [],
+        "market_phase": market_phase,
+        "live_data_expected": market_phase in {"premarket", "regular"},
+    }
+
+
+def _fetch_scan_selection(
+    connection: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    market_phase = resolve_market_phase(now)
+    latest_row = connection.execute(
+        """
+        SELECT scan_id, created_at
+        FROM scan_runs
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if latest_row is None:
+        return _empty_scan_selection(now=now)
+
+    latest_scan_id = str(latest_row["scan_id"])
+    latest_created_at = str(latest_row["created_at"])
+    latest_missing_core, latest_missing_supplemental = _scan_missing_sections(
+        connection,
+        latest_scan_id,
+    )
+
+    selected_scan_id: str | None = None
+    selected_created_at: str | None = None
+    selected_missing_supplemental: list[str] = []
+    for row in connection.execute(
+        """
+        SELECT scan_id, created_at
+        FROM scan_runs
+        ORDER BY created_at DESC
+        """
+    ).fetchall():
+        scan_id = str(row["scan_id"])
+        missing_core, missing_supplemental = _scan_missing_sections(connection, scan_id)
+        if missing_core:
+            continue
+        selected_scan_id = scan_id
+        selected_created_at = str(row["created_at"])
+        selected_missing_supplemental = missing_supplemental
+        break
+
+    is_fallback = bool(
+        selected_scan_id
+        and latest_scan_id
+        and selected_scan_id != latest_scan_id
+    )
+    if selected_scan_id is None:
+        missing_core_sections = latest_missing_core
+        missing_supplemental_sections = latest_missing_supplemental
+    elif is_fallback:
+        missing_core_sections = latest_missing_core
+        missing_supplemental_sections = latest_missing_supplemental
+    else:
+        missing_core_sections = []
+        missing_supplemental_sections = selected_missing_supplemental
+
+    return {
+        "selected_scan_id": selected_scan_id,
+        "selected_created_at": selected_created_at,
+        "latest_scan_id": latest_scan_id,
+        "latest_created_at": latest_created_at,
+        "is_fallback": is_fallback,
+        "missing_core_sections": missing_core_sections,
+        "missing_supplemental_sections": missing_supplemental_sections,
+        "market_phase": market_phase,
+        "live_data_expected": market_phase in {"premarket", "regular"},
+    }
+
+
+def _scan_missing_sections(
+    connection: sqlite3.Connection,
+    scan_id: str,
+) -> tuple[list[str], list[str]]:
+    section_state = _scan_section_presence(connection, scan_id)
+    missing_core = [
+        section for section in CORE_REPORTABLE_SECTIONS if not section_state[section]
+    ]
+    missing_supplemental = [
+        section for section in SUPPLEMENTAL_REPORTABLE_SECTIONS if not section_state[section]
+    ]
+    return missing_core, missing_supplemental
+
+
+def _scan_section_presence(connection: sqlite3.Connection, scan_id: str) -> dict[str, bool]:
+    result: dict[str, bool] = {}
+    for section, table_name in _SCAN_SECTION_TABLES.items():
+        row = connection.execute(
+            f"""
+            SELECT EXISTS(
+                SELECT 1
+                FROM {table_name}
+                WHERE scan_id = ?
+                LIMIT 1
+            ) AS present
+            """,
+            (scan_id,),
+        ).fetchone()
+        result[section] = bool(row["present"]) if row is not None else False
+    return result
+
+
+def _resolve_scan_id(
+    database_path: Path,
+    *,
+    scan_id: str | None,
+    prefer_reportable: bool,
+) -> str | None:
+    if scan_id is not None:
+        return scan_id
+    if prefer_reportable:
+        row = fetch_latest_reportable_scan_id(database_path)
+    else:
+        row = fetch_latest_scan_id(database_path)
+    if row is None:
+        return None
+    return str(row["scan_id"])
 
 
 def init_database(database_path: Path) -> None:
@@ -516,10 +716,20 @@ def insert_universe_candidates(
         )
 
 
-def fetch_latest_candidates(database_path: Path, limit: int = 20) -> list[sqlite3.Row]:
+def fetch_latest_candidates(
+    database_path: Path,
+    limit: int = 20,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        snapshot_row = fetch_latest_scan_id(database_path)
-        if snapshot_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -529,14 +739,23 @@ def fetch_latest_candidates(database_path: Path, limit: int = 20) -> list[sqlite
             ORDER BY passed_filters DESC, price ASC
             LIMIT ?
             """,
-            (snapshot_row["scan_id"], limit),
+            (target_scan_id, limit),
         ).fetchall()
 
 
-def fetch_latest_passed_universe(database_path: Path) -> list[sqlite3.Row]:
+def fetch_latest_passed_universe(
+    database_path: Path,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -545,7 +764,7 @@ def fetch_latest_passed_universe(database_path: Path) -> list[sqlite3.Row]:
             WHERE scan_id = ? AND passed_filters = 1
             ORDER BY price ASC
             """,
-            (scan_row["scan_id"],),
+            (target_scan_id,),
         ).fetchall()
 
 
@@ -669,10 +888,20 @@ def insert_watchlist(
         )
 
 
-def fetch_latest_watchlist(database_path: Path, limit: int = 20) -> list[sqlite3.Row]:
+def fetch_latest_watchlist(
+    database_path: Path,
+    limit: int = 20,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -682,7 +911,7 @@ def fetch_latest_watchlist(database_path: Path, limit: int = 20) -> list[sqlite3
             ORDER BY total_score DESC, symbol ASC
             LIMIT ?
             """,
-            (scan_row["scan_id"], limit),
+            (target_scan_id, limit),
         ).fetchall()
 
 
@@ -748,10 +977,20 @@ def insert_premarket_signals(
         )
 
 
-def fetch_latest_premarket_signals(database_path: Path, limit: int = 20) -> list[sqlite3.Row]:
+def fetch_latest_premarket_signals(
+    database_path: Path,
+    limit: int = 20,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -761,7 +1000,7 @@ def fetch_latest_premarket_signals(database_path: Path, limit: int = 20) -> list
             ORDER BY quality_score DESC, symbol ASC
             LIMIT ?
             """,
-            (scan_row["scan_id"], limit),
+            (target_scan_id, limit),
         ).fetchall()
 
 
@@ -817,10 +1056,20 @@ def insert_session_decisions(
         )
 
 
-def fetch_latest_session_decisions(database_path: Path, limit: int = 20) -> list[sqlite3.Row]:
+def fetch_latest_session_decisions(
+    database_path: Path,
+    limit: int = 20,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -833,7 +1082,7 @@ def fetch_latest_session_decisions(database_path: Path, limit: int = 20) -> list
                 symbol ASC
             LIMIT ?
             """,
-            (scan_row["scan_id"], limit),
+            (target_scan_id, limit),
         ).fetchall()
 
 
@@ -873,10 +1122,19 @@ def insert_replay_report(
         )
 
 
-def fetch_latest_replay_report(database_path: Path) -> sqlite3.Row | None:
+def fetch_latest_replay_report(
+    database_path: Path,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> sqlite3.Row | None:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return None
         return connection.execute(
             """
@@ -885,7 +1143,7 @@ def fetch_latest_replay_report(database_path: Path) -> sqlite3.Row | None:
             WHERE scan_id = ?
             LIMIT 1
             """,
-            (scan_row["scan_id"],),
+            (target_scan_id,),
         ).fetchone()
 
 
@@ -933,20 +1191,20 @@ def insert_social_signals(
         )
 
 
-def fetch_latest_social_signals(database_path: Path, limit: int = 20) -> list[sqlite3.Row]:
+def fetch_latest_social_signals(
+    database_path: Path,
+    limit: int = 20,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        try:
-            scan_row = connection.execute(
-                """
-                SELECT scan_id
-                FROM social_signals
-                ORDER BY created_at DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        except sqlite3.OperationalError:
-            return []
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -956,7 +1214,7 @@ def fetch_latest_social_signals(database_path: Path, limit: int = 20) -> list[sq
             ORDER BY social_score DESC, symbol ASC
             LIMIT ?
             """,
-            (scan_row["scan_id"], limit),
+            (target_scan_id, limit),
         ).fetchall()
 
 
@@ -1079,13 +1337,20 @@ def fetch_latest_market_activity(
     market_phase: str,
     limit: int = 20,
     sort_by: str = "pct_change",
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
 ) -> list[sqlite3.Row]:
     order_by = "pct_rank ASC, symbol ASC"
     if sort_by.lower() in {"volume", "dollar_volume"}:
         order_by = "volume_rank ASC, symbol ASC"
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             f"""
@@ -1095,7 +1360,7 @@ def fetch_latest_market_activity(
             ORDER BY {order_by}
             LIMIT ?
             """,
-            (scan_row["scan_id"], market_phase, limit),
+            (target_scan_id, market_phase, limit),
         ).fetchall()
 
 
@@ -1190,10 +1455,17 @@ def fetch_latest_prediction_outcomes(
     database_path: Path,
     market_phase: str,
     limit: int = 50,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
 ) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
-        scan_row = fetch_latest_scan_id(database_path)
-        if scan_row is None:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
             return []
         return connection.execute(
             """
@@ -1215,7 +1487,7 @@ def fetch_latest_prediction_outcomes(
                 symbol ASC
             LIMIT ?
             """,
-            (scan_row["scan_id"], market_phase, limit),
+            (target_scan_id, market_phase, limit),
         ).fetchall()
 
 

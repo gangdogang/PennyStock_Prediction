@@ -41,9 +41,14 @@ class ReplayPipeline:
         watchlist_rows = fetch_latest_watchlist(
             self.settings.database_path,
             limit=symbol_limit or self.settings.watchlist_limit,
+            prefer_reportable=False,
         )
         universe_rows = {
-            row["symbol"]: row for row in fetch_latest_passed_universe(self.settings.database_path)
+            row["symbol"]: row
+            for row in fetch_latest_passed_universe(
+                self.settings.database_path,
+                prefer_reportable=False,
+            )
         }
         if not watchlist_rows:
             raise ValueError("No watchlist available. Build a watchlist before generating replay data.")

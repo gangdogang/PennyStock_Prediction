@@ -7,6 +7,7 @@ import pandas as pd
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.db import (
     create_snapshot_run,
+    fetch_scan_selection,
     fetch_latest_market_activity,
     fetch_latest_premarket_signals,
     fetch_latest_prediction_outcomes,
@@ -19,6 +20,7 @@ from penny_stock_radar.db import (
     insert_market_activity,
     insert_premarket_signals,
     insert_prediction_outcomes,
+    insert_replay_report,
     insert_session_decisions,
     insert_social_signals,
     insert_universe_candidates,
@@ -139,6 +141,19 @@ def _seed_scan(
             )
         ],
     )
+    insert_replay_report(
+        db_path,
+        snapshot_id,
+        ReplayEvaluation(
+            label="continuation",
+            expectancy=1.0,
+            profit_factor=1.5,
+            precision_at_k=0.75,
+            average_mfe_pct=9.0,
+            average_mae_pct=-3.0,
+            symbol_count=1,
+        ),
+    )
 
 
 def test_latest_fetch_helpers_track_most_recent_scan_and_report(tmp_path: Path) -> None:
@@ -203,6 +218,131 @@ def test_replay_report_helper_is_in_sync_with_database_round_trip(tmp_path: Path
     assert report_row["precision_at_k"] == payload["report"]["precision_at_k"]
     assert report_row["expectancy"] == payload["report"]["expectancy"]
     assert report_row["symbol_count"] == 1
+
+
+def test_scan_selection_falls_back_to_latest_complete_scan(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    older = create_snapshot_run(db_path, source="older", symbol_count=1)
+    newer = create_snapshot_run(db_path, source="newer", symbol_count=1)
+
+    _seed_scan(db_path, older.snapshot_id, "OLD", 8_000_000, 3.0, 4.0, "ENTER", 2.0)
+    insert_universe_candidates(
+        db_path,
+        newer.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="RAW",
+                company_name="Raw Corp",
+                exchange="Q",
+                price=1.0,
+                float_shares=6_000_000,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        newer.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="RAW",
+                total_score=3.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                low_float_bonus=0.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+
+    selection = fetch_scan_selection(db_path)
+
+    assert selection["selected_scan_id"] == older.snapshot_id
+    assert selection["latest_scan_id"] == newer.snapshot_id
+    assert selection["is_fallback"] is True
+    assert "premarket_signals" in selection["missing_core_sections"]
+
+
+def test_report_builder_uses_latest_complete_scan_when_latest_raw_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    older = create_snapshot_run(db_path, source="older", symbol_count=1)
+    newer = create_snapshot_run(db_path, source="newer", symbol_count=1)
+
+    _seed_scan(db_path, older.snapshot_id, "SAFE", 8_000_000, 3.5, 4.5, "ENTER", 2.0)
+    insert_universe_candidates(
+        db_path,
+        newer.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="RAW",
+                company_name="Raw Corp",
+                exchange="Q",
+                price=1.0,
+                float_shares=5_000_000,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+
+    builder = ReportBuilder()
+    payload = builder.build_payload(db_path, limit=10)
+    html = builder.render_html(payload)
+
+    assert payload["meta"]["selected_scan_id"] == older.snapshot_id
+    assert payload["meta"]["latest_scan_id"] == newer.snapshot_id
+    assert payload["meta"]["is_fallback"] is True
+    assert [row["symbol"] for row in payload["watchlist"]] == ["SAFE"]
+    assert "fallback" in html.lower()
+    assert "premarket signals" in html.lower()
+
+
+def test_scan_selection_keeps_scan_reportable_when_only_supplemental_sections_are_missing(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="reportable", symbol_count=1)
+    _seed_scan(db_path, snapshot.snapshot_id, "REP", 7_000_000, 4.0, 5.0, "ENTER", 0.0)
+
+    selection = fetch_scan_selection(db_path)
+
+    assert selection["selected_scan_id"] == snapshot.snapshot_id
+    assert selection["missing_core_sections"] == []
+    assert "market_activity" in selection["missing_supplemental_sections"]
+    assert "prediction_outcomes" in selection["missing_supplemental_sections"]
+
+
+def test_scan_selection_returns_empty_when_no_complete_scan_exists(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="incomplete", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="MISS",
+                company_name="Missing Corp",
+                exchange="Q",
+                price=1.0,
+                float_shares=5_000_000,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+
+    selection = fetch_scan_selection(db_path)
+
+    assert selection["selected_scan_id"] is None
+    assert selection["latest_scan_id"] == snapshot.snapshot_id
 
 
 def test_report_builder_exports_json_and_markdown(tmp_path: Path) -> None:
@@ -275,10 +415,13 @@ def test_report_builder_exports_json_and_markdown(tmp_path: Path) -> None:
     assert payload["watchlist"]
     assert payload["live_premarket"]
     assert payload["prediction_premarket"]
+    assert payload["meta"]["selected_scan_id"] == snapshot.snapshot_id
+    assert payload["meta"]["is_fallback"] is False
     assert "EXP" in markdown
     assert "Penny Stock Radar Summary" in markdown
     assert "Premarket Prediction Audit" in markdown
     assert "Standalone Snapshot UI" in html
     assert "Prediction Audit" in html
+    assert "Data Status" in html
     assert "EXP" in html
     assert "진입" in html

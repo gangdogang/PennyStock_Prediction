@@ -8,6 +8,8 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from ..db import fetch_scan_selection
+
 
 def _connect(database_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(database_path)
@@ -27,19 +29,17 @@ def _read_table(database_path: Path, query: str, params: tuple[Any, ...] = ()) -
 
 
 @st.cache_data(show_spinner=False, ttl=10)
+def load_scan_selection_metadata(database_path: Path) -> dict[str, Any]:
+    return fetch_scan_selection(database_path)
+
+
+@st.cache_data(show_spinner=False, ttl=10)
 def load_latest_scan_id(database_path: Path) -> str | None:
-    frame = _read_table(
-        database_path,
-        """
-        SELECT scan_id
-        FROM scan_runs
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-    )
-    if frame.empty:
+    metadata = load_scan_selection_metadata(database_path)
+    scan_id = metadata.get("selected_scan_id")
+    if not scan_id:
         return None
-    return str(frame.iloc[0]["scan_id"])
+    return str(scan_id)
 
 
 @st.cache_data(show_spinner=False, ttl=10)
@@ -236,13 +236,18 @@ def load_paper_strategy_runs(database_path: Path) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False, ttl=10)
 def load_social(database_path: Path) -> pd.DataFrame:
+    scan_id = load_latest_scan_id(database_path)
+    if scan_id is None:
+        return pd.DataFrame()
     frame = _read_table(
         database_path,
         """
         SELECT *
         FROM social_signals
-        ORDER BY created_at DESC, social_score DESC, symbol ASC
+        WHERE scan_id = ?
+        ORDER BY social_score DESC, symbol ASC
         """,
+        (scan_id,),
     )
     return _decode_json_columns(frame, ["reasons"])
 

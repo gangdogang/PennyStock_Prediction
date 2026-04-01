@@ -197,3 +197,28 @@ Sleeping for 3600 seconds.
 AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
 scan_id=92c5fcf5-76cf-4973-8aa5-f8de157f5a4c age_minutes=18.84
 Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=c89d283e-1945-45eb-bd48-6c8ca3fae559 age_minutes=2.62
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=e617a70b-419a-4330-846a-7f720787083d age_minutes=2.23
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=ff3af298-f5f8-4a0b-962e-29b6f94e8921 age_minutes=2.30
+Sleeping for 3600 seconds.
+AI supervisor finished with actions=full_refresh,snapshot_export,gemini_review 
+scan_id=c37ca1f8-fea1-4b70-8fe5-3bd494012685 age_minutes=2.02
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,live_market_scan:premarket,paper_trade:hold,snapshot_export
+,gemini_review_failed scan_id=c55d698f-2a8e-4383-9636-139c9173a11b 
+age_minutes=1.93
+Sleeping for 3600 seconds.
+AI supervisor refresh failed; exported fallback snapshot from 
+scan_id=c55d698f-2a8e-4383-9636-139c9173a11b
+Sleeping for 3600 seconds.
+AI supervisor finished with 
+actions=full_refresh,live_market_scan:premarket,paper_trade:hold,snapshot_export
+,gemini_review_failed scan_id=1bf5d2eb-0302-4a63-8829-2575ad853848 
+age_minutes=0.52
+Sleeping for 3600 seconds.
