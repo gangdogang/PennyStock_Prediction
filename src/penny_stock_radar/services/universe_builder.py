@@ -18,8 +18,10 @@ class UniverseBuilder:
         metadata_provider: YFinanceMetadataProvider | None = None,
     ) -> None:
         self.settings = settings
+        cache_dir = getattr(settings, "cache_dir", Path("data/cache"))
         self.listing_provider = listing_provider or NasdaqTraderListingProvider(
-            settings.nasdaq_trader_url
+            settings.nasdaq_trader_url,
+            cache_path=cache_dir / "nasdaqtraded.txt",
         )
         self.metadata_provider = metadata_provider or YFinanceMetadataProvider()
 

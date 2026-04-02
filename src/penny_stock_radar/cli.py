@@ -8,7 +8,13 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .ai_supervisor import AISupervisor, build_gemini_reviewer
+from .ai_supervisor import (
+    AISupervisor,
+    build_gemini_reviewer,
+    default_automation_status_path,
+    format_automation_status_text,
+    load_automation_status,
+)
 from .dashboard import launch_dashboard
 from .config import get_settings
 from .db import (
@@ -724,6 +730,26 @@ def ai_supervisor(
             time.sleep(check_interval_seconds)
     except KeyboardInterrupt:
         console.print("AI supervisor stopped by user.")
+
+
+@app.command("automation-status")
+def automation_status(
+    format: str = typer.Option(
+        "text",
+        "--format",
+        help="Output format: text or json.",
+    ),
+) -> None:
+    """Show the latest public automation status snapshot."""
+    normalized = (format or "text").strip().lower()
+    if normalized not in {"text", "json"}:
+        raise typer.BadParameter("Expected one of: text, json.")
+
+    payload = load_automation_status(default_automation_status_path())
+    if normalized == "json":
+        typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    typer.echo(format_automation_status_text(payload))
 
 
 @app.command("run-paper-trading")
