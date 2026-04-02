@@ -31,7 +31,7 @@ try {
         -RestartCount 999 `
         -RestartInterval (New-TimeSpan -Minutes 1) `
         -StartWhenAvailable
-    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel LeastPrivilege
+    $principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited
     $task = New-ScheduledTask `
         -Action $action `
         -Trigger $trigger `
