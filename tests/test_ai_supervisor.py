@@ -5,7 +5,11 @@ import os
 from pathlib import Path
 import sqlite3
 
-from penny_stock_radar.ai_supervisor import AISupervisor, CommandResult
+from penny_stock_radar.ai_supervisor import (
+    AISupervisor,
+    CommandResult,
+    load_automation_status,
+)
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.db import (
     create_snapshot_run,
@@ -156,6 +160,7 @@ def test_ai_supervisor_refreshes_when_scan_is_stale(tmp_path: Path) -> None:
     prompt_path = tmp_path / "gemini_prompt.md"
     log_path = tmp_path / "ai_supervisor.log"
     state_path = tmp_path / "ai_supervisor_state.json"
+    automation_status_path = tmp_path / "automation_status.json"
     reviewer = FakeReviewer()
 
     def fake_command_runner(command: list[str], cwd: Path) -> CommandResult:
@@ -176,6 +181,7 @@ def test_ai_supervisor_refreshes_when_scan_is_stale(tmp_path: Path) -> None:
         prompt_path=prompt_path,
         log_path=log_path,
         state_path=state_path,
+        automation_status_path=automation_status_path,
         command_runner=fake_command_runner,
         snapshot_builder=fake_snapshot_builder,
         reviewer=reviewer,
@@ -193,6 +199,7 @@ def test_ai_supervisor_refreshes_when_scan_is_stale(tmp_path: Path) -> None:
     assert snapshot_output.exists()
     assert review_output.exists()
     assert state_path.exists()
+    assert automation_status_path.exists()
     assert reviewer.prompts
 
 
@@ -205,6 +212,7 @@ def test_ai_supervisor_skips_refresh_when_scan_is_fresh(tmp_path: Path) -> None:
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
     review_output = tmp_path / "gemini_review.md"
+    automation_status_path = tmp_path / "automation_status.json"
     snapshot_output.write_text("<html>snapshot</html>", encoding="utf-8")
     review_output.write_text("existing", encoding="utf-8")
 
@@ -220,6 +228,7 @@ def test_ai_supervisor_skips_refresh_when_scan_is_fresh(tmp_path: Path) -> None:
         prompt_path=tmp_path / "gemini_prompt.md",
         log_path=tmp_path / "ai_supervisor.log",
         state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
         command_runner=fake_command_runner,
         reviewer=None,
         now_fn=lambda: now,
@@ -231,6 +240,8 @@ def test_ai_supervisor_skips_refresh_when_scan_is_fresh(tmp_path: Path) -> None:
     assert result.ok is True
     assert result.actions == ["noop"]
     assert commands == []
+    status = load_automation_status(automation_status_path)
+    assert status["status"] == "closed_market"
 
 
 def test_ai_supervisor_rebuilds_snapshot_when_database_is_newer(tmp_path: Path) -> None:
@@ -242,6 +253,7 @@ def test_ai_supervisor_rebuilds_snapshot_when_database_is_newer(tmp_path: Path) 
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
     review_output = tmp_path / "gemini_review.md"
+    automation_status_path = tmp_path / "automation_status.json"
     snapshot_output.write_text("<html>stale</html>", encoding="utf-8")
     review_output.write_text("existing", encoding="utf-8")
 
@@ -266,6 +278,7 @@ def test_ai_supervisor_rebuilds_snapshot_when_database_is_newer(tmp_path: Path) 
         prompt_path=tmp_path / "gemini_prompt.md",
         log_path=tmp_path / "ai_supervisor.log",
         state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
         command_runner=fake_command_runner,
         snapshot_builder=fake_snapshot_builder,
         reviewer=None,
@@ -292,6 +305,7 @@ def test_ai_supervisor_skips_duplicate_gemini_review_when_nothing_changed(tmp_pa
     review_output = tmp_path / "gemini_review.md"
     prompt_path = tmp_path / "gemini_prompt.md"
     prompt_path.write_text("scan=$scan_id actions=$actions", encoding="utf-8")
+    automation_status_path = tmp_path / "automation_status.json"
     reviewer = FakeReviewer()
 
     supervisor = AISupervisor(
@@ -302,6 +316,7 @@ def test_ai_supervisor_skips_duplicate_gemini_review_when_nothing_changed(tmp_pa
         prompt_path=prompt_path,
         log_path=tmp_path / "ai_supervisor.log",
         state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
         command_runner=lambda command, cwd: CommandResult(0, "ok", ""),
         reviewer=reviewer,
         now_fn=lambda: now,
@@ -330,6 +345,7 @@ def test_ai_supervisor_skips_refresh_when_latest_raw_is_incomplete_but_complete_
     commands: list[list[str]] = []
     snapshot_output = tmp_path / "dashboard.html"
     review_output = tmp_path / "gemini_review.md"
+    automation_status_path = tmp_path / "automation_status.json"
     snapshot_output.write_text("<html>snapshot</html>", encoding="utf-8")
     review_output.write_text("existing", encoding="utf-8")
 
@@ -341,6 +357,7 @@ def test_ai_supervisor_skips_refresh_when_latest_raw_is_incomplete_but_complete_
         prompt_path=tmp_path / "gemini_prompt.md",
         log_path=tmp_path / "ai_supervisor.log",
         state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
         command_runner=lambda command, cwd: commands.append(command) or CommandResult(0, "ok", ""),
         reviewer=None,
         now_fn=lambda: now,
@@ -352,6 +369,8 @@ def test_ai_supervisor_skips_refresh_when_latest_raw_is_incomplete_but_complete_
     assert result.ok is True
     assert result.actions == ["noop"]
     assert commands == []
+    status = load_automation_status(automation_status_path)
+    assert status["latest_scan_id"] == "GOOD" or status["latest_scan_id"] is not None
 
 
 def test_ai_supervisor_exports_fallback_snapshot_when_refresh_fails_with_complete_scan(
@@ -365,6 +384,7 @@ def test_ai_supervisor_exports_fallback_snapshot_when_refresh_fails_with_complet
 
     snapshot_output = tmp_path / "dashboard.html"
     review_output = tmp_path / "gemini_review.md"
+    automation_status_path = tmp_path / "automation_status.json"
 
     def fake_snapshot_builder(output_path: Path) -> Path:
         output_path.write_text("<html>fallback</html>", encoding="utf-8")
@@ -378,6 +398,7 @@ def test_ai_supervisor_exports_fallback_snapshot_when_refresh_fails_with_complet
         prompt_path=tmp_path / "gemini_prompt.md",
         log_path=tmp_path / "ai_supervisor.log",
         state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
         command_runner=lambda command, cwd: CommandResult(1, "", "offline"),
         snapshot_builder=fake_snapshot_builder,
         reviewer=None,
@@ -392,3 +413,40 @@ def test_ai_supervisor_exports_fallback_snapshot_when_refresh_fails_with_complet
     assert result.snapshot_written is True
     assert snapshot_output.read_text(encoding="utf-8") == "<html>fallback</html>"
     assert "fallback" in review_output.read_text(encoding="utf-8").lower()
+    status = load_automation_status(automation_status_path)
+    assert status["status"] == "degraded"
+    assert status["degraded_reason"] == "refresh_failed_fallback"
+
+
+def test_ai_supervisor_records_failed_status_when_refresh_fails_without_scan(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    now = datetime(2026, 3, 25, 13, 0, tzinfo=timezone.utc)
+    automation_status_path = tmp_path / "automation_status.json"
+    review_output = tmp_path / "gemini_review.md"
+
+    supervisor = AISupervisor(
+        AppSettings(db_path=db_path, live_market_provider="disabled"),
+        refresh_if_older_than_minutes=15,
+        snapshot_output=tmp_path / "dashboard.html",
+        review_output=review_output,
+        prompt_path=tmp_path / "gemini_prompt.md",
+        log_path=tmp_path / "ai_supervisor.log",
+        state_path=tmp_path / "ai_supervisor_state.json",
+        automation_status_path=automation_status_path,
+        command_runner=lambda command, cwd: CommandResult(1, "", "offline"),
+        reviewer=None,
+        now_fn=lambda: now,
+        git_status_provider=lambda root: "clean",
+    )
+
+    result = supervisor.run_once()
+
+    assert result.ok is False
+    assert result.actions == ["full_refresh_failed"]
+    assert review_output.exists()
+    status = load_automation_status(automation_status_path)
+    assert status["status"] == "failed"
+    assert status["last_refresh_action"] == "full_refresh_failed"

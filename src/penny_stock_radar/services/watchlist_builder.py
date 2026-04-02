@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..config import AppSettings
@@ -50,8 +51,10 @@ class WatchlistBuilder:
         self.settings = settings
         self.filing_scanner = filing_scanner or FilingScanner(settings)
         self.setup_scanner = setup_scanner or SetupScanner()
+        cache_dir = Path(self._setting("cache_dir", "data/cache"))
         self.listing_provider = listing_provider or NasdaqTraderListingProvider(
-            self._setting("nasdaq_trader_url", "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqtraded.txt")
+            self._setting("nasdaq_trader_url", "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqtraded.txt"),
+            cache_path=cache_dir / "nasdaqtraded.txt",
         )
         self.metadata_provider = metadata_provider or YFinanceMetadataProvider()
 
@@ -60,10 +63,13 @@ class WatchlistBuilder:
         limit: int | None = None,
         lookback_hours: int | None = None,
     ) -> tuple[list[WatchlistEntry], list[FilingMatch], dict[str, SetupSignal]]:
-        universe_rows = fetch_latest_passed_universe(
-            self.settings.database_path,
-            prefer_reportable=False,
-        )
+        try:
+            universe_rows = fetch_latest_passed_universe(
+                self.settings.database_path,
+                prefer_reportable=False,
+            )
+        except TypeError:
+            universe_rows = fetch_latest_passed_universe(self.settings.database_path)
         if not universe_rows:
             return [], [], {}
 

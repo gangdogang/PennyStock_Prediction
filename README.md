@@ -77,6 +77,24 @@ launch_dashboard.bat
 .\launch_paper_trader.ps1
 ```
 
+윈도우 로그인 시 자동 시작되는 24시간 모니터링 + 리포트 supervisor 등록:
+
+```powershell
+.\install_ai_supervisor_task.ps1
+```
+
+윈도우 supervisor 작업 상태 확인:
+
+```powershell
+.\ai_supervisor_task_status.ps1
+```
+
+윈도우 supervisor 작업 제거:
+
+```powershell
+.\remove_ai_supervisor_task.ps1
+```
+
 윈도우 로그인 시 자동 시작되도록 작업 스케줄러 등록:
 
 ```powershell
@@ -103,9 +121,11 @@ launch_dashboard.bat
 - Streamlit 대시보드 실행
 
 윈도우 데스크탑을 24시간 켜두는 경우:
-- `launch_paper_trader.ps1` 또는 `launch_paper_trader.bat` 로 모의투자 루프 실행
-- `install_paper_trader_task.ps1` 로 로그인 시 자동 시작 등록
-- `launch_dashboard_lan.ps1` 로 같은 네트워크의 맥에서 `http://데스크탑IP:8501` 접속
+- `install_ai_supervisor_task.ps1` 로 `15분 주기 모니터링 + snapshot/review 갱신` 자동 시작 등록
+- `ai_supervisor_task_status.ps1` 로 상태 JSON, stdout/stderr, 최근 실행 시간 확인
+- `launch_dashboard_lan.ps1` 는 필요할 때만 수동 점검용으로 사용
+- `install_paper_trader_task.ps1` 는 선택 기능으로만 사용
+- 절전/최대 절전은 꺼 두고, Mac에서는 공유 폴더나 LAN 경로에서 결과 파일만 확인
 
 ## API 키 설정
 
@@ -195,6 +215,18 @@ live_api_setup.bat
 ./scripts/psradar ai-supervisor --run-once
 ```
 
+현재 자동화 상태 확인:
+
+```bash
+./scripts/psradar automation-status
+```
+
+자동화 상태 JSON 확인:
+
+```bash
+./scripts/psradar automation-status --format json
+```
+
 생성된 파일:
 
 ```text
@@ -241,8 +273,16 @@ sample_outputs/paper_trading/paper_strategy_comparison.csv
 - 급등주 평가는 `무조건 1위 추격`이 아니라 `상위 5위 리더군`, `잠깐 식었다가 다시 치고 올라오는 재점화`, `눌림 흡수`, `가짜 돌파 경보`까지 함께 봅니다.
 - paper trader는 `Adaptive`, `상승률 리더 baseline`, `거래량 리더 baseline`을 같이 기록해 모의손익 비교 CSV를 남깁니다.
 - supervisor 로그는 [`automation/logs/ai_supervisor.log`](/Users/wondokyeong/Desktop/Penny_Stock/automation/logs/ai_supervisor.log) 에 쌓입니다.
-- 마지막 실행 상태는 [`automation/state/ai_supervisor_state.json`](/Users/wondokyeong/Desktop/Penny_Stock/automation/state/ai_supervisor_state.json) 에 저장됩니다.
+- 공개 상태 파일은 [`automation/state/automation_status.json`](/Users/wondokyeong/Desktop/Penny_Stock/automation/state/automation_status.json) 에 저장됩니다.
+- 내부 중복 방지 상태는 [`automation/state/ai_supervisor_state.json`](/Users/wondokyeong/Desktop/Penny_Stock/automation/state/ai_supervisor_state.json) 에 저장됩니다.
 - Gemini 프롬프트 템플릿은 [`automation/prompts/gemini_reviewer.md`](/Users/wondokyeong/Desktop/Penny_Stock/automation/prompts/gemini_reviewer.md) 입니다.
+
+Windows 24시간 기본 운영 경로:
+
+- `install_ai_supervisor_task.ps1` 로 `Penny Stock Radar Supervisor` 작업 등록
+- 작업은 로그인 시 1회 즉시 실행되고 이후 15분마다 `ai-supervisor --run-once --refresh-if-older-than-minutes 15` 를 호출
+- 기본 산출물은 `sample_outputs/radar_dashboard.html`, `automation/inbox/gemini_review.md`, `automation/state/automation_status.json`
+- 상태가 `failed` 면 먼저 `gemini_review.md`, 그 다음 Windows stderr 로그, 마지막으로 `automation_status.json` 순서로 확인
 
 macOS 로그인 시 자동 시작까지 원하면 launchd 템플릿:
 

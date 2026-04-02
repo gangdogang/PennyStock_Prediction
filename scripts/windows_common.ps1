@@ -191,6 +191,63 @@ function Get-LanIPv4Addresses {
     return @($addresses)
 }
 
+function Rotate-LogFile {
+    param(
+        [string]$Path,
+        [int64]$MaxBytes = 1048576,
+        [int]$KeepCount = 5
+    )
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    $file = Get-Item $Path -ErrorAction SilentlyContinue
+    if (-not $file -or $file.Length -lt $MaxBytes) {
+        return
+    }
+
+    for ($index = $KeepCount; $index -ge 1; $index--) {
+        $olderPath = "$Path.$index"
+        $newerPath = if ($index -eq 1) { $Path } else { "$Path." + ($index - 1) }
+        if (Test-Path $olderPath) {
+            Remove-Item $olderPath -Force
+        }
+        if (Test-Path $newerPath) {
+            Move-Item $newerPath $olderPath -Force
+        }
+    }
+}
+
+function Get-AiSupervisorTaskName {
+    return "Penny Stock Radar Supervisor"
+}
+
+function Get-AiSupervisorLogPaths {
+    param(
+        [string]$RootDir
+    )
+
+    $logDir = Join-Path $RootDir "automation\logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+    return [pscustomobject]@{
+        LogDir = $logDir
+        Stdout = Join-Path $logDir "ai_supervisor_windows_stdout.log"
+        Stderr = Join-Path $logDir "ai_supervisor_windows_stderr.log"
+    }
+}
+
+function Get-AutomationStatusPath {
+    param(
+        [string]$RootDir
+    )
+
+    $stateDir = Join-Path $RootDir "automation\state"
+    New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+    return Join-Path $stateDir "automation_status.json"
+}
+
 function Get-PaperTraderTaskName {
     return "Penny Stock Radar Paper Trader"
 }
