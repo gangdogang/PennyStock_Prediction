@@ -57,6 +57,12 @@ function Invoke-Step {
 
 $runnerPython = Get-RunnerPython
 $dbPath = Join-Path $RootDir "data\penny_stock_radar.sqlite3"
+$universeMaxSymbols = if ($env:PENNY_STOCK_UNIVERSE_MAX_SYMBOLS) {
+    $env:PENNY_STOCK_UNIVERSE_MAX_SYMBOLS
+}
+else {
+    "250"
+}
 
 if ($env:PYTHONPATH) {
     $env:PYTHONPATH = "$RootDir\src;$env:PYTHONPATH"
@@ -71,7 +77,7 @@ if ($env:PENNY_STOCK_RESET_DB -eq "1" -and (Test-Path $dbPath)) {
 }
 
 Invoke-Step -Label "[1/5] Initializing database" -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "init-db")
-Invoke-Step -Label "[2/5] Building universe" -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "build-universe", "--max-symbols", "40", "--export-json", (Join-Path $RootDir "sample_outputs\universe_candidates.sample.json"))
+Invoke-Step -Label "[2/5] Building universe" -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "build-universe", "--max-symbols", $universeMaxSymbols, "--export-json", (Join-Path $RootDir "sample_outputs\universe_candidates.sample.json"))
 Invoke-Step -Label "[3/5] Building watchlist" -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "build-watchlist", "--limit", "10", "--lookback-hours", "48")
 Invoke-Step -Label "[4/5] Running replay pipeline" -CommandParts $runnerPython -Arguments @("-m", "penny_stock_radar", "run-replay-pipeline", "--output-csv", (Join-Path $RootDir "sample_outputs\mock_replay.sample.csv"), "--export-json", (Join-Path $RootDir "sample_outputs\replay_report.sample.json"))
 Write-Host "Skipping sample social analysis. Run .\scripts\psradar analyze-social --mentions-csv <real_social_mentions.csv> when you have real mention data."

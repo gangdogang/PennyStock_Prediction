@@ -17,6 +17,7 @@ if exist ".venv\Scripts\python.exe" (
 
 set "PYTHONPATH=%ROOT_DIR%\src;%PYTHONPATH%"
 set "DB_PATH=%ROOT_DIR%\data\penny_stock_radar.sqlite3"
+if "%PENNY_STOCK_UNIVERSE_MAX_SYMBOLS%"=="" set "PENNY_STOCK_UNIVERSE_MAX_SYMBOLS=250"
 
 if /I "%PENNY_STOCK_RESET_DB%"=="1" (
     if exist "%DB_PATH%" (
@@ -29,7 +30,7 @@ echo [1/5] Initializing database
 %VENV_PYTHON% -m penny_stock_radar init-db
 if errorlevel 1 exit /b 1
 echo [2/5] Building universe
-%VENV_PYTHON% -m penny_stock_radar build-universe --max-symbols 40 --export-json "%ROOT_DIR%\sample_outputs\universe_candidates.sample.json"
+%VENV_PYTHON% -m penny_stock_radar build-universe --max-symbols %PENNY_STOCK_UNIVERSE_MAX_SYMBOLS% --export-json "%ROOT_DIR%\sample_outputs\universe_candidates.sample.json"
 if errorlevel 1 exit /b 1
 echo [3/5] Building watchlist
 %VENV_PYTHON% -m penny_stock_radar build-watchlist --limit 10 --lookback-hours 48
