@@ -28,6 +28,10 @@ echo.
 echo PENNY_STOCK_LIVE_MARKET_PROVIDER=polygon
 echo PENNY_STOCK_POLYGON_API_KEY=
 echo.
+echo Optional Gemini review:
+echo PENNY_STOCK_GEMINI_API_KEY=
+echo PENNY_STOCK_GEMINI_MODEL=gemini-3-flash-preview
+echo.
 
 start "" notepad "%ROOT_DIR%.env"
 endlocal

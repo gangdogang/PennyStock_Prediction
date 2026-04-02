@@ -13,6 +13,7 @@ if __package__ in {None, ""}:
     if str(SRC_ROOT) not in sys.path:
         sys.path.insert(0, str(SRC_ROOT))
     from penny_stock_radar.config import get_settings
+    from penny_stock_radar.runtime_scripts import full_refresh_command
     from penny_stock_radar.services.market_activity import MarketActivityScanner
     from penny_stock_radar.services.live_monitor import LiveMonitor
     from penny_stock_radar.ui.data import (
@@ -34,6 +35,7 @@ if __package__ in {None, ""}:
     )
 else:
     from ..config import get_settings
+    from ..runtime_scripts import full_refresh_command
     from ..services.market_activity import MarketActivityScanner
     from ..services.live_monitor import LiveMonitor
     from .data import (
@@ -256,7 +258,7 @@ def _project_root() -> Path:
 
 def _run_full_refresh() -> tuple[bool, str]:
     root_dir = _project_root()
-    command = [str(root_dir / "scripts" / "run_full_pipeline.sh")]
+    command = full_refresh_command(root_dir)
     result = subprocess.run(
         command,
         cwd=root_dir,

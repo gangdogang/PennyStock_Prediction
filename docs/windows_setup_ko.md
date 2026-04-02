@@ -102,6 +102,13 @@ PENNY_STOCK_LIVE_MARKET_PROVIDER=polygon
 PENNY_STOCK_POLYGON_API_KEY=여기에_키
 ```
 
+Gemini 2차 리뷰는 선택:
+
+```env
+PENNY_STOCK_GEMINI_API_KEY=여기에_키
+PENNY_STOCK_GEMINI_MODEL=gemini-3-flash-preview
+```
+
 ## 6. 최신화는 어떻게 하나
 
 - `launch_dashboard.bat` 또는 `launch_dashboard.ps1`

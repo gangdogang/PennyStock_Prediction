@@ -27,6 +27,7 @@ from penny_stock_radar.models import (
     UniverseCandidate,
     WatchlistEntry,
 )
+from penny_stock_radar.runtime_scripts import full_refresh_command
 
 
 class FakeReviewer:
@@ -195,7 +196,7 @@ def test_ai_supervisor_refreshes_when_scan_is_stale(tmp_path: Path) -> None:
     assert "full_refresh" in result.actions
     assert "snapshot_export" in result.actions
     assert "gemini_review" in result.actions
-    assert commands and commands[0][0].endswith("run_full_pipeline.sh")
+    assert commands and commands[0] == full_refresh_command(supervisor.project_root)
     assert snapshot_output.exists()
     assert review_output.exists()
     assert state_path.exists()

@@ -26,5 +26,9 @@ Write-Host ""
 Write-Host "PENNY_STOCK_LIVE_MARKET_PROVIDER=polygon"
 Write-Host "PENNY_STOCK_POLYGON_API_KEY="
 Write-Host ""
+Write-Host "Optional Gemini review:"
+Write-Host "PENNY_STOCK_GEMINI_API_KEY="
+Write-Host "PENNY_STOCK_GEMINI_MODEL=gemini-3-flash-preview"
+Write-Host ""
 
 Start-Process notepad (Join-Path $RootDir ".env")

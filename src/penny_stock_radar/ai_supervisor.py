@@ -16,6 +16,7 @@ import httpx
 
 from .config import AppSettings
 from .db import fetch_active_paper_trading_run, fetch_paper_positions, fetch_scan_selection
+from .runtime_scripts import full_refresh_command, full_refresh_command_label
 from .services.market_activity import MarketActivityScanner
 from .services.paper_trading import PaperTradingCoordinator, PaperTradingEngine
 from .services.report_builder import ReportBuilder
@@ -350,7 +351,7 @@ class AISupervisor:
                 lines=[
                     "전체 최신화 실행이 실패했지만 마지막 complete scan으로 snapshot을 다시 export했습니다.",
                     "",
-                    f"- command: `./scripts/run_full_pipeline.sh`",
+                    f"- command: `{full_refresh_command_label()}`",
                     f"- stderr: `{context.last_error}`",
                     f"- selected_scan_id: `{context.before['scan_id'] or '-'}`",
                     f"- latest_raw_scan_id: `{context.before.get('latest_scan_id') or '-'}`",
@@ -383,7 +384,7 @@ class AISupervisor:
             lines=[
                 "전체 최신화 실행이 실패했습니다.",
                 "",
-                f"- command: `./scripts/run_full_pipeline.sh`",
+                f"- command: `{full_refresh_command_label()}`",
                 f"- stderr: `{context.last_error}`",
             ],
         )
@@ -888,10 +889,7 @@ class AISupervisor:
         )
 
     def _run_full_refresh(self) -> CommandResult:
-        return self.command_runner(
-            [str(self.project_root / "scripts" / "run_full_pipeline.sh")],
-            self.project_root,
-        )
+        return self.command_runner(full_refresh_command(self.project_root), self.project_root)
 
     def _build_snapshot(self, output_path: Path) -> Path:
         return build_snapshot_dashboard(
