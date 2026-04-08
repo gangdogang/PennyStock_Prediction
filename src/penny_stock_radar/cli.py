@@ -42,6 +42,7 @@ from .services.paper_trading import (
     PRIMARY_PAPER_STRATEGY,
     PaperTradingCoordinator,
 )
+from .services.trade_plan import TradePlanService
 from .services.social_monitor import SocialMonitor
 from .services.universe_builder import UniverseBuilder
 from .services.watchlist_builder import WatchlistBuilder
@@ -930,6 +931,60 @@ def show_paper_summary(
     console.print(
         f"CSV logs are in [bold]{settings.paper_trade_dir.resolve()}[/bold]"
     )
+
+
+@app.command("trade-plan")
+def trade_plan(
+    phase: str = typer.Option(
+        "auto",
+        help="Which market phase to evaluate for the execution plan.",
+    ),
+) -> None:
+    """Build a live execution plan for semi-auto intraday trading."""
+    settings = get_settings()
+    init_database(settings.database_path)
+    service = TradePlanService(settings)
+    result = service.generate(phase=phase, export=True)
+
+    summary = Table(title="Live Trade Plan")
+    summary.add_column("Phase")
+    summary.add_column("Regime")
+    summary.add_column("Daily Lock")
+    summary.add_column("Day PnL")
+    summary.add_column("Open Risk")
+    summary.add_row(
+        result.market_phase,
+        result.regime,
+        "yes" if result.daily_loss_locked else "no",
+        f"{result.current_day_pnl:.2f}",
+        f"{result.current_open_risk:.2f}",
+    )
+
+    queue = Table(title="Top Plan Candidates")
+    queue.add_column("Symbol")
+    queue.add_column("Bucket")
+    queue.add_column("Actionability")
+    queue.add_column("Ref")
+    queue.add_column("Stop")
+    queue.add_column("Size")
+    queue.add_column("Risk$")
+    queue.add_column("Blockers")
+    for row in result.candidates[:12]:
+        queue.add_row(
+            row.symbol,
+            row.bucket,
+            row.actionability,
+            f"{row.entry_reference:.4f}" if row.entry_reference is not None else "-",
+            f"{row.stop:.4f}" if row.stop is not None else "-",
+            str(row.suggested_size),
+            f"{row.max_dollar_risk:.2f}" if row.max_dollar_risk is not None else "-",
+            ", ".join(row.blockers[:2]) if row.blockers else "-",
+        )
+
+    console.print(summary)
+    console.print(queue)
+    console.print(f"Plan CSV written to [bold]{result.csv_path}[/bold]")
+    console.print(f"Checklist written to [bold]{result.checklist_path}[/bold]")
 
 
 @app.command("dashboard")

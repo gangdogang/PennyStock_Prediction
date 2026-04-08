@@ -68,11 +68,20 @@ class AppSettings(BaseSettings):
     paper_add_size_fraction: float = 0.10
     paper_add_trigger_pct: float = 3.0
     paper_max_adds_per_position: int = 1
-    paper_entry_score_min: float = 3.25
-    paper_news_entry_score_min: float = 3.0
-    paper_stop_loss_pct: float = 4.0
+    paper_entry_score_min: float = 2.75
+    paper_news_entry_score_min: float = 2.75
+    paper_stop_loss_pct: float = 5.0
+    paper_adaptive_max_open_positions: int = 5
+    paper_adaptive_predicted_entry_size_fraction: float = 0.06
+    paper_adaptive_live_exception_entry_size_fraction: float = 0.04
+    paper_adaptive_time_stop_minutes: int = 30
+    paper_adaptive_time_stop_min_progress_pct: float = 3.0
+    paper_adaptive_partial_take_profit_pct: float = 10.0
+    paper_adaptive_partial_exit_fraction: float = 0.50
     paper_profit_activation_pct: float = 6.0
     paper_trailing_stop_pct: float = 3.0
+    paper_fill_slippage_pct: float = 0.15
+    paper_stop_gap_slippage_pct: float = 0.50
     paper_ai_consensus_enabled: bool = True
     paper_ai_consensus_limit: int = 3
     paper_ai_refresh_seconds: int = 180
@@ -81,6 +90,13 @@ class AppSettings(BaseSettings):
     paper_ai_escalation_limit: int = 1
     paper_ai_escalation_min_confidence: float = 45.0
     paper_ai_escalation_max_confidence: float = 75.0
+    trade_plan_per_trade_risk_pct: float = 0.35
+    trade_plan_starter_notional_cap_pct: float = 8.0
+    trade_plan_add_notional_cap_pct: float = 5.0
+    trade_plan_daily_loss_lock_pct: float = 2.0
+    trade_plan_max_concurrent_open_risk_pct: float = 1.0
+    trade_plan_stale_data_seconds: int = 15
+    trade_plan_halt_suspected_seconds: int = 60
 
     exclude_etfs: bool = True
     exclude_preferred: bool = True
@@ -186,10 +202,14 @@ class AppSettings(BaseSettings):
         "small_cap_max_market_cap",
         "small_cap_max_float_shares",
         "paper_max_open_positions",
+        "paper_adaptive_max_open_positions",
         "paper_max_adds_per_position",
         "paper_ai_consensus_limit",
         "paper_ai_refresh_seconds",
         "paper_ai_escalation_limit",
+        "paper_adaptive_time_stop_minutes",
+        "trade_plan_stale_data_seconds",
+        "trade_plan_halt_suspected_seconds",
     )
     @classmethod
     def _positive_integers(cls, value: int) -> int:
@@ -209,11 +229,23 @@ class AppSettings(BaseSettings):
         "paper_entry_score_min",
         "paper_news_entry_score_min",
         "paper_stop_loss_pct",
+        "paper_adaptive_predicted_entry_size_fraction",
+        "paper_adaptive_live_exception_entry_size_fraction",
+        "paper_adaptive_time_stop_min_progress_pct",
+        "paper_adaptive_partial_take_profit_pct",
+        "paper_adaptive_partial_exit_fraction",
         "paper_profit_activation_pct",
         "paper_trailing_stop_pct",
+        "paper_fill_slippage_pct",
+        "paper_stop_gap_slippage_pct",
         "small_cap_price_max",
         "paper_ai_escalation_min_confidence",
         "paper_ai_escalation_max_confidence",
+        "trade_plan_per_trade_risk_pct",
+        "trade_plan_starter_notional_cap_pct",
+        "trade_plan_add_notional_cap_pct",
+        "trade_plan_daily_loss_lock_pct",
+        "trade_plan_max_concurrent_open_risk_pct",
     )
     @classmethod
     def _positive_floats(cls, value: float) -> float:

@@ -407,6 +407,8 @@ def init_database(database_path: Path) -> None:
                 symbol TEXT NOT NULL,
                 source TEXT NOT NULL,
                 last_price REAL,
+                bid_price REAL,
+                ask_price REAL,
                 previous_close REAL,
                 pct_change REAL,
                 volume REAL,
@@ -415,6 +417,9 @@ def init_database(database_path: Path) -> None:
                 spread_pct REAL,
                 market_status TEXT,
                 market_data_at TEXT,
+                data_age_seconds REAL,
+                has_live_trade INTEGER NOT NULL DEFAULT 0,
+                has_live_quote INTEGER NOT NULL DEFAULT 0,
                 pct_rank INTEGER NOT NULL,
                 volume_rank INTEGER NOT NULL,
                 watchlist_rank INTEGER,
@@ -441,6 +446,8 @@ def init_database(database_path: Path) -> None:
                 symbol TEXT NOT NULL,
                 source TEXT NOT NULL,
                 last_price REAL,
+                bid_price REAL,
+                ask_price REAL,
                 previous_close REAL,
                 pct_change REAL,
                 volume REAL,
@@ -449,6 +456,9 @@ def init_database(database_path: Path) -> None:
                 spread_pct REAL,
                 market_status TEXT,
                 market_data_at TEXT,
+                data_age_seconds REAL,
+                has_live_trade INTEGER NOT NULL DEFAULT 0,
+                has_live_quote INTEGER NOT NULL DEFAULT 0,
                 pct_rank INTEGER NOT NULL,
                 volume_rank INTEGER NOT NULL,
                 watchlist_rank INTEGER,
@@ -543,8 +553,16 @@ def init_database(database_path: Path) -> None:
                 unrealized_pnl REAL NOT NULL,
                 total_pnl REAL NOT NULL,
                 stop_price REAL,
+                planned_stop_price REAL,
+                planned_risk_pct REAL,
                 highest_price REAL,
                 add_count INTEGER NOT NULL DEFAULT 0,
+                partial_exit_count INTEGER NOT NULL DEFAULT 0,
+                strategy_bucket TEXT NOT NULL DEFAULT '',
+                fill_reference_price REAL,
+                fill_slippage_pct REAL,
+                day_regime TEXT,
+                watchlist_rank_at_entry INTEGER,
                 entry_reasons TEXT NOT NULL DEFAULT '[]',
                 exit_reasons TEXT NOT NULL DEFAULT '[]',
                 opened_at TEXT NOT NULL,
@@ -567,8 +585,15 @@ def init_database(database_path: Path) -> None:
                 quantity INTEGER NOT NULL,
                 price REAL NOT NULL,
                 notional REAL NOT NULL,
+                strategy_bucket TEXT NOT NULL DEFAULT '',
                 analysis_label TEXT,
                 analysis_score REAL,
+                planned_stop_price REAL,
+                planned_risk_pct REAL,
+                fill_reference_price REAL,
+                fill_slippage_pct REAL,
+                day_regime TEXT,
+                watchlist_rank_at_entry INTEGER,
                 reasons TEXT NOT NULL DEFAULT '[]',
                 created_at TEXT NOT NULL,
                 realized_pnl REAL,
@@ -614,8 +639,158 @@ def init_database(database_path: Path) -> None:
         _ensure_column(
             connection,
             "market_activity",
+            "bid_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity",
+            "ask_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity",
+            "data_age_seconds",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity",
+            "has_live_trade",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "market_activity",
+            "has_live_quote",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "market_activity_history",
+            "bid_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity_history",
+            "ask_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity_history",
+            "data_age_seconds",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "market_activity_history",
+            "has_live_trade",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "market_activity_history",
+            "has_live_quote",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "market_activity",
             "leader_persistence_score",
             "REAL NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "planned_stop_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "planned_risk_pct",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "partial_exit_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "strategy_bucket",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "fill_reference_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "fill_slippage_pct",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "day_regime",
+            "TEXT",
+        )
+        _ensure_column(
+            connection,
+            "paper_positions",
+            "watchlist_rank_at_entry",
+            "INTEGER",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "strategy_bucket",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "planned_stop_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "planned_risk_pct",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "fill_reference_price",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "fill_slippage_pct",
+            "REAL",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "day_regime",
+            "TEXT",
+        )
+        _ensure_column(
+            connection,
+            "paper_orders",
+            "watchlist_rank_at_entry",
+            "INTEGER",
         )
         _ensure_column(
             connection,
@@ -820,6 +995,37 @@ def insert_filings(
             """,
             rows,
         )
+
+
+def fetch_latest_filings(
+    database_path: Path,
+    limit: int = 100,
+    *,
+    scan_id: str | None = None,
+    prefer_reportable: bool = True,
+    symbols: tuple[str, ...] | None = None,
+) -> list[sqlite3.Row]:
+    with get_connection(database_path) as connection:
+        target_scan_id = _resolve_scan_id(
+            database_path,
+            scan_id=scan_id,
+            prefer_reportable=prefer_reportable,
+        )
+        if target_scan_id is None:
+            return []
+        query = """
+            SELECT *
+            FROM filings
+            WHERE scan_id = ?
+        """
+        params: list[object] = [target_scan_id]
+        if symbols:
+            placeholders = ", ".join("?" for _ in symbols)
+            query += f" AND symbol IN ({placeholders})"
+            params.extend(symbols)
+        query += " ORDER BY created_at DESC, symbol ASC LIMIT ?"
+        params.append(limit)
+        return connection.execute(query, tuple(params)).fetchall()
 
 
 def update_universe_filing_summaries(
@@ -1231,6 +1437,8 @@ def insert_market_activity(
             row.symbol,
             row.source,
             row.last_price,
+            row.bid_price,
+            row.ask_price,
             row.previous_close,
             row.pct_change,
             row.volume,
@@ -1239,6 +1447,9 @@ def insert_market_activity(
             row.spread_pct,
             row.market_status,
             row.market_data_at.isoformat() if row.market_data_at else None,
+            row.data_age_seconds,
+            int(row.has_live_trade),
+            int(row.has_live_quote),
             row.pct_rank,
             row.volume_rank,
             row.watchlist_rank,
@@ -1270,6 +1481,8 @@ def insert_market_activity(
                 symbol,
                 source,
                 last_price,
+                bid_price,
+                ask_price,
                 previous_close,
                 pct_change,
                 volume,
@@ -1278,6 +1491,9 @@ def insert_market_activity(
                 spread_pct,
                 market_status,
                 market_data_at,
+                data_age_seconds,
+                has_live_trade,
+                has_live_quote,
                 pct_rank,
                 volume_rank,
                 watchlist_rank,
@@ -1292,7 +1508,7 @@ def insert_market_activity(
                 reasons,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -1304,6 +1520,8 @@ def insert_market_activity(
                 symbol,
                 source,
                 last_price,
+                bid_price,
+                ask_price,
                 previous_close,
                 pct_change,
                 volume,
@@ -1312,6 +1530,9 @@ def insert_market_activity(
                 spread_pct,
                 market_status,
                 market_data_at,
+                data_age_seconds,
+                has_live_trade,
+                has_live_quote,
                 pct_rank,
                 volume_rank,
                 watchlist_rank,
@@ -1326,7 +1547,7 @@ def insert_market_activity(
                 reasons,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -1710,8 +1931,16 @@ def upsert_paper_positions(
             row.unrealized_pnl,
             row.total_pnl,
             row.stop_price,
+            row.planned_stop_price,
+            row.planned_risk_pct,
             row.highest_price,
             row.add_count,
+            row.partial_exit_count,
+            row.strategy_bucket,
+            row.fill_reference_price,
+            row.fill_slippage_pct,
+            row.day_regime,
+            row.watchlist_rank_at_entry,
             json.dumps(row.entry_reasons),
             json.dumps(row.exit_reasons),
             row.opened_at.isoformat(),
@@ -1742,15 +1971,23 @@ def upsert_paper_positions(
                 unrealized_pnl,
                 total_pnl,
                 stop_price,
+                planned_stop_price,
+                planned_risk_pct,
                 highest_price,
                 add_count,
+                partial_exit_count,
+                strategy_bucket,
+                fill_reference_price,
+                fill_slippage_pct,
+                day_regime,
+                watchlist_rank_at_entry,
                 entry_reasons,
                 exit_reasons,
                 opened_at,
                 updated_at,
                 closed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(position_id) DO UPDATE SET
                 run_id = excluded.run_id,
                 symbol = excluded.symbol,
@@ -1767,8 +2004,16 @@ def upsert_paper_positions(
                 unrealized_pnl = excluded.unrealized_pnl,
                 total_pnl = excluded.total_pnl,
                 stop_price = excluded.stop_price,
+                planned_stop_price = excluded.planned_stop_price,
+                planned_risk_pct = excluded.planned_risk_pct,
                 highest_price = excluded.highest_price,
                 add_count = excluded.add_count,
+                partial_exit_count = excluded.partial_exit_count,
+                strategy_bucket = excluded.strategy_bucket,
+                fill_reference_price = excluded.fill_reference_price,
+                fill_slippage_pct = excluded.fill_slippage_pct,
+                day_regime = excluded.day_regime,
+                watchlist_rank_at_entry = excluded.watchlist_rank_at_entry,
                 entry_reasons = excluded.entry_reasons,
                 exit_reasons = excluded.exit_reasons,
                 opened_at = excluded.opened_at,
@@ -1815,8 +2060,15 @@ def insert_paper_orders(
             row.quantity,
             row.price,
             row.notional,
+            row.strategy_bucket,
             row.analysis_label,
             row.analysis_score,
+            row.planned_stop_price,
+            row.planned_risk_pct,
+            row.fill_reference_price,
+            row.fill_slippage_pct,
+            row.day_regime,
+            row.watchlist_rank_at_entry,
             json.dumps(row.reasons),
             row.created_at.isoformat(),
             row.realized_pnl,
@@ -1840,14 +2092,21 @@ def insert_paper_orders(
                 quantity,
                 price,
                 notional,
+                strategy_bucket,
                 analysis_label,
                 analysis_score,
+                planned_stop_price,
+                planned_risk_pct,
+                fill_reference_price,
+                fill_slippage_pct,
+                day_regime,
+                watchlist_rank_at_entry,
                 reasons,
                 created_at,
                 realized_pnl,
                 realized_pnl_pct
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )
@@ -2003,8 +2262,16 @@ def _paper_position_from_row(row: sqlite3.Row) -> PaperPosition:
         unrealized_pnl=float(row["unrealized_pnl"]),
         total_pnl=float(row["total_pnl"]),
         stop_price=float(row["stop_price"]) if row["stop_price"] is not None else None,
+        planned_stop_price=float(row["planned_stop_price"]) if row["planned_stop_price"] is not None else None,
+        planned_risk_pct=float(row["planned_risk_pct"]) if row["planned_risk_pct"] is not None else None,
         highest_price=float(row["highest_price"]) if row["highest_price"] is not None else None,
         add_count=int(row["add_count"]),
+        partial_exit_count=int(row["partial_exit_count"]) if row["partial_exit_count"] is not None else 0,
+        strategy_bucket=str(row["strategy_bucket"] or ""),
+        fill_reference_price=float(row["fill_reference_price"]) if row["fill_reference_price"] is not None else None,
+        fill_slippage_pct=float(row["fill_slippage_pct"]) if row["fill_slippage_pct"] is not None else None,
+        day_regime=row["day_regime"],
+        watchlist_rank_at_entry=int(row["watchlist_rank_at_entry"]) if row["watchlist_rank_at_entry"] is not None else None,
         entry_reasons=_safe_json_list(row["entry_reasons"]),
         exit_reasons=_safe_json_list(row["exit_reasons"]),
         opened_at=_parse_iso_datetime(row["opened_at"]),
@@ -2025,8 +2292,15 @@ def _paper_order_from_row(row: sqlite3.Row) -> PaperOrder:
         quantity=int(row["quantity"]),
         price=float(row["price"]),
         notional=float(row["notional"]),
+        strategy_bucket=str(row["strategy_bucket"] or ""),
         analysis_label=row["analysis_label"],
         analysis_score=float(row["analysis_score"]) if row["analysis_score"] is not None else None,
+        planned_stop_price=float(row["planned_stop_price"]) if row["planned_stop_price"] is not None else None,
+        planned_risk_pct=float(row["planned_risk_pct"]) if row["planned_risk_pct"] is not None else None,
+        fill_reference_price=float(row["fill_reference_price"]) if row["fill_reference_price"] is not None else None,
+        fill_slippage_pct=float(row["fill_slippage_pct"]) if row["fill_slippage_pct"] is not None else None,
+        day_regime=row["day_regime"],
+        watchlist_rank_at_entry=int(row["watchlist_rank_at_entry"]) if row["watchlist_rank_at_entry"] is not None else None,
         reasons=_safe_json_list(row["reasons"]),
         created_at=_parse_iso_datetime(row["created_at"]),
         realized_pnl=float(row["realized_pnl"]) if row["realized_pnl"] is not None else None,

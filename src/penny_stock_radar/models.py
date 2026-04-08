@@ -173,6 +173,8 @@ class MarketActivity(BaseModel):
     market_phase: str
     source: str
     last_price: float | None = None
+    bid_price: float | None = None
+    ask_price: float | None = None
     previous_close: float | None = None
     pct_change: float | None = None
     volume: float | None = None
@@ -181,6 +183,9 @@ class MarketActivity(BaseModel):
     spread_pct: float | None = None
     market_status: str | None = None
     market_data_at: datetime | None = None
+    data_age_seconds: float | None = None
+    has_live_trade: bool = False
+    has_live_quote: bool = False
     pct_rank: int = 0
     volume_rank: int = 0
     watchlist_rank: int | None = None
@@ -260,8 +265,16 @@ class PaperPosition(BaseModel):
     unrealized_pnl: float = 0.0
     total_pnl: float = 0.0
     stop_price: float | None = None
+    planned_stop_price: float | None = None
+    planned_risk_pct: float | None = None
     highest_price: float | None = None
     add_count: int = 0
+    partial_exit_count: int = 0
+    strategy_bucket: str = ""
+    fill_reference_price: float | None = None
+    fill_slippage_pct: float | None = None
+    day_regime: str | None = None
+    watchlist_rank_at_entry: int | None = None
     entry_reasons: list[str] = Field(default_factory=list)
     exit_reasons: list[str] = Field(default_factory=list)
     opened_at: datetime = Field(default_factory=utc_now)
@@ -280,12 +293,38 @@ class PaperOrder(BaseModel):
     quantity: int
     price: float
     notional: float
+    strategy_bucket: str = ""
     analysis_label: str | None = None
     analysis_score: float | None = None
+    planned_stop_price: float | None = None
+    planned_risk_pct: float | None = None
+    fill_reference_price: float | None = None
+    fill_slippage_pct: float | None = None
+    day_regime: str | None = None
+    watchlist_rank_at_entry: int | None = None
     reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     realized_pnl: float | None = None
     realized_pnl_pct: float | None = None
+
+
+class TradePlanCandidate(BaseModel):
+    symbol: str
+    market_phase: str
+    bucket: str
+    actionability: str
+    entry_reference: float | None = None
+    stop: float | None = None
+    risk_per_share: float | None = None
+    suggested_size: int = 0
+    max_dollar_risk: float | None = None
+    spread_pct: float | None = None
+    data_age_seconds: float | None = None
+    regime: str
+    day_loss_locked: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class PaperRunSnapshot(BaseModel):

@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 try {
-    $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $RootDir = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
     Set-Location $RootDir
     . (Join-Path $RootDir "scripts\windows_common.ps1")
 
@@ -15,7 +16,7 @@ try {
     $runtime = Ensure-PennyStockRuntime -RootDir $RootDir
     $logs = Get-AiSupervisorLogPaths -RootDir $RootDir
     $taskName = Get-AiSupervisorTaskName
-    $backgroundScript = Join-Path $RootDir "run_ai_supervisor_background.ps1"
+    $backgroundScript = Join-Path $RootDir "launchers\windows\run_ai_supervisor_background.ps1"
     $userId = Get-CurrentWindowsUserId
     $statusPath = Get-AutomationStatusPath -RootDir $RootDir
 
