@@ -16,6 +16,7 @@ if __package__ in {None, ""}:
     from penny_stock_radar.runtime_scripts import full_refresh_command
     from penny_stock_radar.services.market_activity import MarketActivityScanner
     from penny_stock_radar.services.live_monitor import LiveMonitor
+    from penny_stock_radar.services.trade_plan import TradePlanService
     from penny_stock_radar.ui.data import (
         load_market_activity,
         load_latest_paper_run,
@@ -38,6 +39,7 @@ else:
     from ..runtime_scripts import full_refresh_command
     from ..services.market_activity import MarketActivityScanner
     from ..services.live_monitor import LiveMonitor
+    from ..services.trade_plan import TradePlanService
     from .data import (
         load_market_activity,
         load_latest_paper_run,
@@ -1438,6 +1440,13 @@ def _render_live_market_workspace(
                 outcome_frame,
                 empty_message="실시간 시장 스캔 결과가 없습니다.",
             )
+            trade_plan = TradePlanService(scanner.settings).generate(
+                phase=phase,
+                activity=result.activity,
+                export=True,
+            )
+            st.divider()
+            _render_trade_plan_panel(trade_plan)
             st.caption(f"비교 CSV: {result.comparison_csv}")
         except RuntimeError as exc:
             st.warning(f"실시간 시장 스캔을 저장하지 못했습니다: {exc}")
@@ -1536,6 +1545,27 @@ def _render_paper_trading(
     notes = [_paper_note_text(item) for item in _coerce_reason_list(row.get("notes"))]
     if notes:
         st.info("\n\n".join(notes[:4]))
+
+    if not positions.empty and "strategy_bucket" in positions.columns:
+        bucket_frame = positions.copy()
+        bucket_frame["strategy_bucket"] = bucket_frame["strategy_bucket"].fillna("").replace("", "unknown")
+        if "day_regime" not in bucket_frame.columns:
+            bucket_frame["day_regime"] = "unknown"
+        else:
+            bucket_frame["day_regime"] = bucket_frame["day_regime"].fillna("unknown")
+        bucket_summary = (
+            bucket_frame.groupby(["strategy_bucket", "day_regime"], dropna=False)
+            .agg(
+                trade_count=("symbol", "count"),
+                total_pnl=("total_pnl", "sum"),
+                average_pnl=("total_pnl", "mean"),
+            )
+            .reset_index()
+            .sort_values(["total_pnl", "trade_count"], ascending=[False, False])
+        )
+        if not bucket_summary.empty:
+            st.markdown("**Bucket Attribution**")
+            st.dataframe(_prepare_display_frame(bucket_summary), use_container_width=True, hide_index=True)
 
     if not strategy_runs.empty:
         st.markdown("**전략 비교**")
@@ -1681,6 +1711,50 @@ def _paper_note_text(value: str) -> str:
     if value == "hold":
         return "이번 루프에서는 신규 체결 없이 기존 포지션만 감시했습니다."
     return value.replace("_", " ")
+
+
+def _render_trade_plan_panel(result) -> None:
+    st.markdown("**실전 실행 플랜**")
+    cols = st.columns(5)
+    cols[0].metric("장 상태", result.market_phase)
+    cols[1].metric("레짐", result.regime)
+    cols[2].metric("Daily Lock", "ON" if result.daily_loss_locked else "OFF")
+    cols[3].metric("당일 손익", f"{result.current_day_pnl:.2f}")
+    cols[4].metric("현재 오픈 리스크", f"{result.current_open_risk:.2f}")
+
+    def _plan_frame(actionability: str) -> pd.DataFrame:
+        rows = [
+            row.model_dump(mode="json")
+            for row in result.candidates
+            if row.actionability == actionability
+        ]
+        return pd.DataFrame(rows)
+
+    for title, actionability in (
+        ("지금 매매 가능", "actionable"),
+        ("지켜보기", "watch_only"),
+        ("거래 금지", "blocked"),
+    ):
+        frame = _plan_frame(actionability)
+        st.markdown(f"**{title}**")
+        if frame.empty:
+            st.info("없음")
+            continue
+        preferred = [
+            "symbol",
+            "bucket",
+            "entry_reference",
+            "stop",
+            "risk_per_share",
+            "suggested_size",
+            "max_dollar_risk",
+            "spread_pct",
+            "data_age_seconds",
+            "reasons",
+            "blockers",
+        ]
+        available = [column for column in preferred if column in frame.columns]
+        st.dataframe(_prepare_display_frame(frame[available]), use_container_width=True, hide_index=True)
 
 
 def _render_social(frame: pd.DataFrame) -> None:

@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 try {
-    $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $RootDir = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
     Set-Location $RootDir
     . (Join-Path $RootDir "scripts\windows_common.ps1")
 
@@ -15,7 +16,7 @@ try {
     $runtime = Ensure-PennyStockRuntime -RootDir $RootDir
     $logs = Get-PaperTraderLogPaths -RootDir $RootDir
     $taskName = Get-PaperTraderTaskName
-    $backgroundScript = Join-Path $RootDir "run_paper_trader_background.ps1"
+    $backgroundScript = Join-Path $RootDir "launchers\windows\run_paper_trader_background.ps1"
     $userId = Get-CurrentWindowsUserId
 
     $action = New-ScheduledTaskAction `

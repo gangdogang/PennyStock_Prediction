@@ -35,6 +35,13 @@ from .momentum_advisor import (
     MomentumAdvice,
     build_momentum_advisor,
 )
+from .trading_support import (
+    best_live_rank,
+    classify_day_regime,
+    predicted_rank_band,
+    is_premarket_entry_window,
+    is_winner_add_window,
+)
 
 EASTERN = ZoneInfo("America/New_York")
 PRIMARY_PAPER_STRATEGY = "auto_paper_v1"
@@ -130,8 +137,13 @@ class PaperTradingEngine:
             for row in activity
             if row.symbol and row.last_price is not None and row.last_price > 0
         }
+        day_regime = (
+            classify_day_regime(self.settings, activity)
+            if market_phase in {"premarket", "regular"}
+            else "closed"
+        )
 
-        self._mark_positions(positions, activity_by_symbol, now)
+        self._mark_positions(positions, activity_by_symbol, now, day_regime=day_regime)
 
         advice_by_symbol: dict[str, MomentumAdvice] = {}
         if market_phase in {"premarket", "regular"}:
@@ -152,12 +164,25 @@ class PaperTradingEngine:
                 positions=positions,
                 activity_by_symbol=activity_by_symbol,
                 market_phase=market_phase,
+                day_regime=day_regime,
                 now=now,
             )
             if exit_orders:
                 exited_count = sum(1 for order in exit_orders if order.intent == "EXIT")
                 actions.extend([f"exit:{order.symbol}" for order in exit_orders])
                 orders.extend(exit_orders)
+
+            trim_orders = self._apply_profit_management(
+                run=run,
+                positions=positions,
+                activity_by_symbol=activity_by_symbol,
+                market_phase=market_phase,
+                day_regime=day_regime,
+                now=now,
+            )
+            if trim_orders:
+                actions.extend([f"trim:{order.symbol}" for order in trim_orders])
+                orders.extend(trim_orders)
 
             entry_orders = self._apply_entry_rules(
                 run=run,
@@ -166,6 +191,7 @@ class PaperTradingEngine:
                 advice_by_symbol=advice_by_symbol,
                 market_phase=market_phase,
                 market_date=market_date,
+                day_regime=day_regime,
                 now=now,
             )
             if entry_orders:
@@ -317,6 +343,7 @@ class PaperTradingEngine:
         advice_by_symbol: dict[str, MomentumAdvice],
         market_phase: str,
         market_date: str,
+        day_regime: str,
         now: datetime,
     ) -> list[PaperOrder]:
         orders: list[PaperOrder] = []
@@ -333,27 +360,39 @@ class PaperTradingEngine:
             if row is None:
                 continue
             advice = advice_by_symbol.get(position.symbol)
-            if not self._can_add(position, row, advice):
+            if not self._can_add(
+                position,
+                row,
+                advice,
+                market_phase=market_phase,
+                now=now,
+            ):
                 continue
+            fill_price, fill_reference_price, fill_slippage_pct = self._buy_fill_price(row)
             quantity = self._position_size(
                 cash_balance=run.cash_balance,
                 equity=run.equity,
-                price=row.last_price,
+                price=fill_price,
                 fraction=self.settings.paper_add_size_fraction,
             )
-            if quantity <= 0:
+            if quantity <= 0 or fill_price is None:
                 continue
-            notional = row.last_price * quantity
+            notional = fill_price * quantity
             run.cash_balance -= notional
             position.quantity += quantity
             position.cost_basis += notional
             position.average_entry_price = position.cost_basis / max(position.quantity, 1)
             position.add_count += 1
             position.last_price = row.last_price
-            position.highest_price = max(position.highest_price or row.last_price, row.last_price)
+            position.highest_price = max(position.highest_price or row.last_price or fill_price, row.last_price or fill_price)
             position.updated_at = now
-            position.entry_reasons = position.entry_reasons + [f"add:{row.analysis_label.lower()}"] + self._advice_reasons(advice)
+            position.entry_reasons = position.entry_reasons + ["winner_add", f"add:{row.analysis_label.lower()}"] + self._advice_reasons(advice)
             position.stop_price = self._stop_price(position)
+            position.planned_stop_price = position.stop_price
+            position.planned_risk_pct = self._planned_risk_pct(
+                position.average_entry_price,
+                position.planned_stop_price,
+            )
             position.unrealized_pnl = (row.last_price - position.average_entry_price) * position.quantity
             position.market_value = row.last_price * position.quantity
             position.total_pnl = position.realized_pnl + position.unrealized_pnl
@@ -367,46 +406,69 @@ class PaperTradingEngine:
                     action="BUY",
                     intent="ADD",
                     quantity=quantity,
-                    price=row.last_price,
+                    price=fill_price,
                     notional=notional,
+                    strategy_bucket="winner_add",
                     analysis_label=row.analysis_label,
                     analysis_score=row.analysis_score,
+                    planned_stop_price=position.planned_stop_price,
+                    planned_risk_pct=position.planned_risk_pct,
+                    fill_reference_price=fill_reference_price,
+                    fill_slippage_pct=fill_slippage_pct,
+                    day_regime=day_regime,
+                    watchlist_rank_at_entry=position.watchlist_rank_at_entry,
                     reasons=row.reasons[:4] + self._advice_reasons(advice),
                     created_at=now,
                 )
             )
 
-        if len([row for row in positions if row.status == "OPEN"]) >= self.settings.paper_max_open_positions:
+        if len([row for row in positions if row.status == "OPEN"]) >= self._max_open_positions():
             return orders
 
-        candidates = [
-            row
-            for row in sorted(
-                activity,
-                key=lambda candidate: self._candidate_sort_key(
-                    candidate,
-                    advice_by_symbol=advice_by_symbol,
-                ),
-            )
-            if self._eligible_for_entry(
-                row=row,
-                advice=advice_by_symbol.get(row.symbol),
+        slots = max(self._max_open_positions() - len(open_symbols), 0)
+        if self.strategy_mode == "adaptive":
+            tagged_candidates: list[tuple[MarketActivity, str | None]] = self._adaptive_entry_candidates(
+                activity=activity,
+                advice_by_symbol=advice_by_symbol,
                 market_phase=market_phase,
                 open_symbols=open_symbols,
                 traded_today=traded_today,
             )
-        ]
-        slots = max(self.settings.paper_max_open_positions - len(open_symbols), 0)
-        for row in candidates[:slots]:
+        else:
+            tagged_candidates = [
+                (row, None)
+                for row in sorted(
+                    activity,
+                    key=lambda candidate: self._candidate_sort_key(
+                        candidate,
+                        advice_by_symbol=advice_by_symbol,
+                    ),
+                )
+                if self._eligible_for_entry(
+                    row=row,
+                    advice=advice_by_symbol.get(row.symbol),
+                    market_phase=market_phase,
+                    open_symbols=open_symbols,
+                    traded_today=traded_today,
+                )
+            ]
+
+        for row, entry_tag in tagged_candidates[:slots]:
+            advice = advice_by_symbol.get(row.symbol)
+            entry_reasons = self._entry_reasons(row, advice, entry_tag=entry_tag)
+            entry_fraction = self._entry_fraction(row=row, entry_tag=entry_tag)
+            fill_price, fill_reference_price, fill_slippage_pct = self._buy_fill_price(row)
             quantity = self._position_size(
                 cash_balance=run.cash_balance,
                 equity=run.equity,
-                price=row.last_price,
-                fraction=self.settings.paper_entry_size_fraction,
+                price=fill_price,
+                fraction=entry_fraction,
             )
-            if quantity <= 0:
+            if quantity <= 0 or fill_price is None:
                 continue
-            notional = row.last_price * quantity
+            notional = fill_price * quantity
+            strategy_bucket = entry_tag or ""
+            planned_stop_price = fill_price * (1 - self.settings.paper_stop_loss_pct / 100.0)
             position = PaperPosition(
                 position_id=str(uuid.uuid4()),
                 run_id=run.run_id,
@@ -415,13 +477,20 @@ class PaperTradingEngine:
                 entry_phase=market_phase,
                 entry_label=row.analysis_label,
                 quantity=quantity,
-                average_entry_price=row.last_price,
+                average_entry_price=fill_price,
                 last_price=row.last_price,
                 cost_basis=notional,
                 market_value=notional,
-                highest_price=row.last_price,
-                stop_price=row.last_price * (1 - self.settings.paper_stop_loss_pct / 100.0),
-                entry_reasons=row.reasons[:5] + self._advice_reasons(advice_by_symbol.get(row.symbol)),
+                stop_price=planned_stop_price,
+                planned_stop_price=planned_stop_price,
+                planned_risk_pct=self._planned_risk_pct(fill_price, planned_stop_price),
+                highest_price=row.last_price or fill_price,
+                strategy_bucket=strategy_bucket,
+                fill_reference_price=fill_reference_price,
+                fill_slippage_pct=fill_slippage_pct,
+                day_regime=day_regime,
+                watchlist_rank_at_entry=row.watchlist_rank,
+                entry_reasons=entry_reasons,
                 opened_at=now,
                 updated_at=now,
             )
@@ -438,12 +507,124 @@ class PaperTradingEngine:
                     action="BUY",
                     intent="ENTRY",
                     quantity=quantity,
-                    price=row.last_price,
+                    price=fill_price,
                     notional=notional,
+                    strategy_bucket=strategy_bucket,
                     analysis_label=row.analysis_label,
                     analysis_score=row.analysis_score,
-                    reasons=row.reasons[:5] + self._advice_reasons(advice_by_symbol.get(row.symbol)),
+                    planned_stop_price=position.planned_stop_price,
+                    planned_risk_pct=position.planned_risk_pct,
+                    fill_reference_price=fill_reference_price,
+                    fill_slippage_pct=fill_slippage_pct,
+                    day_regime=day_regime,
+                    watchlist_rank_at_entry=row.watchlist_rank,
+                    reasons=entry_reasons,
                     created_at=now,
+                )
+            )
+        return orders
+
+    def _adaptive_entry_candidates(
+        self,
+        *,
+        activity: list[MarketActivity],
+        advice_by_symbol: dict[str, MomentumAdvice],
+        market_phase: str,
+        open_symbols: set[str],
+        traded_today: set[str],
+    ) -> list[tuple[MarketActivity, str | None]]:
+        candidates: list[tuple[MarketActivity, str | None]] = []
+        for row in activity:
+            entry_tag = self._adaptive_entry_tag(
+                row=row,
+                advice=advice_by_symbol.get(row.symbol),
+                market_phase=market_phase,
+                open_symbols=open_symbols,
+                traded_today=traded_today,
+            )
+            if entry_tag is None:
+                continue
+            candidates.append((row, entry_tag))
+        return sorted(
+            candidates,
+            key=lambda item: self._adaptive_entry_sort_key(
+                item[0],
+                entry_tag=item[1],
+                advice_by_symbol=advice_by_symbol,
+            ),
+        )
+
+    def _adaptive_entry_sort_key(
+        self,
+        row: MarketActivity,
+        *,
+        entry_tag: str | None,
+        advice_by_symbol: dict[str, MomentumAdvice],
+    ) -> tuple[object, ...]:
+        if entry_tag == "predicted_starter":
+            return (
+                0,
+                row.watchlist_rank if row.watchlist_rank is not None else 9999,
+                best_live_rank(row),
+                -float(row.analysis_score),
+                -(row.dollar_volume or 0.0),
+                row.symbol,
+            )
+        return (
+            1,
+            *self._candidate_sort_key(
+                row,
+                advice_by_symbol=advice_by_symbol,
+            ),
+        )
+
+    def _apply_profit_management(
+        self,
+        *,
+        run: PaperTradingRun,
+        positions: list[PaperPosition],
+        activity_by_symbol: dict[str, MarketActivity],
+        market_phase: str,
+        day_regime: str,
+        now: datetime,
+    ) -> list[PaperOrder]:
+        if self.strategy_mode != "adaptive":
+            return []
+        orders: list[PaperOrder] = []
+        for position in positions:
+            if position.status != "OPEN" or position.quantity <= 1 or position.partial_exit_count > 0:
+                continue
+            row = activity_by_symbol.get(position.symbol)
+            if row is None or position.last_price is None:
+                continue
+            gain_pct = (
+                ((position.last_price - position.average_entry_price) / position.average_entry_price) * 100.0
+                if position.average_entry_price > 0
+                else 0.0
+            )
+            if gain_pct < self.settings.paper_adaptive_partial_take_profit_pct:
+                continue
+            trim_quantity = max(
+                int(position.quantity * self.settings.paper_adaptive_partial_exit_fraction),
+                1,
+            )
+            if trim_quantity >= position.quantity:
+                trim_quantity = position.quantity - 1
+            if trim_quantity <= 0:
+                continue
+            orders.append(
+                self._trim_position(
+                    run=run,
+                    position=position,
+                    row=row,
+                    market_phase=market_phase,
+                    quantity=trim_quantity,
+                    reason="partial_take_profit",
+                    day_regime=day_regime,
+                    now=now,
+                    analysis_label=row.analysis_label,
+                    analysis_score=row.analysis_score,
+                    reasons=row.reasons[:5],
                 )
             )
         return orders
@@ -455,6 +636,7 @@ class PaperTradingEngine:
         positions: list[PaperPosition],
         activity_by_symbol: dict[str, MarketActivity],
         market_phase: str,
+        day_regime: str,
         now: datetime,
     ) -> list[PaperOrder]:
         orders: list[PaperOrder] = []
@@ -469,21 +651,41 @@ class PaperTradingEngine:
             gain_pct = ((position.last_price - position.average_entry_price) / position.average_entry_price) * 100.0
             reason: str | None = None
             if position.last_price <= stop_price:
-                reason = "trailing_stop" if gain_pct > 0 else "stop_loss"
-            elif row.trap_score >= 78.0:
-                reason = "trap_warning_exit" if gain_pct >= 0 else "momentum_failure"
-            elif self._best_rank(row) > 5 and row.leader_persistence_score < 32.0 and gain_pct >= 1.0:
-                reason = "leadership_lost"
-            elif market_phase == "regular" and row.analysis_label == "NO_CHASE" and gain_pct >= 2.0:
-                reason = "momentum_cooldown"
+                if self.strategy_mode == "adaptive":
+                    reason = "stop_loss"
+                else:
+                    reason = "trailing_stop" if gain_pct > 0 else "stop_loss"
+            elif self.strategy_mode == "adaptive":
+                held_minutes = (now - position.opened_at).total_seconds() / 60.0
+                peak_price = position.highest_price or position.last_price or position.average_entry_price
+                max_progress_pct = (
+                    ((peak_price - position.average_entry_price) / position.average_entry_price) * 100.0
+                    if position.average_entry_price > 0
+                    else 0.0
+                )
+                if (
+                    held_minutes >= self.settings.paper_adaptive_time_stop_minutes
+                    and max_progress_pct < self.settings.paper_adaptive_time_stop_min_progress_pct
+                    and gain_pct < 1.0
+                ):
+                    reason = "time_stop"
+            elif self.strategy_mode != "adaptive":
+                if row.trap_score >= 78.0:
+                    reason = "trap_warning_exit" if gain_pct >= 0 else "momentum_failure"
+                elif self._best_rank(row) > 5 and row.leader_persistence_score < 32.0 and gain_pct >= 1.0:
+                    reason = "leadership_lost"
+                elif market_phase == "regular" and row.analysis_label == "NO_CHASE" and gain_pct >= 2.0:
+                    reason = "momentum_cooldown"
             if reason is None:
                 continue
             orders.append(
                 self._close_position(
                     run=run,
                     position=position,
+                    row=row,
                     market_phase=market_phase,
                     reason=reason,
+                    day_regime=day_regime,
                     now=now,
                     analysis_label=row.analysis_label,
                     analysis_score=row.analysis_score,
@@ -510,8 +712,10 @@ class PaperTradingEngine:
                 self._close_position(
                     run=run,
                     position=position,
+                    row=None,
                     market_phase=market_phase,
                     reason="session_closed",
+                    day_regime=position.day_regime or "closed",
                     now=now,
                     analysis_label="SESSION_END",
                     analysis_score=None,
@@ -525,14 +729,20 @@ class PaperTradingEngine:
         *,
         run: PaperTradingRun,
         position: PaperPosition,
+        row: MarketActivity | None,
         market_phase: str,
         reason: str,
+        day_regime: str,
         now: datetime,
         analysis_label: str | None,
         analysis_score: float | None,
         reasons: list[str],
     ) -> PaperOrder:
-        price = position.last_price or position.average_entry_price
+        price, fill_reference_price, fill_slippage_pct = self._sell_fill_price(
+            position=position,
+            row=row,
+            reason=reason,
+        )
         notional = price * position.quantity
         realized_pnl = (price - position.average_entry_price) * position.quantity
         realized_pnl_pct = (
@@ -544,9 +754,9 @@ class PaperTradingEngine:
         position.status = "CLOSED"
         position.exit_reason = reason
         position.exit_reasons = position.exit_reasons + [reason] + reasons[:2]
-        position.realized_pnl = realized_pnl
+        position.realized_pnl += realized_pnl
         position.unrealized_pnl = 0.0
-        position.total_pnl = realized_pnl
+        position.total_pnl = position.realized_pnl
         position.market_value = 0.0
         position.closed_at = now
         position.updated_at = now
@@ -561,8 +771,80 @@ class PaperTradingEngine:
             quantity=position.quantity,
             price=price,
             notional=notional,
+            strategy_bucket=position.strategy_bucket,
             analysis_label=analysis_label,
             analysis_score=analysis_score,
+            planned_stop_price=position.planned_stop_price,
+            planned_risk_pct=position.planned_risk_pct,
+            fill_reference_price=fill_reference_price,
+            fill_slippage_pct=fill_slippage_pct,
+            day_regime=day_regime,
+            watchlist_rank_at_entry=position.watchlist_rank_at_entry,
+            reasons=[reason] + reasons[:4],
+            created_at=now,
+            realized_pnl=realized_pnl,
+            realized_pnl_pct=realized_pnl_pct,
+        )
+
+    def _trim_position(
+        self,
+        *,
+        run: PaperTradingRun,
+        position: PaperPosition,
+        row: MarketActivity,
+        market_phase: str,
+        quantity: int,
+        reason: str,
+        day_regime: str,
+        now: datetime,
+        analysis_label: str | None,
+        analysis_score: float | None,
+        reasons: list[str],
+    ) -> PaperOrder:
+        price, fill_reference_price, fill_slippage_pct = self._sell_fill_price(
+            position=position,
+            row=row,
+            reason=reason,
+        )
+        trim_quantity = min(max(quantity, 1), max(position.quantity - 1, 1))
+        notional = price * trim_quantity
+        realized_pnl = (price - position.average_entry_price) * trim_quantity
+        realized_pnl_pct = (
+            ((price - position.average_entry_price) / position.average_entry_price) * 100.0
+            if position.average_entry_price > 0
+            else 0.0
+        )
+        run.cash_balance += notional
+        position.quantity -= trim_quantity
+        position.cost_basis = position.average_entry_price * position.quantity
+        position.realized_pnl += realized_pnl
+        position.market_value = price * position.quantity
+        position.unrealized_pnl = (price - position.average_entry_price) * position.quantity
+        position.total_pnl = position.realized_pnl + position.unrealized_pnl
+        position.partial_exit_count += 1
+        position.stop_price = self._stop_price(position)
+        position.updated_at = now
+        position.exit_reasons = position.exit_reasons + [reason] + reasons[:2]
+        return PaperOrder(
+            order_id=str(uuid.uuid4()),
+            run_id=run.run_id,
+            position_id=position.position_id,
+            symbol=position.symbol,
+            market_phase=market_phase,
+            action="SELL",
+            intent="TRIM",
+            quantity=trim_quantity,
+            price=price,
+            notional=notional,
+            strategy_bucket=position.strategy_bucket,
+            analysis_label=analysis_label,
+            analysis_score=analysis_score,
+            planned_stop_price=position.planned_stop_price,
+            planned_risk_pct=position.planned_risk_pct,
+            fill_reference_price=fill_reference_price,
+            fill_slippage_pct=fill_slippage_pct,
+            day_regime=day_regime,
+            watchlist_rank_at_entry=position.watchlist_rank_at_entry,
             reasons=[reason] + reasons[:4],
             created_at=now,
             realized_pnl=realized_pnl,
@@ -574,6 +856,8 @@ class PaperTradingEngine:
         positions: list[PaperPosition],
         activity_by_symbol: dict[str, MarketActivity],
         now: datetime,
+        *,
+        day_regime: str,
     ) -> None:
         for position in positions:
             if position.status != "OPEN":
@@ -587,6 +871,13 @@ class PaperTradingEngine:
             position.unrealized_pnl = (row.last_price - position.average_entry_price) * position.quantity
             position.total_pnl = position.realized_pnl + position.unrealized_pnl
             position.stop_price = self._stop_price(position)
+            position.planned_stop_price = position.stop_price
+            position.planned_risk_pct = self._planned_risk_pct(
+                position.average_entry_price,
+                position.planned_stop_price,
+            )
+            if not position.day_regime and row.market_phase in {"premarket", "regular"}:
+                position.day_regime = day_regime
             position.updated_at = now
 
     def _refresh_position_marks(self, positions: list[PaperPosition]) -> None:
@@ -601,6 +892,11 @@ class PaperTradingEngine:
             position.unrealized_pnl = (position.last_price - position.average_entry_price) * position.quantity
             position.total_pnl = position.realized_pnl + position.unrealized_pnl
             position.stop_price = self._stop_price(position)
+            position.planned_stop_price = position.stop_price
+            position.planned_risk_pct = self._planned_risk_pct(
+                position.average_entry_price,
+                position.planned_stop_price,
+            )
 
     def _sync_run_metrics(
         self,
@@ -619,7 +915,7 @@ class PaperTradingEngine:
         wins = [row.realized_pnl for row in closed_positions if row.realized_pnl > 0]
         losses = [abs(row.realized_pnl) for row in closed_positions if row.realized_pnl < 0]
 
-        run.realized_pnl = sum(row.realized_pnl for row in closed_positions)
+        run.realized_pnl = sum(row.realized_pnl for row in positions)
         run.unrealized_pnl = sum(row.unrealized_pnl for row in open_positions)
         run.equity = run.cash_balance + sum(row.market_value for row in open_positions)
         run.equity_peak = max(run.equity_peak, run.equity)
@@ -666,21 +962,106 @@ class PaperTradingEngine:
         open_symbols: set[str],
         traded_today: set[str],
     ) -> bool:
-        if row.symbol in open_symbols or row.symbol in traded_today:
-            return False
-        if row.last_price is None or row.last_price <= 0:
-            return False
         if self.strategy_mode != "adaptive":
+            if row.symbol in open_symbols or row.symbol in traded_today:
+                return False
+            if row.last_price is None or row.last_price <= 0:
+                return False
             return self._eligible_for_baseline_entry(
                 row=row,
                 open_symbols=open_symbols,
                 traded_today=traded_today,
             )
-        if advice is not None and advice.stance == "avoid":
+        return (
+            self._adaptive_entry_tag(
+                row=row,
+                advice=advice,
+                market_phase=market_phase,
+                open_symbols=open_symbols,
+                traded_today=traded_today,
+            )
+            is not None
+        )
+
+    def _adaptive_entry_tag(
+        self,
+        *,
+        row: MarketActivity,
+        advice: MomentumAdvice | None,
+        market_phase: str,
+        open_symbols: set[str],
+        traded_today: set[str],
+    ) -> str | None:
+        if market_phase != "premarket" or not is_premarket_entry_window(self.now_fn()):
+            return None
+        if not self._passes_adaptive_guardrails(
+            row=row,
+            open_symbols=open_symbols,
+            traded_today=traded_today,
+        ):
+            return None
+        if self._eligible_for_predicted_priority_entry(row=row):
+            return "predicted_starter"
+        if self._eligible_for_live_exception_entry(
+            row=row,
+            advice=advice,
+            market_phase=market_phase,
+        ):
+            return "live_exception"
+        return None
+
+    def _passes_adaptive_guardrails(
+        self,
+        *,
+        row: MarketActivity,
+        open_symbols: set[str],
+        traded_today: set[str],
+    ) -> bool:
+        if row.symbol in open_symbols or row.symbol in traded_today:
+            return False
+        if row.last_price is None or row.last_price <= 0:
             return False
         if row.behavioral_score > 0 and row.behavioral_score < 40.0:
             return False
         if row.trap_score > 0 and row.trap_score >= 72.0:
+            return False
+        if row.spread_pct is not None and row.spread_pct > self.settings.premarket_max_spread_pct:
+            return False
+        if row.dollar_volume is not None and row.dollar_volume < self.settings.premarket_min_dollar_volume:
+            return False
+        return True
+
+    def _eligible_for_predicted_priority_entry(
+        self,
+        *,
+        row: MarketActivity,
+    ) -> bool:
+        if not row.predicted:
+            return False
+        if row.analysis_label not in {
+            "OPENING_RANGE_CANDIDATE",
+            "CONDITIONAL_ENTRY",
+            "WAIT_PULLBACK",
+            "NEWS_CHECK_FIRST",
+        }:
+            return False
+        score_min = (
+            self.settings.paper_news_entry_score_min
+            if row.analysis_label == "NEWS_CHECK_FIRST"
+            else self.settings.paper_entry_score_min
+        )
+        return row.analysis_score >= score_min
+
+    def _eligible_for_live_exception_entry(
+        self,
+        *,
+        row: MarketActivity,
+        advice: MomentumAdvice | None,
+        market_phase: str,
+    ) -> bool:
+        if row.predicted or self._best_rank(row) > 3:
+            return False
+        if advice is not None and advice.stance == "avoid":
             return False
         reclaim_candidate = (
             row.analysis_label == "WAIT_PULLBACK"
@@ -705,14 +1086,7 @@ class PaperTradingEngine:
             allowed_labels["regular"].add("NEWS_CHECK_FIRST")
         if row.analysis_label not in allowed_labels.get(market_phase, set()) and not reclaim_candidate:
             return False
-        best_rank = self._best_rank(row)
-        return (
-            best_rank <= 5
-            or row.predicted
-            or row.leader_persistence_score >= 58.0
-            or row.pullback_absorption_score >= 62.0
-            or (advice is not None and advice.stance == "buy" and advice.conviction >= 0.55)
-        )
+        return True
 
     def _eligible_news_entry(
         self,
@@ -749,13 +1123,22 @@ class PaperTradingEngine:
         position: PaperPosition,
         row: MarketActivity,
         advice: MomentumAdvice | None,
+        *,
+        market_phase: str,
+        now: datetime,
     ) -> bool:
         if position.add_count >= self.settings.paper_max_adds_per_position:
+            return False
+        if position.partial_exit_count > 0:
             return False
         if row.last_price is None or row.last_price <= 0:
             return False
         if self.strategy_mode != "adaptive":
             return self._can_add_baseline(position, row)
+        if market_phase != "regular" or not is_winner_add_window(now):
+            return False
+        if position.strategy_bucket != "predicted_starter":
+            return False
         if advice is not None and advice.stance == "avoid":
             return False
         if row.analysis_label not in {"OPENING_RANGE_CANDIDATE", "CONDITIONAL_ENTRY"}:
@@ -826,8 +1209,64 @@ class PaperTradingEngine:
             return 0
         return max(int(target_notional // price), 0)
 
+    def _buy_fill_price(
+        self,
+        row: MarketActivity,
+    ) -> tuple[float | None, float | None, float | None]:
+        reference = max(
+            value for value in (row.last_price, row.ask_price) if value is not None and value > 0
+        ) if any(value is not None and value > 0 for value in (row.last_price, row.ask_price)) else None
+        if reference is None:
+            return None, None, None
+        fill_price = reference * (1 + self.settings.paper_fill_slippage_pct / 100.0)
+        slip_pct = ((fill_price - reference) / reference) * 100.0 if reference > 0 else None
+        return fill_price, reference, slip_pct
+
+    def _sell_fill_price(
+        self,
+        *,
+        position: PaperPosition,
+        row: MarketActivity | None,
+        reason: str,
+    ) -> tuple[float, float | None, float | None]:
+        reference_candidates: list[float] = []
+        if row is not None:
+            if row.last_price is not None and row.last_price > 0:
+                reference_candidates.append(row.last_price)
+            if row.bid_price is not None and row.bid_price > 0:
+                reference_candidates.append(row.bid_price)
+        if not reference_candidates:
+            fallback = position.last_price or position.average_entry_price
+            reference_candidates.append(fallback)
+        reference = min(reference_candidates)
+        slippage_pct = self.settings.paper_fill_slippage_pct
+        if (
+            reason == "stop_loss"
+            and position.stop_price is not None
+            and row is not None
+            and row.last_price is not None
+            and row.last_price < position.stop_price
+        ):
+            slippage_pct = max(slippage_pct, self.settings.paper_stop_gap_slippage_pct)
+        fill_price = reference * (1 - slippage_pct / 100.0)
+        realized_slippage = ((reference - fill_price) / reference) * 100.0 if reference > 0 else None
+        return fill_price, reference, realized_slippage
+
+    def _planned_risk_pct(
+        self,
+        entry_price: float | None,
+        stop_price: float | None,
+    ) -> float | None:
+        if entry_price is None or stop_price is None or entry_price <= 0:
+            return None
+        return ((entry_price - stop_price) / entry_price) * 100.0
+
     def _stop_price(self, position: PaperPosition) -> float:
         base_stop = position.average_entry_price * (1 - self.settings.paper_stop_loss_pct / 100.0)
+        if self.strategy_mode == "adaptive":
+            if position.partial_exit_count > 0:
+                return max(base_stop, position.average_entry_price)
+            return base_stop
         if (
             position.highest_price is not None
             and position.highest_price
@@ -963,9 +1402,51 @@ class PaperTradingEngine:
             reasons.append(f"gemini_note:{advice.note[:72]}")
         return reasons[:3]
 
+    def _entry_reasons(
+        self,
+        row: MarketActivity,
+        advice: MomentumAdvice | None,
+        *,
+        entry_tag: str | None,
+    ) -> list[str]:
+        reasons: list[str] = []
+        if entry_tag:
+            reasons.append(entry_tag)
+            if entry_tag == "predicted_starter":
+                reasons.append("predicted_priority_entry")
+            elif entry_tag == "live_exception":
+                reasons.append("live_exception_entry")
+        reasons.extend(row.reasons[:5])
+        reasons.extend(self._advice_reasons(advice))
+        deduped: list[str] = []
+        for reason in reasons:
+            if reason and reason not in deduped:
+                deduped.append(reason)
+        return deduped
+
+    def _max_open_positions(self) -> int:
+        if self.strategy_mode == "adaptive":
+            return max(int(self.settings.paper_adaptive_max_open_positions), 1)
+        return max(int(self.settings.paper_max_open_positions), 1)
+
+    def _entry_fraction(
+        self,
+        *,
+        row: MarketActivity,
+        entry_tag: str | None,
+    ) -> float:
+        if self.strategy_mode != "adaptive":
+            return self.settings.paper_entry_size_fraction
+        if entry_tag == "live_exception":
+            return self.settings.paper_adaptive_live_exception_entry_size_fraction
+        if row.watchlist_rank is not None and row.watchlist_rank <= 2:
+            return self.settings.paper_adaptive_predicted_entry_size_fraction
+        if row.watchlist_rank is not None and row.watchlist_rank <= 4:
+            return max(self.settings.paper_adaptive_predicted_entry_size_fraction - 0.01, 0.01)
+        return max(self.settings.paper_adaptive_predicted_entry_size_fraction - 0.02, 0.01)
+
     def _best_rank(self, row: MarketActivity) -> int:
-        candidates = [value for value in (row.pct_rank, row.volume_rank) if value and value > 0]
-        return min(candidates) if candidates else 9999
+        return best_live_rank(row)
 
     def _selector_rank(self, row: MarketActivity) -> int:
         if self.strategy_mode == "baseline_volume":
@@ -1078,6 +1559,7 @@ class PaperTradingCoordinator:
                 export_csv=False,
             )
         comparison_path = self.export_strategy_comparison()
+        self.export_cohort_summary(primary_result.run_id)
         primary_result.comparison_path = comparison_path
         return primary_result
 
@@ -1104,3 +1586,64 @@ class PaperTradingCoordinator:
             )
         self.primary_engine._write_csv(self.export_dir / "paper_strategy_comparison.csv", rows)
         return (self.export_dir / "paper_strategy_comparison.csv").resolve()
+
+    def export_cohort_summary(self, run_id: str) -> Path:
+        positions = fetch_paper_positions(self.settings.database_path, run_id)
+        grouped: dict[tuple[str, str, str, str, str, str, str], dict[str, object]] = {}
+        for row in positions:
+            holding_bucket = self._holding_bucket(row)
+            key = (
+                row.strategy_bucket or "unknown",
+                row.entry_label or "unknown",
+                predicted_rank_band(row.watchlist_rank_at_entry),
+                row.entry_phase,
+                holding_bucket,
+                row.exit_reason or ("open" if row.status == "OPEN" else "unknown"),
+                row.day_regime or "unknown",
+            )
+            if key not in grouped:
+                grouped[key] = {
+                    "strategy_bucket": key[0],
+                    "entry_label": key[1],
+                    "predicted_rank_band": key[2],
+                    "phase": key[3],
+                    "holding_bucket": key[4],
+                    "exit_reason": key[5],
+                    "day_regime": key[6],
+                    "trade_count": 0,
+                    "closed_trade_count": 0,
+                    "total_pnl": 0.0,
+                    "average_pnl": 0.0,
+                }
+            grouped[key]["trade_count"] = int(grouped[key]["trade_count"]) + 1
+            if row.status == "CLOSED":
+                grouped[key]["closed_trade_count"] = int(grouped[key]["closed_trade_count"]) + 1
+            grouped[key]["total_pnl"] = float(grouped[key]["total_pnl"]) + float(row.total_pnl)
+
+        rows: list[dict[str, object]] = []
+        for item in grouped.values():
+            trade_count = int(item["trade_count"])
+            total_pnl = float(item["total_pnl"])
+            item["average_pnl"] = total_pnl / trade_count if trade_count > 0 else 0.0
+            rows.append(item)
+        rows.sort(
+            key=lambda item: (
+                str(item["strategy_bucket"]),
+                str(item["phase"]),
+                str(item["day_regime"]),
+                str(item["entry_label"]),
+                str(item["exit_reason"]),
+            )
+        )
+        self.primary_engine._write_csv(self.export_dir / "paper_cohort_summary.csv", rows)
+        return (self.export_dir / "paper_cohort_summary.csv").resolve()
+
+    def _holding_bucket(self, position: PaperPosition) -> str:
+        if position.closed_at is None:
+            return "open"
+        held_minutes = max((position.closed_at - position.opened_at).total_seconds() / 60.0, 0.0)
+        if held_minutes < 30:
+            return "<30m"
+        if held_minutes < 120:
+            return "30-120m"
+        return ">120m"

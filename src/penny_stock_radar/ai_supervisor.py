@@ -20,6 +20,7 @@ from .runtime_scripts import full_refresh_command, full_refresh_command_label
 from .services.market_activity import MarketActivityScanner
 from .services.paper_trading import PaperTradingCoordinator, PaperTradingEngine
 from .services.report_builder import ReportBuilder
+from .services.trade_plan import TradePlanService
 from .snapshot_dashboard import build_snapshot_dashboard
 
 
@@ -273,6 +274,17 @@ class AISupervisor:
             if paper_result is not None:
                 paper_actions = ",".join(paper_result.actions[:4])
                 context.actions.append(f"paper_trade:{paper_actions}")
+            if live_phase in {"premarket", "regular"} and live_activity:
+                trade_plan = TradePlanService(
+                    self.settings,
+                    now_fn=self.now_fn,
+                    export_root=self.project_root / "sample_outputs",
+                ).generate(
+                    phase=live_phase,
+                    activity=list(live_activity),
+                    export=True,
+                )
+                context.actions.append(f"trade_plan:{trade_plan.regime}")
 
             if needs_refresh or self._snapshot_needs_export() or live_scan_written:
                 self.snapshot_builder(self.snapshot_output)
@@ -636,6 +648,9 @@ class AISupervisor:
             prediction_premarket=summary["prediction_premarket"],
             live_regular=summary["live_regular"],
             prediction_regular=summary["prediction_regular"],
+            trade_plan_actionable=summary["trade_plan_actionable"],
+            trade_plan_blocked=summary["trade_plan_blocked"],
+            trade_plan_daily_lock=summary["trade_plan_daily_lock"],
             social=summary["social"],
             report=summary["report"],
             git_status=git_status or "clean",
@@ -661,6 +676,9 @@ class AISupervisor:
             "Top session decisions:\n$session\n\n"
             "Top live regular movers:\n$live_regular\n\n"
             "Regular prediction audit:\n$prediction_regular\n\n"
+            "Trade plan actionable:\n$trade_plan_actionable\n\n"
+            "Trade plan blocked:\n$trade_plan_blocked\n\n"
+            "Trade plan daily loss lock:\n$trade_plan_daily_lock\n\n"
             "Top social:\n$social\n\n"
             "Replay report:\n$report\n\n"
             "Git status:\n$git_status\n\n"
@@ -716,6 +734,30 @@ class AISupervisor:
             "prediction_regular": _top_lines(
                 payload.get("prediction_regular"),
                 ["watchlist_rank", "pct_rank", "volume_rank", "outcome"],
+            ),
+            "trade_plan_actionable": _top_lines(
+                [
+                    row
+                    for row in (payload.get("trade_plan") if isinstance(payload.get("trade_plan"), list) else [])
+                    if isinstance(row, dict) and row.get("actionability") == "actionable"
+                ],
+                ["bucket", "entry_reference", "stop", "suggested_size"],
+            ),
+            "trade_plan_blocked": _top_lines(
+                [
+                    row
+                    for row in (payload.get("trade_plan") if isinstance(payload.get("trade_plan"), list) else [])
+                    if isinstance(row, dict) and row.get("actionability") == "blocked"
+                ],
+                ["bucket", "blockers"],
+            ),
+            "trade_plan_daily_lock": _top_lines(
+                [
+                    row
+                    for row in (payload.get("trade_plan") if isinstance(payload.get("trade_plan"), list) else [])[:1]
+                    if isinstance(row, dict)
+                ],
+                ["regime", "day_loss_locked"],
             ),
             "social": _top_lines(payload.get("social"), ["social_score", "mention_velocity"]),
             "report": report_line,
@@ -782,6 +824,7 @@ class AISupervisor:
                 "session": payload.get("session"),
                 "live_regular": payload.get("live_regular"),
                 "prediction_regular": payload.get("prediction_regular"),
+                "trade_plan": payload.get("trade_plan"),
                 "social": payload.get("social"),
                 "report": payload.get("report"),
             },

@@ -62,3 +62,12 @@ def test_settings_have_practical_defaults() -> None:
     assert settings.universe_price_min < settings.universe_price_max
     assert settings.live_market_provider in {"auto", "polygon", "alpaca", "disabled"}
     assert settings.live_market_timeout_seconds > 0
+    assert settings.paper_fill_slippage_pct == pytest.approx(0.15)
+    assert settings.paper_stop_gap_slippage_pct == pytest.approx(0.50)
+    assert settings.trade_plan_per_trade_risk_pct == pytest.approx(0.35)
+    assert settings.trade_plan_starter_notional_cap_pct == pytest.approx(8.0)
+    assert settings.trade_plan_add_notional_cap_pct == pytest.approx(5.0)
+    assert settings.trade_plan_daily_loss_lock_pct == pytest.approx(2.0)
+    assert settings.trade_plan_max_concurrent_open_risk_pct == pytest.approx(1.0)
+    assert settings.trade_plan_stale_data_seconds == 15
+    assert settings.trade_plan_halt_suspected_seconds == 60

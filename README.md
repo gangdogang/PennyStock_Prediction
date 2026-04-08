@@ -56,61 +56,61 @@ Codex 자동화와 함께 로컬 Gemini 사이드카까지 계속 돌리기:
 윈도우:
 
 ```bat
-launch_dashboard.bat
+launchers\windows\launch_dashboard.bat
 ```
 
 윈도우 PowerShell:
 
 ```powershell
-.\launch_dashboard.ps1
+.\launchers\windows\launch_dashboard.ps1
 ```
 
 윈도우 데스크탑에서 맥으로 접속 가능한 LAN 대시보드 열기:
 
 ```powershell
-.\launch_dashboard_lan.ps1
+.\launchers\windows\launch_dashboard_lan.ps1
 ```
 
 윈도우 데스크탑에서 24시간 모의투자 루프 실행:
 
 ```powershell
-.\launch_paper_trader.ps1
+.\launchers\windows\launch_paper_trader.ps1
 ```
 
 윈도우 로그인 시 자동 시작되는 24시간 모니터링 + 리포트 supervisor 등록:
 
 ```powershell
-.\install_ai_supervisor_task.ps1
+.\launchers\windows\install_ai_supervisor_task.ps1
 ```
 
 윈도우 supervisor 작업 상태 확인:
 
 ```powershell
-.\ai_supervisor_task_status.ps1
+.\launchers\windows\ai_supervisor_task_status.ps1
 ```
 
 윈도우 supervisor 작업 제거:
 
 ```powershell
-.\remove_ai_supervisor_task.ps1
+.\launchers\windows\remove_ai_supervisor_task.ps1
 ```
 
 윈도우 로그인 시 자동 시작되도록 작업 스케줄러 등록:
 
 ```powershell
-.\install_paper_trader_task.ps1
+.\launchers\windows\install_paper_trader_task.ps1
 ```
 
 윈도우 작업 스케줄러 상태 확인:
 
 ```powershell
-.\paper_trader_task_status.ps1
+.\launchers\windows\paper_trader_task_status.ps1
 ```
 
 윈도우 작업 스케줄러 제거:
 
 ```powershell
-.\remove_paper_trader_task.ps1
+.\launchers\windows\remove_paper_trader_task.ps1
 ```
 
 처음 실행 시 자동으로:
@@ -121,11 +121,19 @@ launch_dashboard.bat
 - Streamlit 대시보드 실행
 
 윈도우 데스크탑을 24시간 켜두는 경우:
-- `install_ai_supervisor_task.ps1` 로 `15분 주기 모니터링 + snapshot/review 갱신` 자동 시작 등록
-- `ai_supervisor_task_status.ps1` 로 상태 JSON, stdout/stderr, 최근 실행 시간 확인
-- `launch_dashboard_lan.ps1` 는 필요할 때만 수동 점검용으로 사용
-- `install_paper_trader_task.ps1` 는 선택 기능으로만 사용
+- `launchers/windows/install_ai_supervisor_task.ps1` 로 `15분 주기 모니터링 + snapshot/review 갱신` 자동 시작 등록
+- `launchers/windows/ai_supervisor_task_status.ps1` 로 상태 JSON, stdout/stderr, 최근 실행 시간 확인
+- `launchers/windows/launch_dashboard_lan.ps1` 는 필요할 때만 수동 점검용으로 사용
+- `launchers/windows/install_paper_trader_task.ps1` 는 선택 기능으로만 사용
 - 절전/최대 절전은 꺼 두고, Mac에서는 공유 폴더나 LAN 경로에서 결과 파일만 확인
+
+## 폴더 가이드
+
+- 루트: macOS Finder에서 바로 더블클릭하기 좋은 `.command` 런처와 핵심 설정 파일만 둡니다.
+- `launchers/windows/`: Windows `.bat`/`.ps1` 런처와 작업 스케줄러 스크립트를 모아 둡니다.
+- `automation/`: 자동화 프롬프트, launchd 템플릿, 상태/로그/리뷰 산출물이 모입니다.
+- `sample_outputs/`: 대시보드 HTML, 모의매매 CSV 등 사람이 바로 확인하는 결과물이 쌓입니다.
+- `docs/`: 운영 가이드와 판단 기준 문서를 둡니다.
 
 ## API 키 설정
 
@@ -138,13 +146,13 @@ launch_dashboard.bat
 윈도우:
 
 ```bat
-live_api_setup.bat
+launchers\windows\live_api_setup.bat
 ```
 
 윈도우 PowerShell:
 
 ```powershell
-.\live_api_setup.ps1
+.\launchers\windows\live_api_setup.ps1
 ```
 
 `.env`에 `Alpaca` 또는 `Polygon` 키를 넣으면 실시간 모드가 동작합니다.
@@ -279,7 +287,7 @@ sample_outputs/paper_trading/paper_strategy_comparison.csv
 
 Windows 24시간 기본 운영 경로:
 
-- `install_ai_supervisor_task.ps1` 로 `Penny Stock Radar Supervisor` 작업 등록
+- `launchers/windows/install_ai_supervisor_task.ps1` 로 `Penny Stock Radar Supervisor` 작업 등록
 - 작업은 로그인 시 1회 즉시 실행되고 이후 15분마다 `ai-supervisor --run-once --refresh-if-older-than-minutes 15` 를 호출
 - 기본 산출물은 `sample_outputs/radar_dashboard.html`, `automation/inbox/gemini_review.md`, `automation/state/automation_status.json`
 - 상태가 `failed` 면 먼저 `gemini_review.md`, 그 다음 Windows stderr 로그, 마지막으로 `automation_status.json` 순서로 확인

@@ -7,6 +7,9 @@
 - 이번 실행 액션: $actions
 - 스냅샷 경로: $snapshot_path
 - 리뷰 출력 경로: $review_path
+- 실전 실행 플랜 actionable: $trade_plan_actionable
+- 실전 실행 플랜 blocked: $trade_plan_blocked
+- daily loss lock 상태: $trade_plan_daily_lock
 
 상위 watchlist:
 $watchlist
@@ -56,6 +59,7 @@ $git_status
 ## 핵심문제
 - 데이터 품질, 자동화, 시장 해석, 코드 구조 중 가장 중요한 문제 1~3개만 bullet로 적는다.
 - 각 bullet은 왜 문제인지와 영향도를 짧게 포함한다.
+- actionable 종목보다 blocked 이유와 daily loss lock 상태를 우선 본다.
 
 ## 다음행동
 - 사람이 바로 할 행동 1개

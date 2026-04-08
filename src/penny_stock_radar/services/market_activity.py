@@ -57,7 +57,7 @@ class MarketActivityScanner:
 
         watchlist_rows = fetch_latest_watchlist(
             self.settings.database_path,
-            limit=200,
+            limit=max(int(self.settings.watchlist_limit), 1),
             prefer_reportable=False,
         )
         passed_universe_rows = fetch_latest_passed_universe(
@@ -254,6 +254,8 @@ class MarketActivityScanner:
             if gainers_row and gainers_row.price is not None
             else self._last_price(snapshot)
         )
+        bid_price = snapshot.latest_quote.bid_price if snapshot and snapshot.latest_quote else None
+        ask_price = snapshot.latest_quote.ask_price if snapshot and snapshot.latest_quote else None
         previous_close = self._previous_close(snapshot)
         pct_change = (
             gainers_row.pct_change
@@ -267,6 +269,14 @@ class MarketActivityScanner:
         )
         dollar_volume = (last_price or 0.0) * volume if last_price is not None and volume else None
         spread_pct = self._spread_pct(snapshot)
+        market_data_at = (
+            snapshot.updated_at or (snapshot.latest_trade.timestamp if snapshot and snapshot.latest_trade else None)
+        ) if snapshot else gainers_row.updated_at if gainers_row else active_row.updated_at if active_row else None
+        data_age_seconds = (
+            max((now - market_data_at).total_seconds(), 0.0)
+            if market_data_at is not None
+            else None
+        )
 
         if not self._is_scannable_symbol(symbol, price=last_price):
             return MarketActivity(
@@ -274,6 +284,8 @@ class MarketActivityScanner:
                 market_phase=market_phase,
                 source=source,
                 last_price=last_price,
+                bid_price=bid_price,
+                ask_price=ask_price,
                 previous_close=previous_close,
                 pct_change=pct_change,
                 volume=volume,
@@ -281,11 +293,10 @@ class MarketActivityScanner:
                 trade_size=snapshot.latest_trade.size if snapshot and snapshot.latest_trade else None,
                 spread_pct=spread_pct,
                 market_status=snapshot.market_status if snapshot else None,
-                market_data_at=(
-                    snapshot.updated_at or (snapshot.latest_trade.timestamp if snapshot and snapshot.latest_trade else None)
-                )
-                if snapshot
-                else gainers_row.updated_at if gainers_row else active_row.updated_at if active_row else None,
+                market_data_at=market_data_at,
+                data_age_seconds=data_age_seconds,
+                has_live_trade=bool(snapshot and snapshot.latest_trade and snapshot.latest_trade.price is not None),
+                has_live_quote=bool(snapshot and snapshot.latest_quote),
                 pct_rank=gainers_row.rank if gainers_row else 0,
                 volume_rank=active_row.rank if active_row else 0,
                 watchlist_rank=watchlist_rank,
@@ -310,6 +321,8 @@ class MarketActivityScanner:
             market_phase=market_phase,
             source=source,
             last_price=last_price,
+            bid_price=bid_price,
+            ask_price=ask_price,
             previous_close=previous_close,
             pct_change=pct_change,
             volume=volume,
@@ -317,11 +330,10 @@ class MarketActivityScanner:
             trade_size=snapshot.latest_trade.size if snapshot and snapshot.latest_trade else None,
             spread_pct=spread_pct,
             market_status=snapshot.market_status if snapshot else None,
-            market_data_at=(
-                snapshot.updated_at or (snapshot.latest_trade.timestamp if snapshot and snapshot.latest_trade else None)
-            )
-            if snapshot
-            else gainers_row.updated_at if gainers_row else active_row.updated_at if active_row else None,
+            market_data_at=market_data_at,
+            data_age_seconds=data_age_seconds,
+            has_live_trade=bool(snapshot and snapshot.latest_trade and snapshot.latest_trade.price is not None),
+            has_live_quote=bool(snapshot and snapshot.latest_quote),
             pct_rank=gainers_row.rank if gainers_row else 0,
             volume_rank=active_row.rank if active_row else 0,
             watchlist_rank=watchlist_rank,

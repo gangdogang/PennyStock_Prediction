@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 try {
-    $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $RootDir = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
     Set-Location $RootDir
     . (Join-Path $RootDir "scripts\windows_common.ps1")
 

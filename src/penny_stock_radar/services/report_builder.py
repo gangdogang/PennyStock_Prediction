@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from html import escape
 from pathlib import Path
@@ -92,10 +93,30 @@ JSON_FIELDS = {"filter_reasons", "themes", "reasons"}
 DECISION_WEIGHT = {"ENTER": 3.0, "WATCH": 1.5, "AVOID": -1.0}
 
 
+def _project_root(database_path: Path) -> Path:
+    resolved = database_path.resolve()
+    if len(resolved.parents) > 1:
+        return resolved.parents[1]
+    return resolved.parent
+
+
+def _load_trade_plan_rows(path: Path, *, limit: int) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            rows = [dict(row) for row in reader]
+    except Exception:
+        return []
+    return rows[:limit]
+
+
 class ReportBuilder:
     def build_payload(self, database_path: Path, limit: int = 20) -> dict[str, object]:
         selection = fetch_scan_selection(database_path)
         selected_scan_id = selection.get("selected_scan_id")
+        project_root = _project_root(database_path)
         return {
             "meta": {
                 "scan_id": selected_scan_id,
@@ -173,6 +194,10 @@ class ReportBuilder:
                     scan_id=selected_scan_id,
                 )
             ],
+            "trade_plan": _load_trade_plan_rows(
+                project_root / "sample_outputs" / "live_trade_plan.csv",
+                limit=limit,
+            ),
             "social": [
                 dict(row)
                 for row in fetch_latest_social_signals(

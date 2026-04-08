@@ -195,7 +195,13 @@ def test_market_activity_scan_persists_rankings_and_prediction_csv(
     )
 
     assert [row["symbol"] for row in activity_rows][:2] == ["CCC", "AAA"]
+    activity_by_symbol = {row["symbol"]: row for row in activity_rows}
     outcomes_by_symbol = {row["symbol"]: row for row in outcome_rows}
+    assert activity_by_symbol["AAA"]["bid_price"] == 1.39
+    assert activity_by_symbol["AAA"]["ask_price"] == 1.41
+    assert activity_by_symbol["AAA"]["has_live_trade"] == 1
+    assert activity_by_symbol["AAA"]["has_live_quote"] == 1
+    assert activity_by_symbol["AAA"]["data_age_seconds"] is not None
     assert outcomes_by_symbol["AAA"]["outcome"] == "matched_both"
     assert outcomes_by_symbol["BBB"]["outcome"] == "predicted_only"
     assert outcomes_by_symbol["CCC"]["outcome"] == "unpredicted_leader"
@@ -203,6 +209,85 @@ def test_market_activity_scan_persists_rankings_and_prediction_csv(
     csv_text = output_csv.read_text(encoding="utf-8")
     assert "matched_both" in csv_text
     assert "unpredicted_leader" in csv_text
+
+
+def test_market_activity_respects_watchlist_limit_for_predicted_symbols(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=2)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+            UniverseCandidate(
+                symbol="BBB",
+                company_name="BBB Corp",
+                exchange="Q",
+                price=1.2,
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            ),
+            WatchlistEntry(
+                symbol="BBB",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.0,
+                reasons=["seed"],
+            ),
+        ],
+    )
+
+    snapshots = {
+        "AAA": _snapshot("AAA", price=1.40, prev_close=1.00, volume=300_000),
+        "BBB": _snapshot("BBB", price=1.35, prev_close=1.00, volume=280_000),
+    }
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(snapshots),
+    )
+
+    settings = AppSettings(db_path=db_path, watchlist_limit=1)
+    scanner = MarketActivityScanner(settings)
+    result = scanner.scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=2,
+    )
+
+    by_symbol = {row.symbol: row for row in result.activity}
+    predicted_symbols = [row.symbol for row in result.outcomes if row.predicted]
+
+    assert by_symbol["AAA"].predicted is True
+    assert by_symbol["BBB"].predicted is False
+    assert predicted_symbols == ["AAA"]
 
 
 def test_market_activity_prefers_provider_screeners_over_tiny_local_universe(
