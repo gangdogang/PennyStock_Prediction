@@ -49,7 +49,7 @@ $git_status
 - 답변은 짧고 날카롭게 쓴다.
 - 표는 쓰지 않는다.
 - file path가 필요하면 코드베이스에 실제 있는 경로만 쓴다.
-- live mover의 `조건부 진입/재료 확인 전/눌림 대기/추격 금지` 판독은 [`docs/penny_stock_entry_framework_ko.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/penny_stock_entry_framework_ko.md) 기준으로 타당한지 함께 본다.
+- live mover의 `조건부 진입/재료 확인 전/눌림 대기/추격 금지` 판독은 [`docs/TRADING_GUIDE_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/TRADING_GUIDE_KO.md) 기준으로 타당한지 함께 본다.
 
 반드시 아래 섹션만, 이 순서대로 Markdown으로 작성한다.
 
