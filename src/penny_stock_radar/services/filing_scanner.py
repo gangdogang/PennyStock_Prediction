@@ -45,9 +45,11 @@ class FilingScanner:
         self,
         symbols: list[str],
         lookback_hours: int | None = None,
+        filed_at_cutoff: datetime | None = None,
     ) -> list[FilingMatch]:
         ticker_map = self.provider.fetch_company_tickers()
-        cutoff = datetime.now(UTC) - timedelta(
+        max_filed_at = filed_at_cutoff.astimezone(UTC) if filed_at_cutoff is not None else datetime.now(UTC)
+        min_filed_at = max_filed_at - timedelta(
             hours=lookback_hours or self.settings.filings_lookback_hours
         )
 
@@ -62,7 +64,13 @@ class FilingScanner:
             except Exception:
                 continue
             recent = submissions.get("filings", {}).get("recent", {})
-            for filing in self._iter_recent_filings(symbol.upper(), cik, recent, cutoff):
+            for filing in self._iter_recent_filings(
+                symbol.upper(),
+                cik,
+                recent,
+                min_filed_at=min_filed_at,
+                max_filed_at=max_filed_at,
+            ):
                 matches.append(filing)
         return matches
 
@@ -71,7 +79,9 @@ class FilingScanner:
         symbol: str,
         cik: str,
         recent: dict[str, list[str]],
-        cutoff: datetime,
+        *,
+        min_filed_at: datetime,
+        max_filed_at: datetime,
     ) -> list[FilingMatch]:
         forms = recent.get("form", [])
         results: list[FilingMatch] = []
@@ -82,7 +92,12 @@ class FilingScanner:
                 continue
             filing_date = recent.get("filingDate", [None] * total)[index]
             acceptance = recent.get("acceptanceDateTime", [None] * total)[index]
-            if not self._is_recent_enough(filing_date, acceptance, cutoff):
+            if not self._is_within_window(
+                filing_date,
+                acceptance,
+                min_filed_at=min_filed_at,
+                max_filed_at=max_filed_at,
+            ):
                 continue
             accession = recent.get("accessionNumber", [None] * total)[index]
             if not accession:
@@ -128,11 +143,13 @@ class FilingScanner:
             )
         return results
 
-    def _is_recent_enough(
+    def _is_within_window(
         self,
         filing_date: str | None,
         acceptance: str | None,
-        cutoff: datetime,
+        *,
+        min_filed_at: datetime,
+        max_filed_at: datetime,
     ) -> bool:
         dt = None
         if acceptance:
@@ -146,7 +163,7 @@ class FilingScanner:
                 dt = datetime.fromisoformat(filing_date).replace(tzinfo=UTC)
             except ValueError:
                 dt = None
-        return dt is not None and dt >= cutoff
+        return dt is not None and min_filed_at <= dt <= max_filed_at
 
     def _fetch_filing_text(self, filing_url: str) -> str:
         try:

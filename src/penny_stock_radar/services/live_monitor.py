@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import AppSettings
 from ..providers.live_market import LiveSnapshot, build_live_market_provider
+from .trading_support import effective_market_data_timestamp, live_quote_is_valid
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -59,8 +60,13 @@ class LiveMonitor:
     def _to_view(self, snapshot: LiveSnapshot, polled_at: datetime) -> LiveSnapshotView:
         bid_price = snapshot.latest_quote.bid_price if snapshot.latest_quote else None
         ask_price = snapshot.latest_quote.ask_price if snapshot.latest_quote else None
-        market_data_at = snapshot.updated_at or (
-            snapshot.latest_trade.timestamp if snapshot.latest_trade else None
+        market_data_at = effective_market_data_timestamp(
+            snapshot_updated_at=snapshot.updated_at,
+            trade_timestamp=snapshot.latest_trade.timestamp if snapshot.latest_trade else None,
+            trade_price=snapshot.latest_trade.price if snapshot.latest_trade else None,
+            quote_timestamp=snapshot.latest_quote.timestamp if snapshot.latest_quote else None,
+            bid_price=bid_price,
+            ask_price=ask_price,
         )
         return LiveSnapshotView(
             symbol=snapshot.symbol,
@@ -107,9 +113,7 @@ class LiveMonitor:
         return datetime.now(EASTERN)
 
     def _spread_pct(self, bid: float | None, ask: float | None) -> float | None:
-        if bid is None or ask is None:
-            return None
-        if bid <= 0 or ask <= 0 or ask < bid:
+        if not live_quote_is_valid(bid, ask):
             return None
         midpoint = (bid + ask) / 2
         if midpoint <= 0:

@@ -50,3 +50,34 @@ def test_filing_scanner_emits_recent_matches() -> None:
     assert match.form == "8-K"
     assert "merger" in match.summary.lower()
     assert "letter of intent" in match.matched_keywords
+
+
+class MixedTimingSecProvider(FakeSecProvider):
+    def fetch_submissions(self, cik: str):
+        return {
+            "filings": {
+                "recent": {
+                    "form": ["8-K", "8-K"],
+                    "filingDate": ["2026-04-16", "2026-04-16"],
+                    "acceptanceDateTime": [
+                        "2026-04-16T11:30:00Z",
+                        "2026-04-16T12:30:00Z",
+                    ],
+                    "accessionNumber": ["0000123456-26-000001", "0000123456-26-000002"],
+                    "primaryDocument": ["pre.htm", "post.htm"],
+                    "primaryDocDescription": ["Current report", "Current report"],
+                }
+            }
+        }
+
+
+def test_filing_scanner_excludes_filings_after_cutoff() -> None:
+    scanner = FilingScanner(AppSettings(), provider=MixedTimingSecProvider())
+    matches = scanner.scan_symbols(
+        ["ABCD"],
+        lookback_hours=48,
+        filed_at_cutoff=datetime(2026, 4, 16, 12, 0, tzinfo=UTC),
+    )
+
+    assert len(matches) == 1
+    assert matches[0].accession_number == "0000123456-26-000001"

@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from penny_stock_radar.providers.listings import NasdaqTraderListingProvider
+from penny_stock_radar.providers.listings import (
+    KisMasterListingProvider,
+    NasdaqTraderListingProvider,
+    build_listing_provider,
+)
+from penny_stock_radar.config import AppSettings
 
 
 SAMPLE_LISTINGS = """Symbol|Security Name|Listing Exchange|ETF|Test Issue|NextShares
@@ -34,6 +39,47 @@ class _FakeClient:
         if self.error is not None:
             raise self.error
         return _FakeResponse(self.text or "")
+
+
+def _write_kis_master_file(path: Path, rows: list[list[str]]) -> None:
+    payload = "\n".join("\t".join(row) for row in rows) + "\n"
+    path.write_bytes(payload.encode("cp949"))
+
+
+def _kis_master_row(
+    *,
+    exchange_code: str,
+    symbol: str,
+    english_name: str,
+    security_type: str = "2",
+    type_code: str = "004",
+) -> list[str]:
+    return [
+        "USA",
+        "US",
+        exchange_code,
+        exchange_code,
+        symbol,
+        symbol,
+        english_name,
+        english_name,
+        security_type,
+        "USD",
+        "",
+        "",
+        "1.00",
+        "",
+        "",
+        "0930",
+        "1600",
+        "N",
+        "",
+        "",
+        "",
+        "",
+        type_code,
+        "",
+    ]
 
 
 def test_listings_provider_writes_cache_on_success(tmp_path: Path) -> None:
@@ -73,3 +119,80 @@ def test_listings_provider_raises_without_remote_or_cache(tmp_path: Path) -> Non
 
     with pytest.raises(RuntimeError, match="no cached listing seed"):
         provider.fetch()
+
+
+def test_kis_master_listing_provider_reads_nasdaq_nyse_amex_files(tmp_path: Path) -> None:
+    _write_kis_master_file(
+        tmp_path / "NASMST.COD",
+        [
+            _kis_master_row(
+                exchange_code="NAS",
+                symbol="ABCD",
+                english_name="ABCD Common Stock",
+            ),
+            _kis_master_row(
+                exchange_code="NAS",
+                symbol="QQQ",
+                english_name="Invesco QQQ Trust",
+                security_type="3",
+                type_code="001",
+            ),
+        ],
+    )
+    _write_kis_master_file(
+        tmp_path / "NYSMST.COD",
+        [
+            _kis_master_row(
+                exchange_code="NYS",
+                symbol="UNIT.U",
+                english_name="Example Acquisition Corp Units",
+            )
+        ],
+    )
+    _write_kis_master_file(
+        tmp_path / "AMSMST.COD",
+        [
+            _kis_master_row(
+                exchange_code="AMS",
+                symbol="WARR.WS",
+                english_name="Example Warrant",
+                security_type="4",
+            )
+        ],
+    )
+
+    provider = KisMasterListingProvider(master_path=tmp_path)
+
+    rows = provider.fetch()
+
+    assert [(row.symbol, row.exchange, row.is_etf) for row in rows] == [
+        ("ABCD", "NAS", False),
+        ("QQQ", "NAS", True),
+        ("UNIT.U", "NYS", False),
+        ("WARR.WS", "AMS", False),
+    ]
+
+
+def test_kis_master_listing_provider_requires_all_us_files_in_directory(tmp_path: Path) -> None:
+    _write_kis_master_file(
+        tmp_path / "NASMST.COD",
+        [_kis_master_row(exchange_code="NAS", symbol="ABCD", english_name="ABCD Common Stock")],
+    )
+
+    provider = KisMasterListingProvider(master_path=tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="NYSMST.COD"):
+        provider.fetch()
+
+
+def test_build_listing_provider_falls_back_to_nasdaq_when_kis_files_are_missing(tmp_path: Path) -> None:
+    settings = AppSettings(
+        cache_dir=tmp_path / "cache",
+        kis_nasdaq_master_path=tmp_path / "kis" / "NASMST.COD",
+        kis_nyse_master_path=tmp_path / "kis" / "NYSMST.COD",
+        kis_amex_master_path=tmp_path / "kis" / "AMSMST.COD",
+    )
+
+    provider = build_listing_provider(settings, client=_FakeClient(text=SAMPLE_LISTINGS))
+
+    assert isinstance(provider, NasdaqTraderListingProvider)

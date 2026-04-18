@@ -1259,6 +1259,7 @@ def _render_leaderboard(rows: list[dict[str, Any]]) -> str:
         chips = []
         chips.extend(_render_chip_list(_coerce_list(row.get("themes"))[:3]))
         chips.extend(_render_chip_list(_translate_reason(reason) for reason in row.get("headline_reasons", [])))
+        chip_markup = "".join(chips) if chips else "<span class='chip'>근거 없음</span>"
         cards.append(
             (
                 "<article class='symbol-card'>"
@@ -1280,7 +1281,7 @@ def _render_leaderboard(rows: list[dict[str, Any]]) -> str:
                 f"{_score_item_html('Float', _format_integer(row.get('float_shares')))}"
                 "</div>"
                 f"<div class='meter'><span style='width: {width:.1f}%'></span></div>"
-                f"<div class='chip-row'>{''.join(chips) if chips else '<span class=\"chip\">근거 없음</span>'}</div>"
+                f"<div class='chip-row'>{chip_markup}</div>"
                 "</article>"
             )
         )

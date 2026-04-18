@@ -1,0 +1,55 @@
+[
+  {
+    "action": "BUY",
+    "fill_reference_price": 1.02,
+    "fill_slippage_pct": 4.4117647059,
+    "fill_status": "FILLED",
+    "intent": "ENTRY",
+    "market_phase": "premarket",
+    "notional": 597.72,
+    "planned_risk_pct": 5.0,
+    "planned_stop_price": 0.969,
+    "price": 1.02,
+    "quantity": 586,
+    "realized_pnl": null,
+    "realized_pnl_pct": null,
+    "reasons": [
+      "predicted_starter",
+      "predicted_priority_entry",
+      "watchlist_predicted",
+      "live_dollar_volume_strong"
+    ],
+    "remaining_quantity": 0,
+    "requested_quantity": 586,
+    "strategy_bucket": "predicted_starter",
+    "symbol": "AAA",
+    "transaction_cost": 1.0,
+    "watchlist_rank_at_entry": 1
+  },
+  {
+    "action": "SELL",
+    "fill_reference_price": 0.89,
+    "fill_slippage_pct": 0.5,
+    "fill_status": "FILLED",
+    "intent": "EXIT",
+    "market_phase": "regular",
+    "notional": 518.9323,
+    "planned_risk_pct": 5.0,
+    "planned_stop_price": 0.9706211604,
+    "price": 0.88555,
+    "quantity": 586,
+    "realized_pnl": -80.7877,
+    "realized_pnl_pct": -13.3263796098,
+    "reasons": [
+      "stop_loss",
+      "watchlist_predicted",
+      "live_dollar_volume_strong"
+    ],
+    "remaining_quantity": 0,
+    "requested_quantity": 586,
+    "strategy_bucket": "predicted_starter",
+    "symbol": "AAA",
+    "transaction_cost": 1.0,
+    "watchlist_rank_at_entry": 1
+  }
+]

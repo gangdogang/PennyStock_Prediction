@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..config import AppSettings
 from ..db import (
+    fetch_passed_universe_for_market_date,
     fetch_latest_passed_universe,
     fetch_recent_market_activity,
     fetch_latest_social_signals,
@@ -15,12 +18,15 @@ from ..db import (
     update_universe_filing_summaries,
 )
 from ..models import FilingMatch, ListingRecord, MetadataRecord, SetupSignal, WatchlistEntry
-from ..providers.listings import NasdaqTraderListingProvider
+from ..providers.listings import ListingProvider, build_listing_provider
 from ..providers.live_market import build_live_market_provider
 from ..providers.metadata import YFinanceMetadataProvider
+from ..security_filters import listing_filter_reasons
 from .filing_scanner import FilingScanner
 from .setup_scanner import SetupScanner
 from ..utils.theme import dominant_themes, extract_themes
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 def _row_value(row: object, key: str) -> object | None:
@@ -45,31 +51,25 @@ class WatchlistBuilder:
         settings: AppSettings,
         filing_scanner: FilingScanner | None = None,
         setup_scanner: SetupScanner | None = None,
-        listing_provider: NasdaqTraderListingProvider | None = None,
+        listing_provider: ListingProvider | None = None,
         metadata_provider: YFinanceMetadataProvider | None = None,
     ) -> None:
         self.settings = settings
         self.filing_scanner = filing_scanner or FilingScanner(settings)
         self.setup_scanner = setup_scanner or SetupScanner()
-        cache_dir = Path(self._setting("cache_dir", "data/cache"))
-        self.listing_provider = listing_provider or NasdaqTraderListingProvider(
-            self._setting("nasdaq_trader_url", "https://www.nasdaqtrader.com/dynamic/symdir/nasdaqtraded.txt"),
-            cache_path=cache_dir / "nasdaqtraded.txt",
-        )
-        self.metadata_provider = metadata_provider or YFinanceMetadataProvider()
+        self.listing_provider = listing_provider
+        self.metadata_provider = metadata_provider
 
     def build(
         self,
         limit: int | None = None,
         lookback_hours: int | None = None,
+        *,
+        scan_id: str | None = None,
+        market_date: date | str | None = None,
+        filing_cutoff: datetime | None = None,
     ) -> tuple[list[WatchlistEntry], list[FilingMatch], dict[str, SetupSignal]]:
-        try:
-            universe_rows = fetch_latest_passed_universe(
-                self.settings.database_path,
-                prefer_reportable=False,
-            )
-        except TypeError:
-            universe_rows = fetch_latest_passed_universe(self.settings.database_path)
+        universe_rows = self._load_universe_rows(scan_id=scan_id, market_date=market_date)
         if not universe_rows:
             return [], [], {}
 
@@ -86,9 +86,18 @@ class WatchlistBuilder:
         rows_by_symbol.update(dynamic_rows)
         symbols = list(rows_by_symbol)
 
-        filings = self.filing_scanner.scan_symbols(
-            symbols, lookback_hours=lookback_hours or self.settings.filings_lookback_hours
-        )
+        filing_cutoff_at = filing_cutoff or self._default_filing_cutoff(market_date)
+        try:
+            filings = self.filing_scanner.scan_symbols(
+                symbols,
+                lookback_hours=lookback_hours or self.settings.filings_lookback_hours,
+                filed_at_cutoff=filing_cutoff_at,
+            )
+        except TypeError:
+            filings = self.filing_scanner.scan_symbols(
+                symbols,
+                lookback_hours=lookback_hours or self.settings.filings_lookback_hours,
+            )
         setup_signals = self.setup_scanner.scan_symbols(symbols)
 
         insert_filings(self.settings.database_path, scan_id, filings)
@@ -188,6 +197,42 @@ class WatchlistBuilder:
         entries = entries[: limit or self.settings.watchlist_limit]
         insert_watchlist(self.settings.database_path, scan_id, entries)
         return entries, filings, setup_signals
+
+    def _load_universe_rows(
+        self,
+        *,
+        scan_id: str | None,
+        market_date: date | str | None,
+    ) -> list[object]:
+        if market_date is not None:
+            return fetch_passed_universe_for_market_date(
+                self.settings.database_path,
+                self._coerce_market_date(market_date).isoformat(),
+            )
+        try:
+            return fetch_latest_passed_universe(
+                self.settings.database_path,
+                scan_id=scan_id,
+                prefer_reportable=False,
+            )
+        except TypeError:
+            if scan_id is not None:
+                return fetch_latest_passed_universe(
+                    self.settings.database_path,
+                    scan_id=scan_id,
+                )
+            return fetch_latest_passed_universe(self.settings.database_path)
+
+    def _default_filing_cutoff(self, market_date: date | str | None) -> datetime | None:
+        if market_date is None:
+            return None
+        session_date = self._coerce_market_date(market_date)
+        return datetime.combine(session_date, time(8, 0), tzinfo=EASTERN)
+
+    def _coerce_market_date(self, value: date | str) -> date:
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value))
 
     def _build_filing_summaries(self, filings: list[FilingMatch]) -> dict[str, str]:
         grouped: dict[str, list[str]] = defaultdict(list)
@@ -315,19 +360,27 @@ class WatchlistBuilder:
             return {}
 
         listing_map = self._fetch_listing_map(symbols)
+        eligible_symbols = [
+            symbol
+            for symbol in symbols
+            if not self._structural_filter_reasons(symbol, listing_map.get(symbol))
+        ]
         price_map = {
             symbol: signal.price
             for symbol, signal in market_context.items()
-            if symbol in symbols and signal.price is not None
+            if symbol in eligible_symbols and signal.price is not None
         }
-        metadata_map = self.metadata_provider.fetch_metadata(
-            symbols,
+        metadata_provider = self._get_metadata_provider()
+        if metadata_provider is None:
+            return {}
+        metadata_map = metadata_provider.fetch_metadata(
+            eligible_symbols,
             max_workers=int(self._setting("universe_metadata_workers", 8)),
             prices=price_map,
         )
 
         rows: dict[str, dict[str, Any]] = {}
-        for symbol in symbols:
+        for symbol in eligible_symbols:
             row = self._build_dynamic_row(
                 symbol,
                 listing_map.get(symbol),
@@ -340,8 +393,11 @@ class WatchlistBuilder:
         return rows
 
     def _fetch_listing_map(self, symbols: list[str]) -> dict[str, ListingRecord]:
+        provider = self._get_listing_provider()
+        if provider is None:
+            return {}
         try:
-            listings = self.listing_provider.fetch(limit=None)
+            listings = provider.fetch(limit=None)
         except Exception:
             return {}
         wanted = {symbol.upper() for symbol in symbols}
@@ -357,21 +413,7 @@ class WatchlistBuilder:
         fallback_price: float | None,
     ) -> dict[str, Any] | None:
         company_name = listing.company_name if listing is not None else symbol
-        security_name = company_name.lower()
-        if self._setting("exclude_preferred", True) and "preferred" in security_name:
-            return None
-        if self._setting("exclude_warrants", True) and any(
-            keyword in security_name for keyword in ("warrant", "warrants")
-        ):
-            return None
-        if self._setting("exclude_rights", True) and any(
-            keyword in security_name for keyword in (" right", " rights")
-        ):
-            return None
-        if self._setting("exclude_spacs", True) and any(
-            keyword in security_name
-            for keyword in ("acquisition corp", "acquisition corporation", "blank check")
-        ):
+        if self._structural_filter_reasons(symbol, listing):
             return None
 
         price = metadata.price if metadata and metadata.price is not None else fallback_price
@@ -415,3 +457,36 @@ class WatchlistBuilder:
 
     def _setting(self, name: str, default: Any) -> Any:
         return getattr(self.settings, name, default)
+
+    def _get_listing_provider(self) -> ListingProvider | None:
+        if self.listing_provider is not None:
+            return self.listing_provider
+        try:
+            self.listing_provider = build_listing_provider(self.settings)
+        except Exception:
+            self.listing_provider = None
+        return self.listing_provider
+
+    def _get_metadata_provider(self) -> YFinanceMetadataProvider | None:
+        if self.metadata_provider is not None:
+            return self.metadata_provider
+        try:
+            self.metadata_provider = YFinanceMetadataProvider()
+        except Exception:
+            self.metadata_provider = None
+        return self.metadata_provider
+
+    def _structural_filter_reasons(
+        self,
+        symbol: str,
+        listing: ListingRecord | None,
+    ) -> list[str]:
+        company_name = listing.company_name if listing is not None else symbol
+        return listing_filter_reasons(
+            symbol=symbol,
+            company_name=company_name,
+            exclude_preferred=bool(self._setting("exclude_preferred", True)),
+            exclude_warrants=bool(self._setting("exclude_warrants", True)),
+            exclude_rights=bool(self._setting("exclude_rights", True)),
+            exclude_spacs=bool(self._setting("exclude_spacs", True)),
+        )

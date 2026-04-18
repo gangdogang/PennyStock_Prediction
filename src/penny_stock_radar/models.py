@@ -13,6 +13,15 @@ class ListingRecord(BaseModel):
     symbol: str
     company_name: str
     exchange: str
+    realtime_symbol: str | None = None
+    name_ko: str | None = None
+    name_en: str | None = None
+    currency: str | None = None
+    security_type: str | None = None
+    security_subtype_code: str | None = None
+    base_price: float | None = None
+    is_dr: bool = False
+    industry_code: str | None = None
     is_etf: bool = False
     is_test_issue: bool = False
     is_nextshares: bool = False
@@ -50,6 +59,9 @@ class SnapshotRun(BaseModel):
     snapshot_id: str
     source: str
     symbol_count: int
+    market_date: str | None = None
+    snapshot_role: str = "live"
+    point_in_time_tag: str | None = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -94,6 +106,16 @@ class WatchlistEntry(BaseModel):
     themes: list[str] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class PremktPrediction(BaseModel):
+    symbol: str
+    score: float
+    max_hold_days: int
+    entry_rationale: str
+    themes: list[str] = Field(default_factory=list)
+    filing_summary: str = ""
+    generated_at: datetime = Field(default_factory=utc_now)
 
 
 class MarketTick(BaseModel):
@@ -172,6 +194,7 @@ class MarketActivity(BaseModel):
     symbol: str
     market_phase: str
     source: str
+    market_cap: int | None = None
     last_price: float | None = None
     bid_price: float | None = None
     ask_price: float | None = None
@@ -184,6 +207,7 @@ class MarketActivity(BaseModel):
     market_status: str | None = None
     market_data_at: datetime | None = None
     data_age_seconds: float | None = None
+    resume_elapsed_seconds: float | None = None
     has_live_trade: bool = False
     has_live_quote: bool = False
     pct_rank: int = 0
@@ -199,6 +223,86 @@ class MarketActivity(BaseModel):
     analysis_score: float
     reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalL1Quote(BaseModel):
+    symbol: str
+    market_date: str
+    timestamp: datetime
+    bid_price: float | None = None
+    ask_price: float | None = None
+    last_price: float | None = None
+    source: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalMinuteBar(BaseModel):
+    symbol: str
+    market_date: str
+    market_phase: str
+    timestamp: datetime
+    open_price: float
+    high_price: float
+    low_price: float
+    close_price: float
+    volume: float
+    bid_price: float | None = None
+    ask_price: float | None = None
+    spread_pct: float | None = None
+    source: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalHaltEvent(BaseModel):
+    symbol: str
+    market_date: str
+    start_at: datetime
+    end_at: datetime | None = None
+    reason: str | None = None
+    resume_price: float | None = None
+    source: str
+    inferred: bool = False
+    notes: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class HistoricalCoverageReport(BaseModel):
+    market_date: str
+    dataset_kind: str
+    source: str
+    expected_symbol_count: int
+    covered_symbol_count: int
+    symbol_coverage_pct: float
+    expected_interval_count: int
+    covered_interval_count: int
+    interval_coverage_pct: float
+    notes: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class CoverageGateStatus(BaseModel):
+    updated_at: datetime = Field(default_factory=utc_now)
+    status: str
+    gate_name: str
+    market_date: str
+    session: str
+    dataset_kind: str
+    source: str
+    threshold_pct: float
+    decision_basis: str
+    expected_symbol_count: int
+    covered_symbol_count: int
+    symbol_coverage_pct: float
+    expected_interval_count: int
+    covered_interval_count: int
+    interval_coverage_pct: float
+    symbol_gate_passed: bool
+    interval_gate_passed: bool
+    gate_passed: bool
+    report_created_at: datetime
+    report_path: str | None = None
+    notes: list[str] = Field(default_factory=list)
+    last_error: str | None = None
 
 
 class PredictionOutcome(BaseModel):
@@ -221,6 +325,7 @@ class PredictionOutcome(BaseModel):
 class PaperTradingRun(BaseModel):
     run_id: str
     strategy_name: str
+    bucket: str = "predictor_weighted"
     status: str = "ACTIVE"
     initial_capital: float
     cash_balance: float
@@ -236,6 +341,7 @@ class PaperTradingRun(BaseModel):
     win_rate: float = 0.0
     gross_profit: float = 0.0
     gross_loss: float = 0.0
+    total_transaction_cost: float = 0.0
     profit_factor: float = 0.0
     average_win: float = 0.0
     average_loss: float = 0.0
@@ -273,6 +379,7 @@ class PaperPosition(BaseModel):
     strategy_bucket: str = ""
     fill_reference_price: float | None = None
     fill_slippage_pct: float | None = None
+    fees_paid_total: float = 0.0
     day_regime: str | None = None
     watchlist_rank_at_entry: int | None = None
     entry_reasons: list[str] = Field(default_factory=list)
@@ -291,8 +398,12 @@ class PaperOrder(BaseModel):
     action: str
     intent: str
     quantity: int
+    requested_quantity: int | None = None
+    remaining_quantity: int = 0
+    fill_status: str = "FILLED"
     price: float
     notional: float
+    transaction_cost: float = 0.0
     strategy_bucket: str = ""
     analysis_label: str | None = None
     analysis_score: float | None = None

@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from pathlib import Path
+import time as time_module
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -18,7 +19,13 @@ from ..db import (
     insert_prediction_outcomes,
 )
 from ..models import MarketActivity, PredictionOutcome
+from ..observability.metrics import build_live_metric_emitter
 from ..providers.live_market import LiveMover, LiveSnapshot, build_live_market_provider
+from .trading_support import (
+    effective_market_data_timestamp,
+    live_quote_is_valid,
+    market_status_blocks_trading,
+)
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -36,6 +43,7 @@ class MarketActivityScanResult:
 class MarketActivityScanner:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
+        self._emit_metric = build_live_metric_emitter(settings)
 
     def scan(
         self,
@@ -45,6 +53,7 @@ class MarketActivityScanner:
         top_limit: int = 10,
         persist: bool = True,
         comparison_csv: Path | None = None,
+        extra_symbols: tuple[str, ...] = (),
     ) -> MarketActivityScanResult:
         scan_row = fetch_latest_scan_id(self.settings.database_path)
         if scan_row is None:
@@ -78,9 +87,15 @@ class MarketActivityScanner:
             for row in watchlist_rows
             if row["total_score"] is not None
         }
+        market_cap_by_symbol = {
+            str(row["symbol"]): int(row["market_cap"])
+            for row in passed_universe_rows
+            if row["market_cap"] is not None
+        }
 
         activity: list[MarketActivity] = []
         now = datetime.now(timezone.utc)
+        started = time_module.perf_counter()
         screener_symbols, screener_gainers, screener_actives = self._build_screener_symbol_list(
             provider,
             scan_limit=scan_limit,
@@ -91,6 +106,12 @@ class MarketActivityScanner:
             scan_limit=scan_limit,
         )
         symbols = screener_symbols or fallback_symbols
+        if extra_symbols:
+            for symbol in extra_symbols:
+                normalized = str(symbol).upper().strip()
+                if not normalized or normalized in symbols:
+                    continue
+                symbols.append(normalized)
         if not symbols:
             self._close_provider(provider)
             raise RuntimeError("No live scan symbols found. Build the universe/watchlist first.")
@@ -108,17 +129,19 @@ class MarketActivityScanner:
                     now=now,
                     watchlist_rank=watchlist_rank.get(symbol),
                     watchlist_score=watchlist_score.get(symbol),
+                    market_cap=market_cap_by_symbol.get(symbol),
                     gainers_row=gainers_row,
                     active_row=active_row,
                 )
                 activity.append(row)
+                self._emit_live_quote_observation(row, observed_at=now)
         finally:
             self._close_provider(provider)
 
         if not activity:
             raise RuntimeError("The configured live provider returned no market snapshots for the scan universe.")
 
-        self._apply_ranks(activity)
+        self._apply_ranks(activity, protected_symbols=set(extra_symbols))
         self._apply_behavioral_scores(activity, market_phase=market_phase)
         outcomes = self._build_prediction_outcomes(
             activity,
@@ -135,6 +158,20 @@ class MarketActivityScanner:
         if comparison_csv is not None:
             self.export_outcomes_csv(outcomes, comparison_csv)
 
+        self._emit_metric(
+            "scan_summary",
+            {
+                "provider": provider.source_name,
+                "market_phase": market_phase,
+                "scan_id": scan_id,
+                "scanned_symbol_count": len(symbols),
+                "activity_count": len(activity),
+                "decision_counts": self._decision_counts(activity),
+                "duration_ms": round((time_module.perf_counter() - started) * 1000.0, 3),
+                "observed_at": now,
+            },
+        )
+
         return MarketActivityScanResult(
             scan_id=scan_id,
             market_phase=market_phase,
@@ -143,6 +180,35 @@ class MarketActivityScanner:
             outcomes=outcomes,
             comparison_csv=comparison_csv.resolve() if comparison_csv is not None else None,
         )
+
+    def _emit_live_quote_observation(
+        self,
+        row: MarketActivity,
+        *,
+        observed_at: datetime,
+    ) -> None:
+        self._emit_metric(
+            "quote_observation",
+            {
+                "symbol": row.symbol,
+                "source": row.source,
+                "market_phase": row.market_phase,
+                "analysis_label": row.analysis_label,
+                "market_status": row.market_status,
+                "market_data_at": row.market_data_at,
+                "observed_at": observed_at,
+                "data_age_seconds": row.data_age_seconds,
+                "spread_pct": row.spread_pct,
+                "has_live_trade": row.has_live_trade,
+                "has_live_quote": row.has_live_quote,
+            },
+        )
+
+    def _decision_counts(self, activity: list[MarketActivity]) -> dict[str, int]:
+        counts: dict[str, int] = defaultdict(int)
+        for row in activity:
+            counts[row.analysis_label] += 1
+        return dict(sorted(counts.items()))
 
     def resolve_market_phase(self, phase: str = "auto") -> str:
         normalized = (phase or "auto").strip().lower()
@@ -234,6 +300,7 @@ class MarketActivityScanner:
         now: datetime,
         watchlist_rank: int | None,
         watchlist_score: float | None,
+        market_cap: int | None,
         gainers_row: LiveMover | None,
         active_row: LiveMover | None,
     ) -> MarketActivity:
@@ -256,6 +323,7 @@ class MarketActivityScanner:
         )
         bid_price = snapshot.latest_quote.bid_price if snapshot and snapshot.latest_quote else None
         ask_price = snapshot.latest_quote.ask_price if snapshot and snapshot.latest_quote else None
+        has_live_quote = live_quote_is_valid(bid_price, ask_price)
         previous_close = self._previous_close(snapshot)
         pct_change = (
             gainers_row.pct_change
@@ -269,9 +337,19 @@ class MarketActivityScanner:
         )
         dollar_volume = (last_price or 0.0) * volume if last_price is not None and volume else None
         spread_pct = self._spread_pct(snapshot)
+        market_status = snapshot.market_status if snapshot else None
         market_data_at = (
-            snapshot.updated_at or (snapshot.latest_trade.timestamp if snapshot and snapshot.latest_trade else None)
-        ) if snapshot else gainers_row.updated_at if gainers_row else active_row.updated_at if active_row else None
+            effective_market_data_timestamp(
+                snapshot_updated_at=snapshot.updated_at,
+                trade_timestamp=snapshot.latest_trade.timestamp if snapshot and snapshot.latest_trade else None,
+                trade_price=snapshot.latest_trade.price if snapshot and snapshot.latest_trade else None,
+                quote_timestamp=snapshot.latest_quote.timestamp if snapshot and snapshot.latest_quote else None,
+                bid_price=bid_price,
+                ask_price=ask_price,
+            )
+            if snapshot
+            else gainers_row.updated_at if gainers_row else active_row.updated_at if active_row else None
+        )
         data_age_seconds = (
             max((now - market_data_at).total_seconds(), 0.0)
             if market_data_at is not None
@@ -283,6 +361,7 @@ class MarketActivityScanner:
                 symbol=symbol,
                 market_phase=market_phase,
                 source=source,
+                market_cap=market_cap,
                 last_price=last_price,
                 bid_price=bid_price,
                 ask_price=ask_price,
@@ -292,11 +371,11 @@ class MarketActivityScanner:
                 dollar_volume=dollar_volume,
                 trade_size=snapshot.latest_trade.size if snapshot and snapshot.latest_trade else None,
                 spread_pct=spread_pct,
-                market_status=snapshot.market_status if snapshot else None,
+                market_status=market_status,
                 market_data_at=market_data_at,
                 data_age_seconds=data_age_seconds,
                 has_live_trade=bool(snapshot and snapshot.latest_trade and snapshot.latest_trade.price is not None),
-                has_live_quote=bool(snapshot and snapshot.latest_quote),
+                has_live_quote=has_live_quote,
                 pct_rank=gainers_row.rank if gainers_row else 0,
                 volume_rank=active_row.rank if active_row else 0,
                 watchlist_rank=watchlist_rank,
@@ -308,18 +387,22 @@ class MarketActivityScanner:
                 created_at=now,
             )
 
-        analysis_label, analysis_score, reasons = self._analysis(
-            market_phase=market_phase,
-            pct_change=pct_change,
-            dollar_volume=dollar_volume,
-            spread_pct=spread_pct,
-            predicted=watchlist_rank is not None,
-            watchlist_score=watchlist_score,
-        )
+        if market_status_blocks_trading(market_status):
+            analysis_label, analysis_score, reasons = "SKIP", -999.0, ["market_halted"]
+        else:
+            analysis_label, analysis_score, reasons = self._analysis(
+                market_phase=market_phase,
+                pct_change=pct_change,
+                dollar_volume=dollar_volume,
+                spread_pct=spread_pct,
+                predicted=watchlist_rank is not None,
+                watchlist_score=watchlist_score,
+            )
         return MarketActivity(
             symbol=symbol,
             market_phase=market_phase,
             source=source,
+            market_cap=market_cap,
             last_price=last_price,
             bid_price=bid_price,
             ask_price=ask_price,
@@ -329,11 +412,11 @@ class MarketActivityScanner:
             dollar_volume=dollar_volume,
             trade_size=snapshot.latest_trade.size if snapshot and snapshot.latest_trade else None,
             spread_pct=spread_pct,
-            market_status=snapshot.market_status if snapshot else None,
+            market_status=market_status,
             market_data_at=market_data_at,
             data_age_seconds=data_age_seconds,
             has_live_trade=bool(snapshot and snapshot.latest_trade and snapshot.latest_trade.price is not None),
-            has_live_quote=bool(snapshot and snapshot.latest_quote),
+            has_live_quote=has_live_quote,
             pct_rank=gainers_row.rank if gainers_row else 0,
             volume_rank=active_row.rank if active_row else 0,
             watchlist_rank=watchlist_rank,
@@ -345,13 +428,25 @@ class MarketActivityScanner:
             created_at=now,
         )
 
-    def _apply_ranks(self, rows: list[MarketActivity]) -> None:
-        rows[:] = [row for row in rows if row.analysis_label != "SKIP"]
+    def _apply_ranks(
+        self,
+        rows: list[MarketActivity],
+        protected_symbols: set[str] | None = None,
+    ) -> None:
+        protected = protected_symbols or set()
+        rows[:] = [
+            row
+            for row in rows
+            if row.analysis_label != "SKIP" or row.symbol in protected
+        ]
         if not rows:
+            return
+        rankable_rows = [row for row in rows if row.analysis_label != "SKIP"]
+        if not rankable_rows:
             return
 
         pct_sorted = sorted(
-            rows,
+            rankable_rows,
             key=lambda row: (
                 row.pct_rank if row.pct_rank > 0 else 9999,
                 -(row.pct_change if row.pct_change is not None else float("-inf")),
@@ -363,7 +458,7 @@ class MarketActivityScanner:
                 row.pct_rank = index
 
         volume_sorted = sorted(
-            rows,
+            rankable_rows,
             key=lambda row: (
                 row.volume_rank if row.volume_rank > 0 else 9999,
                 -(row.volume if row.volume is not None else float("-inf")),
@@ -850,9 +945,7 @@ class MarketActivityScanner:
             return None
         bid = snapshot.latest_quote.bid_price
         ask = snapshot.latest_quote.ask_price
-        if bid is None or ask is None:
-            return None
-        if bid <= 0 or ask <= 0 or ask < bid:
+        if not live_quote_is_valid(bid, ask):
             return None
         midpoint = (bid + ask) / 2
         if midpoint <= 0:

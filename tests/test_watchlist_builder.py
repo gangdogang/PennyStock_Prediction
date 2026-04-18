@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.db import (
@@ -20,6 +22,8 @@ from penny_stock_radar.models import (
 )
 from penny_stock_radar.providers.live_market import LiveMover
 from penny_stock_radar.services.watchlist_builder import WatchlistBuilder
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 class FakeFilingScanner:
@@ -91,6 +95,16 @@ class FakeMetadataProvider:
         return result
 
 
+class RecordingMetadataProvider(FakeMetadataProvider):
+    def __init__(self, rows: dict[str, MetadataRecord]) -> None:
+        super().__init__(rows)
+        self.requests: list[str] = []
+
+    def fetch_metadata(self, symbols, max_workers, prices=None):
+        self.requests = list(symbols)
+        return super().fetch_metadata(symbols, max_workers, prices=prices)
+
+
 def test_watchlist_builder_ranks_and_persists_entries(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
@@ -128,6 +142,7 @@ def test_watchlist_builder_ranks_and_persists_entries(tmp_path: Path) -> None:
         db_path=db_path,
         filings_lookback_hours=48,
         watchlist_limit=10,
+        live_market_provider="disabled",
     )
     builder = WatchlistBuilder(
         settings,
@@ -231,6 +246,97 @@ def test_watchlist_builder_adds_live_market_context_symbols(monkeypatch, tmp_pat
     assert persisted_live["market_context_score"] > 0
 
 
+def test_watchlist_builder_uses_point_in_time_universe_and_cutoff(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    older = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=1,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="test_fixture",
+    )
+    newer = create_snapshot_run(db_path, source="latest", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        older.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="OLDR",
+                company_name="Older Corp",
+                exchange="Q",
+                price=1.1,
+                market_cap=75_000_000,
+                float_shares=6_000_000,
+                sector="Biotech",
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+        ],
+    )
+    insert_universe_candidates(
+        db_path,
+        newer.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="NEWR",
+                company_name="Newer Corp",
+                exchange="Q",
+                price=1.2,
+                market_cap=85_000_000,
+                float_shares=7_000_000,
+                sector="Biotech",
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+        ],
+    )
+
+    class RecordingFilingScanner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[list[str], int | None, datetime | None]] = []
+
+        def scan_symbols(self, symbols, lookback_hours=None, filed_at_cutoff=None):
+            self.calls.append((list(symbols), lookback_hours, filed_at_cutoff))
+            return [
+                FilingMatch(
+                    symbol="OLDR",
+                    cik="0000123456",
+                    form="8-K",
+                    filing_date="2026-04-10",
+                    accession_number="0000123456-26-000003",
+                    filing_url="https://example.test/oldr.htm",
+                    summary="8-K | point-in-time catalyst",
+                    matched_keywords=["merger"],
+                )
+            ]
+
+    filing_scanner = RecordingFilingScanner()
+    settings = AppSettings(
+        db_path=db_path,
+        filings_lookback_hours=48,
+        watchlist_limit=10,
+        live_market_provider="disabled",
+    )
+    builder = WatchlistBuilder(
+        settings,
+        filing_scanner=filing_scanner,
+        setup_scanner=FakeSetupScanner(),
+    )
+
+    entries, _, _ = builder.build(market_date="2026-04-10")
+
+    assert [entry.symbol for entry in entries] == ["OLDR"]
+    assert filing_scanner.calls == [
+        (
+            ["OLDR"],
+            48,
+            datetime(2026, 4, 10, 8, 0, tzinfo=EASTERN),
+        )
+    ]
+
+
 def test_watchlist_builder_reuses_recent_market_leaders_when_live_feed_is_missing(
     tmp_path: Path,
 ) -> None:
@@ -313,3 +419,66 @@ def test_watchlist_builder_reuses_recent_market_leaders_when_live_feed_is_missin
     assert movr_entry.market_context_score > 0
     assert "recent_pct_leader" in movr_entry.reasons
     assert "recent_trade_quality" in movr_entry.reasons
+
+
+def test_watchlist_builder_skips_warrant_live_symbol_before_metadata_lookup(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="ABCD",
+                company_name="ABCD Corp",
+                exchange="Q",
+                price=1.2,
+                market_cap=80_000_000,
+                float_shares=6_000_000,
+                sector="Biotech",
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+        ],
+    )
+
+    class FakeLiveProvider:
+        def is_available(self) -> bool:
+            return True
+
+        def top_gainers(self, limit: int = 20):
+            return [LiveMover(symbol="ACHR.W", source="fake", price=2.1, pct_change=55.0, rank=1)]
+
+        def most_active(self, limit: int = 20):
+            return [LiveMover(symbol="ACHR.W", source="fake", volume=450_000, trade_count=1_200, rank=1)]
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "penny_stock_radar.services.watchlist_builder.build_live_market_provider",
+        lambda settings: FakeLiveProvider(),
+    )
+
+    metadata_provider = RecordingMetadataProvider({})
+    settings = AppSettings(
+        db_path=db_path,
+        filings_lookback_hours=48,
+        watchlist_limit=10,
+    )
+    builder = WatchlistBuilder(
+        settings,
+        filing_scanner=FakeFilingScanner(),
+        setup_scanner=FakeSetupScanner(),
+        listing_provider=FakeListingProvider([]),
+        metadata_provider=metadata_provider,
+    )
+
+    entries, _, _ = builder.build(limit=10, lookback_hours=48)
+
+    assert "ACHR.W" not in metadata_provider.requests
+    assert all(entry.symbol != "ACHR.W" for entry in entries)

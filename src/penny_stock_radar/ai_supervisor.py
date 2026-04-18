@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, time as datetime_time, timezone
 import hashlib
 import json
 import logging
@@ -11,6 +11,7 @@ from string import Template
 import subprocess
 import time
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -18,7 +19,8 @@ from .config import AppSettings
 from .db import fetch_active_paper_trading_run, fetch_paper_positions, fetch_scan_selection
 from .runtime_scripts import full_refresh_command, full_refresh_command_label
 from .services.market_activity import MarketActivityScanner
-from .services.paper_trading import PaperTradingCoordinator, PaperTradingEngine
+from .services.paper_coordinator import PaperTradingCoordinator
+from .services.paper_trading import PaperTradingEngine
 from .services.report_builder import ReportBuilder
 from .services.trade_plan import TradePlanService
 from .snapshot_dashboard import build_snapshot_dashboard
@@ -55,6 +57,7 @@ DEFAULT_AUTOMATION_STATUS_PATH = Path("automation/state/automation_status.json")
 DEFAULT_AI_SUPERVISOR_STATE_PATH = Path("automation/state/ai_supervisor_state.json")
 SUPERVISOR_LOG_MAX_BYTES = 512 * 1024
 SUPERVISOR_LOG_BACKUP_COUNT = 5
+EASTERN = ZoneInfo("America/New_York")
 
 
 def default_automation_status_path(project_root: Path | None = None) -> Path:
@@ -265,6 +268,10 @@ class AISupervisor:
             missing_scan_result = self._fail_if_no_complete_scan(context)
             if missing_scan_result is not None:
                 return missing_scan_result
+
+            noop_result = self._return_noop_if_outputs_are_fresh(context, needs_refresh=needs_refresh)
+            if noop_result is not None:
+                return noop_result
 
             live_phase, live_activity, live_scan_written, base_status = self._run_live_scan(
                 context
@@ -477,6 +484,57 @@ class AISupervisor:
 
         context.actions.append(f"live_market_scan:{live_phase}")
         return live_phase, scan_result.activity, True, base_status
+
+    def _return_noop_if_outputs_are_fresh(
+        self,
+        context: _SupervisorRunContext,
+        *,
+        needs_refresh: bool,
+    ) -> AISupervisorResult | None:
+        if needs_refresh:
+            return None
+        if not self.snapshot_output.exists():
+            return None
+        if self._snapshot_needs_export():
+            return None
+        if self.reviewer is not None:
+            return None
+        if not self.review_output.exists():
+            return None
+
+        live_phase = self._market_phase_now()
+        automation_status = "closed_market" if live_phase not in {"premarket", "regular"} else "ok"
+        return self._finalize_result(
+            ok=True,
+            actions=["noop"],
+            scan_status=context.after,
+            review_written=False,
+            snapshot_written=False,
+            review_fingerprint=None,
+            automation_status=automation_status,
+            last_refresh_action=context.last_refresh_action,
+            last_error=None,
+            degraded_reason=None,
+            message=(
+                f"AI supervisor skipped refresh with fresh outputs "
+                f"scan_id={context.after['scan_id'] or '-'} age_minutes="
+                f"{_format_optional_float(context.after['age_minutes'])}"
+            ),
+            log_method="info",
+        )
+
+    def _market_phase_now(self) -> str:
+        current = self.now_fn().astimezone(EASTERN)
+        if current.weekday() >= 5:
+            return "closed"
+        session_time = current.timetz().replace(tzinfo=None)
+        if datetime_time(4, 0) <= session_time < datetime_time(9, 30):
+            return "premarket"
+        if datetime_time(9, 30) <= session_time < datetime_time(16, 0):
+            return "regular"
+        if datetime_time(16, 0) <= session_time < datetime_time(20, 0):
+            return "afterhours"
+        return "closed"
 
     def _update_review(self, context: _SupervisorRunContext) -> None:
         payload = ReportBuilder().build_payload(self.settings.database_path, limit=10)

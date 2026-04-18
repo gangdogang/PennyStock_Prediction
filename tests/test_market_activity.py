@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 
 from penny_stock_radar.config import AppSettings
@@ -65,7 +66,20 @@ class _FakeProvider:
         ]
 
 
-def _snapshot(symbol: str, price: float, prev_close: float, volume: int) -> LiveSnapshot:
+def _snapshot(
+    symbol: str,
+    price: float,
+    prev_close: float,
+    volume: int,
+    *,
+    bid_price: float | None = None,
+    ask_price: float | None = None,
+    trade_timestamp: datetime | None = None,
+    quote_timestamp: datetime | None = None,
+    market_status: str | None = "open",
+) -> LiveSnapshot:
+    trade_timestamp = trade_timestamp or datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc)
+    quote_timestamp = quote_timestamp or datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc)
     return LiveSnapshot(
         symbol=symbol,
         source="fake",
@@ -73,19 +87,20 @@ def _snapshot(symbol: str, price: float, prev_close: float, volume: int) -> Live
             symbol=symbol,
             price=price,
             size=1000,
-            timestamp=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+            timestamp=trade_timestamp,
             source="fake",
         ),
         latest_quote=LiveQuote(
             symbol=symbol,
-            bid_price=price - 0.01,
-            ask_price=price + 0.01,
+            bid_price=bid_price if bid_price is not None else price - 0.01,
+            ask_price=ask_price if ask_price is not None else price + 0.01,
             bid_size=100,
             ask_size=100,
-            timestamp=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+            timestamp=quote_timestamp,
             source="fake",
         ),
-        updated_at=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+        market_status=market_status,
+        updated_at=trade_timestamp,
         raw={
             "ticker": {
                 "prevDay": {"c": prev_close},
@@ -209,6 +224,356 @@ def test_market_activity_scan_persists_rankings_and_prediction_csv(
     csv_text = output_csv.read_text(encoding="utf-8")
     assert "matched_both" in csv_text
     assert "unpredicted_leader" in csv_text
+
+
+def test_market_activity_scan_emits_observability_metrics_jsonl(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(
+            {"AAA": _snapshot("AAA", price=1.40, prev_close=1.00, volume=300_000)}
+        ),
+    )
+
+    metrics_path = tmp_path / "live_metrics.jsonl"
+    settings = AppSettings(
+        db_path=db_path,
+        use_mock_market_data=False,
+        live_market_provider="kis",
+        live_observability_enabled=True,
+        live_observability_path=metrics_path,
+    )
+    scanner = MarketActivityScanner(settings)
+
+    scanner.scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=1,
+    )
+
+    records = [
+        json.loads(line)
+        for line in metrics_path.read_text(encoding="utf-8").splitlines()
+    ]
+    quote_records = [record for record in records if record["metric_type"] == "quote_observation"]
+    scan_records = [record for record in records if record["metric_type"] == "scan_summary"]
+
+    assert len(quote_records) == 1
+    assert quote_records[0]["symbol"] == "AAA"
+    assert quote_records[0]["spread_pct"] is not None
+    assert quote_records[0]["data_age_seconds"] is not None
+    assert quote_records[0]["market_phase"] == "premarket"
+
+    assert len(scan_records) == 1
+    assert scan_records[0]["provider"] == "fake"
+    assert scan_records[0]["scanned_symbol_count"] == 1
+    assert scan_records[0]["decision_counts"]
+
+
+def test_market_activity_invalid_quote_is_not_treated_as_live_quote(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(
+            {
+                "AAA": _snapshot(
+                    "AAA",
+                    price=1.40,
+                    prev_close=1.00,
+                    volume=300_000,
+                    bid_price=2.00,
+                    ask_price=1.00,
+                )
+            }
+        ),
+    )
+
+    result = MarketActivityScanner(AppSettings(db_path=db_path)).scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=2,
+    )
+
+    row = next(item for item in result.activity if item.symbol == "AAA")
+    assert row.has_live_quote is False
+    assert row.spread_pct is None
+
+
+def test_market_activity_uses_oldest_valid_component_timestamp_and_skips_halted_symbols(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=2)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+            UniverseCandidate(
+                symbol="BBB",
+                company_name="BBB Corp",
+                exchange="Q",
+                price=1.2,
+                passed_filters=True,
+                filter_reasons=[],
+            ),
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            ),
+            WatchlistEntry(
+                symbol="BBB",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.0,
+                reasons=["seed"],
+            ),
+        ],
+    )
+    stale_quote_at = datetime(2026, 3, 24, 11, 55, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(
+            {
+                "AAA": _snapshot(
+                    "AAA",
+                    price=1.40,
+                    prev_close=1.00,
+                    volume=300_000,
+                    trade_timestamp=datetime(2026, 3, 24, 12, 0, tzinfo=timezone.utc),
+                    quote_timestamp=stale_quote_at,
+                ),
+                "BBB": _snapshot(
+                    "BBB",
+                    price=1.50,
+                    prev_close=1.00,
+                    volume=400_000,
+                    market_status="LULD Pause",
+                ),
+            }
+        ),
+    )
+
+    result = MarketActivityScanner(AppSettings(db_path=db_path)).scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=2,
+    )
+
+    by_symbol = {row.symbol: row for row in result.activity}
+    assert by_symbol["AAA"].market_data_at == stale_quote_at
+    assert "BBB" not in by_symbol
+
+
+def test_market_activity_scan_includes_extra_symbols_for_open_positions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(
+            {
+                "AAA": _snapshot("AAA", price=1.40, prev_close=1.00, volume=300_000),
+                "HOLD": _snapshot("HOLD", price=1.15, prev_close=1.00, volume=180_000),
+            }
+        ),
+    )
+
+    result = MarketActivityScanner(AppSettings(db_path=db_path)).scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=2,
+        extra_symbols=("HOLD",),
+    )
+
+    assert result.scanned_symbol_count == 2
+    assert {row.symbol for row in result.activity} == {"AAA", "HOLD"}
+
+
+def test_market_activity_keeps_halted_extra_symbol_visible_for_open_position_handling(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol="AAA",
+                company_name="AAA Corp",
+                exchange="Q",
+                price=1.1,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.5,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=1.0,
+                low_float_bonus=1.5,
+                reasons=["seed"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "penny_stock_radar.services.market_activity.build_live_market_provider",
+        lambda settings: _FakeProvider(
+            {
+                "AAA": _snapshot("AAA", price=1.40, prev_close=1.00, volume=300_000),
+                "HOLD": _snapshot(
+                    "HOLD",
+                    price=1.15,
+                    prev_close=1.00,
+                    volume=180_000,
+                    market_status="LULD Pause",
+                ),
+            }
+        ),
+    )
+
+    result = MarketActivityScanner(AppSettings(db_path=db_path)).scan(
+        phase="premarket",
+        scan_limit=10,
+        top_limit=2,
+        extra_symbols=("HOLD",),
+    )
+
+    hold = next(row for row in result.activity if row.symbol == "HOLD")
+    assert hold.analysis_label == "SKIP"
+    assert hold.market_status == "LULD Pause"
 
 
 def test_market_activity_respects_watchlist_limit_for_predicted_symbols(

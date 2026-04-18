@@ -8,7 +8,16 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from ..db import fetch_scan_selection
+from ..db import (
+    fetch_latest_paper_strategy_runs,
+    fetch_latest_paper_trading_run,
+    fetch_paper_orders,
+    fetch_paper_positions,
+    fetch_paper_run_snapshots,
+    fetch_scan_selection,
+)
+from ..services.paper_reporting import paper_report_paths
+from ..services.paper_trading import PREDICTOR_WEIGHTED_BUCKET, PRIMARY_PAPER_STRATEGY
 
 
 def _connect(database_path: Path) -> sqlite3.Connection:
@@ -26,6 +35,21 @@ def _read_table(database_path: Path, query: str, params: tuple[Any, ...] = ()) -
         except Exception:
             return pd.DataFrame()
     return frame
+
+
+def _read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _frame_from_models(rows: list[Any]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame([row.model_dump(mode="json") for row in rows if row is not None])
 
 
 @st.cache_data(show_spinner=False, ttl=10)
@@ -137,20 +161,12 @@ def load_replay_report(database_path: Path) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False, ttl=5)
 def load_latest_paper_run(database_path: Path) -> pd.DataFrame:
-    return _decode_json_columns(
-        _read_table(
-            database_path,
-            """
-            SELECT *
-            FROM paper_runs
-            ORDER BY
-                CASE strategy_name WHEN 'auto_paper_v1' THEN 0 ELSE 1 END,
-                updated_at DESC
-            LIMIT 1
-            """,
-        ),
-        ["notes"],
+    run = fetch_latest_paper_trading_run(
+        database_path,
+        PRIMARY_PAPER_STRATEGY,
+        bucket=PREDICTOR_WEIGHTED_BUCKET,
     )
+    return _frame_from_models([run] if run is not None else [])
 
 
 def _load_latest_paper_run_id(database_path: Path) -> str | None:
@@ -165,20 +181,14 @@ def load_paper_positions(database_path: Path) -> pd.DataFrame:
     run_id = _load_latest_paper_run_id(database_path)
     if run_id is None:
         return pd.DataFrame()
-    frame = _read_table(
-        database_path,
-        """
-        SELECT *
-        FROM paper_positions
-        WHERE run_id = ?
-        ORDER BY
-            CASE status WHEN 'OPEN' THEN 0 ELSE 1 END,
-            updated_at DESC,
-            symbol ASC
-        """,
-        (run_id,),
-    )
-    return _decode_json_columns(frame, ["entry_reasons", "exit_reasons"])
+    frame = _frame_from_models(fetch_paper_positions(database_path, run_id))
+    if frame.empty:
+        return frame
+    status_order = frame.get("status", pd.Series(index=frame.index, dtype=object)).map({"OPEN": 0}).fillna(1)
+    updated_order = pd.to_datetime(frame.get("updated_at"), errors="coerce")
+    frame = frame.assign(_status_order=status_order, _updated_order=updated_order)
+    frame = frame.sort_values(["_status_order", "_updated_order", "symbol"], ascending=[True, False, True])
+    return frame.drop(columns=["_status_order", "_updated_order"])
 
 
 @st.cache_data(show_spinner=False, ttl=5)
@@ -186,17 +196,13 @@ def load_paper_orders(database_path: Path) -> pd.DataFrame:
     run_id = _load_latest_paper_run_id(database_path)
     if run_id is None:
         return pd.DataFrame()
-    frame = _read_table(
-        database_path,
-        """
-        SELECT *
-        FROM paper_orders
-        WHERE run_id = ?
-        ORDER BY created_at DESC, id DESC
-        """,
-        (run_id,),
-    )
-    return _decode_json_columns(frame, ["reasons"])
+    frame = _frame_from_models(fetch_paper_orders(database_path, run_id))
+    if frame.empty:
+        return frame
+    created_order = pd.to_datetime(frame.get("created_at"), errors="coerce")
+    frame = frame.assign(_created_order=created_order)
+    frame = frame.sort_values(["_created_order", "order_id"], ascending=[False, False])
+    return frame.drop(columns=["_created_order"])
 
 
 @st.cache_data(show_spinner=False, ttl=5)
@@ -204,34 +210,32 @@ def load_paper_snapshots(database_path: Path) -> pd.DataFrame:
     run_id = _load_latest_paper_run_id(database_path)
     if run_id is None:
         return pd.DataFrame()
-    frame = _read_table(
-        database_path,
-        """
-        SELECT *
-        FROM paper_run_snapshots
-        WHERE run_id = ?
-        ORDER BY created_at ASC, id ASC
-        """,
-        (run_id,),
-    )
-    return _decode_json_columns(frame, ["notes"])
+    return _frame_from_models(fetch_paper_run_snapshots(database_path, run_id))
 
 
 @st.cache_data(show_spinner=False, ttl=5)
 def load_paper_strategy_runs(database_path: Path) -> pd.DataFrame:
-    frame = _read_table(
-        database_path,
-        """
-        SELECT *
-        FROM paper_runs
-        ORDER BY strategy_name ASC, updated_at DESC
-        """,
-    )
-    if frame.empty:
-        return frame
-    frame = frame.drop_duplicates(subset=["strategy_name"], keep="first")
-    frame = frame.sort_values(["updated_at", "strategy_name"], ascending=[False, True])
-    return _decode_json_columns(frame, ["notes"])
+    return _frame_from_models(fetch_latest_paper_strategy_runs(database_path, limit=10))
+
+
+@st.cache_data(show_spinner=False, ttl=5)
+def load_paper_backtest_kpis(export_dir: Path) -> pd.DataFrame:
+    return _read_csv(paper_report_paths(export_dir).backtest_kpis)
+
+
+@st.cache_data(show_spinner=False, ttl=5)
+def load_paper_regime_split(export_dir: Path) -> pd.DataFrame:
+    return _read_csv(paper_report_paths(export_dir).regime_split)
+
+
+@st.cache_data(show_spinner=False, ttl=5)
+def load_paper_predictor_kpis(export_dir: Path) -> pd.DataFrame:
+    return _read_csv(paper_report_paths(export_dir).predictor_kpis)
+
+
+@st.cache_data(show_spinner=False, ttl=5)
+def load_paper_execution_quality(export_dir: Path) -> pd.DataFrame:
+    return _read_csv(paper_report_paths(export_dir).execution_quality)
 
 
 @st.cache_data(show_spinner=False, ttl=10)

@@ -1,0 +1,57 @@
+[
+  {
+    "market_phase": "regular",
+    "action": "SELL",
+    "intent": "EXIT",
+    "symbol": "OLD",
+    "quantity": 100,
+    "requested_quantity": 100,
+    "remaining_quantity": 0,
+    "fill_status": "FILLED",
+    "price": 0.95,
+    "notional": 95.0,
+    "transaction_cost": 1.0,
+    "strategy_bucket": "starter",
+    "planned_stop_price": 0.95,
+    "planned_risk_pct": 5.0,
+    "fill_reference_price": 0.95,
+    "fill_slippage_pct": 2.1052631579,
+    "watchlist_rank_at_entry": 1,
+    "reasons": [
+      "loser_replacement",
+      "replacement_edge:100.0",
+      "replacement_target:NEW"
+    ],
+    "realized_pnl": -6.0,
+    "realized_pnl_pct": -5.0
+  },
+  {
+    "market_phase": "regular",
+    "action": "BUY",
+    "intent": "ENTRY",
+    "symbol": "NEW",
+    "quantity": 446,
+    "requested_quantity": 446,
+    "remaining_quantity": 0,
+    "fill_status": "FILLED",
+    "price": 1.11,
+    "notional": 495.06,
+    "transaction_cost": 1.0,
+    "strategy_bucket": "starter",
+    "planned_stop_price": 1.0545,
+    "planned_risk_pct": 5.0,
+    "fill_reference_price": 1.11,
+    "fill_slippage_pct": 1.8018018018,
+    "watchlist_rank_at_entry": 1,
+    "reasons": [
+      "multiday_starter",
+      "starter_stage:starter",
+      "starter_score:100.0",
+      "opened_market_date:2026-04-19",
+      "watchlist_predicted",
+      "live_dollar_volume_strong"
+    ],
+    "realized_pnl": null,
+    "realized_pnl_pct": null
+  }
+]
