@@ -1,0 +1,57 @@
+[
+  {
+    "market_phase": "premarket",
+    "action": "BUY",
+    "intent": "ENTRY",
+    "symbol": "AAA",
+    "quantity": 493,
+    "requested_quantity": 493,
+    "remaining_quantity": 0,
+    "fill_status": "FILLED",
+    "price": 1.01,
+    "notional": 497.93,
+    "transaction_cost": 1.0,
+    "strategy_bucket": "starter",
+    "planned_stop_price": 0.9595,
+    "planned_risk_pct": 5.0,
+    "fill_reference_price": 1.01,
+    "fill_slippage_pct": 2.9702970297,
+    "watchlist_rank_at_entry": 1,
+    "reasons": [
+      "multiday_starter",
+      "starter_stage:starter",
+      "starter_score:100.0",
+      "opened_market_date:2026-04-18",
+      "watchlist_predicted",
+      "live_dollar_volume_strong"
+    ],
+    "realized_pnl": null,
+    "realized_pnl_pct": null
+  },
+  {
+    "market_phase": "afterhours",
+    "action": "SELL",
+    "intent": "EXIT",
+    "symbol": "AAA",
+    "quantity": 493,
+    "requested_quantity": 493,
+    "remaining_quantity": 0,
+    "fill_status": "FILLED",
+    "price": 0.97,
+    "notional": 478.21,
+    "transaction_cost": 1.0,
+    "strategy_bucket": "starter",
+    "planned_stop_price": 0.9614269777,
+    "planned_risk_pct": 5.0,
+    "fill_reference_price": 0.97,
+    "fill_slippage_pct": null,
+    "watchlist_rank_at_entry": 1,
+    "reasons": [
+      "overnight_hold_rejected",
+      "overnight_hold_score:32.0",
+      "hold_days:1"
+    ],
+    "realized_pnl": -21.72,
+    "realized_pnl_pct": -4.1528871786
+  }
+]

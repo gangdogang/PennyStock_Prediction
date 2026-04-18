@@ -1,0 +1,294 @@
+# 백테스팅 로드맵
+
+이 문서는 유의미한 백테스팅 실행 전까지 완료해야 할 작업을 단계별로 정리한 것이다.
+
+**에이전트 지침**: 이 문서를 기반으로 작업할 때 가용할 수 있는 최대한 많은 에이전트를 가용해라.
+
+LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스팅 결과가 검증된 이후에 시작한다.
+
+## 전제 — 1개월은 "검증"이 아니다
+
+- 페니스탁 모멘텀 전략에서 1개월 백테스트는 버킷당 ~20-60 거래 수준이다.
+- 통계적으로 predictor의 edge를 의미있게 판단하기에 부족하고, 단일 장세(regime)에만 노출된다.
+- 따라서 1개월은 **sanity check** 로만 취급하고, 실매매 전환 판단에는 **최소 3개월**, 가능하면 **walk-forward / rolling** 평가를 사용한다.
+- 파라미터 튜닝 구간과 검증 구간은 반드시 분리(out-of-sample)한다.
+
+---
+
+## Step 0 — 백테스트 데이터 인프라
+
+**목표**: 백테스트 결과가 "garbage-in"이 되지 않도록 데이터 기반을 먼저 고정한다. 이 단계가 미완이면 Step 4 현실화는 의미를 잃는다.
+
+### 해야 할 것
+
+- **Point-in-time universe snapshot**
+  - 오늘의 티커 universe 로 과거를 돌리면 퇴출/역분할/합병 종목이 빠져 survivorship bias 가 생긴다.
+  - 각 백테스트 날짜 D 에 대해 "D일 기준으로 상장돼 있던 티커" 스냅샷을 저장하고 재현할 수 있어야 한다.
+  - KIS master / listings provider 에서 과거 스냅샷을 tag 하고 DB 에 저장하는 경로를 만든다.
+- **SEC 공시 look-ahead 차단**
+  - `filing_summary` / watchlist 입력은 백테스트 날짜 D 프리장 cutoff (기본 08:00 ET) 이전에 `filed_at` 이 있는 공시만 사용해야 한다.
+  - 현재 `watchlist_builder` 가 latest 기준으로 끌어오는 경로가 있다면 백테스트 모드에서는 `filed_at <= D 08:00 ET` 필터를 강제한다.
+- **Historical L1 quote / minute bar**
+  - Step 4 의 bid/ask 체결 모델을 돌리려면 과거 L1 quote 또는 최소한 minute OHLC + spread 가 필요하다.
+  - 이 저장소의 기준 데이터 소스는 `KIS` 로 고정한다. Step 0 구현은 KIS historical/minute 경로를 우선하고, 다른 provider 확장은 우선순위 밖으로 둔다.
+  - 현재 저장소에는 `psradar backfill-kis-minute`, `psradar capture-kis-l1`, `psradar report-backtest-coverage` 경로가 추가되었다. 다음 단계는 이 경로로 실제 coverage 를 채워 60% 기준을 검증하는 것이다.
+  - 커버리지 60% 미만이면 전략 백테스트 이전에 소스 보강이 우선이다.
+- **Halt / LULD 이벤트 기록**
+  - 페니 종목은 halt 가 잦다. 과거 halt 이벤트(시각, 사유, 재개가)를 수집한다.
+  - 소스가 없으면 최소한 minute bar gap + 거래량 0 구간으로 halt 를 추정하는 fallback 을 둔다.
+
+### Exit Criteria
+
+- [ ] 임의의 과거 날짜 D 에 대해 "D일 기준 universe / 공시 / L1 quote"가 재현 가능
+- [ ] 현재 universe 만으로 돌린 결과와 point-in-time universe 결과의 차이 리포트 1건 확보
+- [ ] L1 quote 커버리지 리포트 (대상 티커 % / 시간대 %)
+
+---
+
+## Step 1 — 예측기 분리 (신규 서비스 추가)
+
+**목표**: 프리마켓 스코어링을 주문 로직과 독립된 재사용 서비스로 분리한다. **기존 `MultidayTradingEngine` 을 삭제하거나 이름을 바꾸지 않는다.** 이미 구현된 starter/add/replacement/exit 규칙은 보존한다.
+
+### 해야 할 것
+
+- 신규 모듈 `services/premkt_predictor.py` 에 `PremktPredictor` 클래스를 추가한다.
+- 기존 엔진의 주문 로직에 손대지 않고, 스코어링에만 쓰이던 입력/피처 계산을 추출해 이 서비스가 공유한다.
+- 출력 형태:
+  ```
+  {
+    symbol: str,
+    score: float,                 # 0-100 연속값
+    max_hold_days: int,           # 추천 최대 보유일
+    entry_rationale: str,         # 진입 근거 요약
+    themes: list[str],            # biotech / ai / energy 등
+    filing_summary: str,          # SEC 공시 요약 (filed_at <= cutoff)
+    generated_at: datetime,       # 스냅샷 시각
+  }
+  ```
+- 예측기는 장 시작 전 1회 실행하고, 결과를 DB 테이블(`premkt_predictions`) 또는 일자별 파일로 저장한다.
+- `MultidayTradingEngine` 은 그대로 둔 채 `PremktPredictor` 출력을 참고 입력으로 받을 수 있게 한다 (옵셔널).
+
+### Exit Criteria
+
+- [ ] `PremktPredictor.run()` 이 주문 테이블에 어떤 기록도 남기지 않음
+- [ ] 후보 리스트 + 점수 + 추천 임계일 출력이 DB/파일에 저장됨
+- [ ] 기존 `MultidayTradingEngine` / `IntradayTradingEngine` 동작 회귀 없음 (기존 paper trading 결과 동일)
+- [ ] 예측기 입력에서 `filed_at > cutoff` 공시가 제외됨을 테스트로 확인
+
+---
+
+## Step 2 — 예측기 연결 (연속 가중치)
+
+**목표**: 예측기 결과를 `IntradayTradingEngine` 이 연속 가중치로 소비해 진입 threshold / 포지션 사이즈를 조절한다. 기존의 "후보/비후보 × 강/약 모멘텀" 2×2 매트릭스는 정보 손실이 크므로 연속 가중치로 대체한다.
+
+### 가중치 정의
+
+- `predictor_weight ∈ [0, 1]`: 예측기 점수에서 파생된 값
+  - 점수 ≥ 80 → 1.0
+  - 점수 ≤ 40 → 0.0
+  - 그 사이는 선형 보간
+- 비후보 종목은 `predictor_weight = 0.0` 으로 취급 (진입이 차단되지는 않음)
+
+### 규칙
+
+- **entry threshold 감산**: 모멘텀 점수 threshold 를 `base_threshold - k1 * predictor_weight` 로 낮춤
+- **position size 계수**: `size = base_size * (1 + k2 * predictor_weight)` (단, `max_size` 캡 유지)
+- **k1, k2 는 settings 로 승격**하여 튜닝 가능하게 한다
+- `k1 = k2 = 0` golden 스냅샷은 pre-refactor 기준과 bit-exact 일치해야 한다
+- 테스트 케이스는 직관 확인용으로 4개 코너 케이스(강/약 × 후보/비후보)를 유지하되, 로직은 연속값
+
+### Exit Criteria
+
+- [ ] 예측기 점수가 높은 종목이 비후보 대비 낮은 모멘텀에서도 진입하는 케이스 확인
+- [ ] 비후보 종목이 기존 기준대로 엄격하게 진입되는 것 확인 (regression 없음)
+- [ ] `k1 = k2 = 0` 설정 시 기존 intraday 엔진과 동일 동작 (feature flag off)
+- [ ] 단위 테스트: 4가지 코너 케이스 + 중간값 2개
+
+---
+
+## Step 3 — 버킷 분리 (독립 포트폴리오)
+
+**목표**: 가상 자금을 두 **독립 포트폴리오** 로 나눠 예측기의 실제 기여도를 측정한다. 통계적 해석을 명확히 하기 위해 60/40 분할 대신 **두 개의 병렬 100% 포트폴리오** 를 돌린다 (동일 초기 자본, 동일 기간).
+
+### 구조
+
+```
+포트폴리오 A (predictor_weighted)
+  - Step 2 의 predictor_weight 적용
+  - 초기 자본 = X
+
+포트폴리오 B (momentum_only)
+  - predictor_weight = 0 으로 고정
+  - 초기 자본 = X  (A와 동일)
+
+→ 같은 기간 병렬 실행, 개별 PnL 집계
+→ 버킷 독립은 설정값이 아니라 구조적 불변식으로 강제되어야 한다
+```
+
+### 해야 할 것
+
+- `PaperTradingRun` 에 `bucket: str` 필드 추가 (`"predictor_weighted"` / `"momentum_only"`)
+- 두 포트폴리오를 독립된 cash_balance / positions 로 관리
+- 버킷별 PnL, 거래 수, 승률, 거래별 R 분포를 별도 집계
+- 두 버킷은 완전 독립이므로 같은 종목을 동시에 보유해도 무방
+
+### Exit Criteria
+
+- [ ] 두 버킷이 독립적으로 동작 (하나의 청산이 다른 쪽에 영향 없음)
+- [ ] 버킷별 수익/손실 집계가 대시보드에 표시됨
+- [ ] 백테스팅 종료 후 "포트폴리오 A vs B" 비교 리포트 + 거래 수준 diff 출력 가능
+
+---
+
+## Step 4 — 백테스팅 현실화 (Penny Stock 기준)
+
+**목표**: paper trading 가정을 penny stock 현실에 맞춘다. **Step 0 데이터가 확보된 이후에만** 의미가 있다.
+
+### 세션별 체결 모델 분리
+
+프리장 스프레드는 정규장 대비 3-5배 넓으므로 모델을 세션별로 분리한다.
+
+| 항목 | 현재 | 수정 후 (프리장) | 수정 후 (정규장) |
+|------|------|----------------|----------------|
+| 슬리피지 | 고정 상수 % | 해당 봉 스프레드 × 1.5 | 해당 봉 스프레드 × 1.0 |
+| 진입 가격 | last price | ask 기준 + 추가 틱 | ask 기준 |
+| 청산 가격 | last price | bid 기준 - 추가 틱 | bid 기준 |
+
+### 체결량 cap
+
+- 시총/일거래대금 계층별로 cap 을 차등:
+  - 일거래대금 ≥ $10M: 해당 봉 거래량의 **10%** 이하
+  - 일거래대금 $2M-$10M: **5%** 이하
+  - 일거래대금 < $2M: **2%** 이하
+- 주문이 cap 을 넘으면 남은 잔량은 다음 봉으로 이월 (partial fill 시뮬)
+
+### 할트 처리
+
+- Step 0 에서 수집한 halt 이벤트 구간 동안은 체결 불가
+- 재개 후 첫 프린트 가격으로 체결하되 추가 슬리피지 **스프레드 × 2** 적용
+- halt 시작 시점에 걸려있던 stop order 는 재개가 기준으로 재평가
+
+### 거래 비용
+
+- 라운드트립 수수료 가정: **최소 $1 / 거래 + 0.1% 약정** 또는 프로커별 실제값 승격
+- SEC/TAF 등 미국 주식 부대 수수료 포함
+- 페니 주 특성상 수수료 영향이 크므로 KPI 는 수수료 **차감 후** 값으로 보고
+
+### Exit Criteria
+
+- [ ] 동일 전략 replay 시 수정 전보다 수익률이 낮아지는 것 확인 (현실화 검증)
+- [ ] 거래량 cap 으로 인해 partial fill 이 발생하는 케이스 1건 이상 로그
+- [ ] 스프레드 상위 종목에서 슬리피지가 크게 잡히는 것 확인
+- [ ] 세션별(프리장/정규장) 평균 슬리피지 차이가 리포트에 노출됨
+
+---
+
+## Step 5 — KPI / 리포트 강화
+
+**목표**: 결과를 "전략에 edge 가 있는가"로 판단 가능한 지표를 갖춘다. 페니스탁 특성상 기존 6개 지표만으로는 "한 번의 대박에 의존" 같은 함정을 놓친다.
+
+### 기본 KPI
+
+| 지표 | 의미 |
+|------|------|
+| Win Rate | 수익 거래 비율 |
+| Profit Factor | 총 수익 / 총 손실 |
+| Expectancy (E[R]) | 거래당 기대값 (R 단위) |
+| Max Drawdown | 최대 낙폭 |
+| Sharpe Ratio | 위험 대비 수익 (거래수 부족 시 bootstrap CI 병기) |
+| Avg Hold Days / Minutes | 평균 보유 기간 |
+
+### 페니스탁 특화 KPI
+
+| 지표 | 의미 |
+|------|------|
+| One-winner dependency | 상위 1건 제외 시 총 PnL 변화율 |
+| Stop execution slippage | 계획 stop 대비 실제 체결 편차 (페니에서 edge 를 가장 크게 먹는 항목) |
+| Time-under-water | 신 고점 사이 최대 경과 기간 |
+| Theme concentration | 동일 테마 동시 보유 비율 (상관 위험) |
+| Cost-adjusted return | 수수료/부대비용 차감 후 총 수익 |
+
+### Predictor 전용 지표
+
+| 지표 | 의미 |
+|------|------|
+| Predictor Hit Rate | 후보 중 실제 트리거된 거래의 수익 비율 (분모·분자 정의 문서화) |
+| Predictor edge decay | hold day 1 → 2 → 3 로 갈수록 평균 R 이 어떻게 변하는지 |
+| Candidate survival rate | 후보가 실제 진입까지 이어진 비율 |
+
+### Regime / 분포 분석
+
+- `classify_day_regime` 을 이용해 **trend-day vs chop-day** 로 KPI 분해
+- 거래별 R 분포를 히스토그램으로 출력 (꼬리 리스크 가시화)
+- MDD 는 **Monte Carlo (trade order bootstrap)** 신뢰구간 동반
+
+### 벤치마크
+
+- "프리마켓 gainer top-N 단순 진입" 같은 naive baseline 포트폴리오 1개를 병렬 실행해 모든 비교 리포트에 동반 표시
+- 단독 Sharpe 대신 **benchmark 대비 초과 Sharpe** 를 핵심 지표로
+
+### 출력 형태
+
+- 대시보드 내 "백테스팅 KPI" 섹션
+- 포트폴리오 A / B / baseline 나란히 비교
+- 거래 수준 CSV + regime-split CSV export
+
+### Exit Criteria
+
+- [ ] 위 기본 KPI + 페니 특화 KPI + predictor KPI 모두 리포트 출력
+- [ ] A vs B vs baseline 비교가 한 화면에 보임
+- [ ] Sharpe / MDD 에 bootstrap 또는 Monte Carlo 신뢰구간 동반
+- [ ] regime-split 리포트가 최소 2개 장세(trend/chop)로 분해됨
+
+---
+
+## Step 6 — Shadow 모드 & Out-of-sample 검증
+
+**목표**: 백테스트 결과가 과적합이 아닌지를 확인한다. 이 단계가 통과해야 LIVE_TRADING 전환 판단이 가능하다.
+
+### Out-of-sample 프로토콜
+
+- 백테스트 기간을 **튜닝 구간 / 검증 구간** 으로 분리
+- 파라미터 (k1, k2, threshold, sizing) 은 튜닝 구간에서만 결정
+- 검증 구간은 결정된 파라미터로 단 1회 실행, 결과 고정
+- 가능하면 **walk-forward** (3개월 튜닝 → 1개월 검증 → 슬라이딩)
+
+### Shadow 모드
+
+- `PremktPredictor` 출력을 매일 저장하는 일일 job 을 구성
+- 실매매 연결 없이 forward 2-4주간 예측만 축적
+- Shadow 기간의 predictor hit rate / edge decay 가 백테스트 값과 유사한지 확인
+- 편차가 크면 과적합 또는 데이터 리크 의심 → 실매매 전환 보류
+
+### Exit Criteria
+
+- [ ] 튜닝/검증 구간 분리 문서화, 검증 구간 결과 1건 확보
+- [ ] 최소 2주 이상의 shadow 실행 결과 저장
+- [ ] shadow KPI 와 백테스트 KPI 의 편차 리포트
+
+---
+
+## 전체 순서 요약
+
+```
+Step 0  (데이터 인프라, 모든 후속 단계의 전제)
+  ↓
+Step 1 → Step 2 → Step 3   (구조 작업, 순서 지킬 것)
+  ↓
+Step 4 → Step 5             (품질/측정, Step 3 이후 병렬 가능)
+  ↓
+Step 6                       (out-of-sample + shadow)
+  ↓
+3개월 이상 백테스트 + shadow 검증
+  ↓
+docs/LIVE_TRADING_READINESS_PLAN_KO.md 의 실매매 전환 시작
+```
+
+---
+
+## 문서 운영 규칙
+
+- 각 Step 완료 시 해당 Exit Criteria 를 체크하고 `docs/STATUS.md` 를 갱신한다.
+- 구현이 이 문서와 달라지면 구현보다 이 문서를 먼저 고친다.
+- Step 이 완료되기 전에 다음 Step 을 시작하지 않는다. (단, Step 4/5 는 Step 3 이후 병렬 허용)
+- 1개월 결과만 가지고 실매매 전환 판단을 하지 않는다.

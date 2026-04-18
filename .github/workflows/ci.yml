@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: smoke-quality
+            pytest_args: >-
+              tests/test_regression_golden.py
+              tests/test_config.py
+              tests/test_backtest_data.py
+              tests/test_runtime_scripts.py
+              tests/test_dashboard_launcher.py
+              tests/test_snapshot_dashboard.py
+              tests/test_cli_backtest.py
+              tests/test_cli_automation_status.py
+              tests/test_reporting_integration.py
+            report_coverage_gate: true
+          - name: active-engine
+            pytest_args: >-
+              tests/test_market_activity.py
+              tests/test_trade_plan.py
+              tests/test_paper_trading.py
+              tests/test_multiday_engine.py
+              tests/test_fill_model.py
+              tests/test_engine_split.py
+            report_coverage_gate: false
+          - name: live-runtime
+            pytest_args: >-
+              tests/test_live_market_provider.py
+              tests/test_live_monitor.py
+              tests/test_broker_execution.py
+              tests/test_kis_historical.py
+              tests/test_kis_mock_broker.py
+              tests/test_ai_supervisor.py
+              tests/test_ui_data.py
+              tests/test_ui_app.py
+            report_coverage_gate: false
+          - name: research-data
+            pytest_args: >-
+              tests/test_replay_services.py
+              tests/test_milestone2_services.py
+              tests/test_momentum_advisor.py
+              tests/test_premkt_predictor.py
+              tests/test_filing_scanner.py
+              tests/test_watchlist_builder.py
+              tests/test_listings_provider.py
+              tests/test_pipeline_and_social.py
+              tests/test_cli_watchlist.py
+              tests/test_db_schema.py
+              tests/test_universe_builder.py
+              tests/test_setup_scanner.py
+              tests/test_universe_filters.py
+            report_coverage_gate: false
+    name: ${{ matrix.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev,ui]"
+
+      - name: Run pytest
+        run: python -m pytest -q ${{ matrix.pytest_args }}
+
+      - name: Report coverage gate status
+        if: ${{ matrix.report_coverage_gate }}
+        run: |
+          python -m penny_stock_radar.quality_gates
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          gate_path = Path("automation/state/backtest_coverage_gate_status.json")
+          status = "missing"
+          symbol_pct = "n/a"
+          interval_pct = "n/a"
+          threshold = "60"
+          if gate_path.exists():
+            payload = json.loads(gate_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+              status = str(payload.get("status") or "unknown").strip().lower()
+              symbol_pct = str(payload.get("symbol_coverage_pct") if payload.get("symbol_coverage_pct") is not None else "n/a")
+              interval_pct = str(payload.get("interval_coverage_pct") if payload.get("interval_coverage_pct") is not None else "n/a")
+              threshold_value = payload.get("threshold_pct")
+              if threshold_value is not None:
+                threshold = str(int(threshold_value)) if float(threshold_value).is_integer() else str(threshold_value)
+          summary_line = f"coverage_gate status={status} symbol_pct={symbol_pct} interval_pct={interval_pct} threshold={threshold}"
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+            with open(summary_path, "a", encoding="utf-8") as handle:
+              handle.write(summary_line + "\n")
+          print(summary_line)
+          if status == "failed":
+            print(f"::warning title=Coverage gate status::{summary_line}")
+          PY

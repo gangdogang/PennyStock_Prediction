@@ -18,15 +18,19 @@ echo Opening .env in Notepad...
 echo.
 echo Fill in one of these:
 echo.
+echo PENNY_STOCK_LIVE_MARKET_PROVIDER=kis
+echo PENNY_STOCK_KIS_APP_KEY=
+echo PENNY_STOCK_KIS_APP_SECRET=
+echo PENNY_STOCK_KIS_NASDAQ_MASTER_PATH=./data/kis_master/NASMST.COD
+echo PENNY_STOCK_KIS_NYSE_MASTER_PATH=./data/kis_master/NYSMST.COD
+echo PENNY_STOCK_KIS_AMEX_MASTER_PATH=./data/kis_master/AMSMST.COD
+echo.
+echo or
+echo.
 echo PENNY_STOCK_LIVE_MARKET_PROVIDER=alpaca
 echo PENNY_STOCK_ALPACA_API_KEY=
 echo PENNY_STOCK_ALPACA_SECRET_KEY=
 echo PENNY_STOCK_ALPACA_MARKET_DATA_FEED=iex
-echo.
-echo or
-echo.
-echo PENNY_STOCK_LIVE_MARKET_PROVIDER=polygon
-echo PENNY_STOCK_POLYGON_API_KEY=
 echo.
 echo Optional Gemini review:
 echo PENNY_STOCK_GEMINI_API_KEY=

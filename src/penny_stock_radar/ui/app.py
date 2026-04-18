@@ -17,11 +17,24 @@ if __package__ in {None, ""}:
     from penny_stock_radar.services.market_activity import MarketActivityScanner
     from penny_stock_radar.services.live_monitor import LiveMonitor
     from penny_stock_radar.services.trade_plan import TradePlanService
+    from penny_stock_radar.ui.formatting import (
+        coerce_reason_list as _coerce_reason_list,
+        metric_integer as _metric_integer,
+        metric_number as _metric_number,
+        prepare_display_frame as _prepare_display_frame,
+        translate_label as _translate_label,
+        translate_reason as _translate_reason,
+    )
+    from penny_stock_radar.ui.paper_panel import render_paper_trading_panel
     from penny_stock_radar.ui.data import (
+        load_paper_backtest_kpis,
+        load_paper_execution_quality,
         load_market_activity,
         load_latest_paper_run,
         load_paper_orders,
         load_paper_positions,
+        load_paper_predictor_kpis,
+        load_paper_regime_split,
         load_paper_snapshots,
         load_paper_strategy_runs,
         load_scan_selection_metadata,
@@ -40,11 +53,24 @@ else:
     from ..services.market_activity import MarketActivityScanner
     from ..services.live_monitor import LiveMonitor
     from ..services.trade_plan import TradePlanService
+    from .formatting import (
+        coerce_reason_list as _coerce_reason_list,
+        metric_integer as _metric_integer,
+        metric_number as _metric_number,
+        prepare_display_frame as _prepare_display_frame,
+        translate_label as _translate_label,
+        translate_reason as _translate_reason,
+    )
+    from .paper_panel import render_paper_trading_panel
     from .data import (
+        load_paper_backtest_kpis,
+        load_paper_execution_quality,
         load_market_activity,
         load_latest_paper_run,
         load_paper_orders,
         load_paper_positions,
+        load_paper_predictor_kpis,
+        load_paper_regime_split,
         load_paper_snapshots,
         load_paper_strategy_runs,
         load_scan_selection_metadata,
@@ -156,104 +182,6 @@ def _table_or_empty(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     return frame
 
 
-LABEL_MAP = {
-    "continuation": "지속 상승형",
-    "fade": "상승 실패/Fade",
-    "fakeout": "가짜 돌파",
-    "ENTER": "진입",
-    "WATCH": "관찰",
-    "AVOID": "회피",
-    "OPENING_RANGE_CANDIDATE": "시초 후보",
-    "CONDITIONAL_ENTRY": "조건부 진입",
-    "NEWS_CHECK_FIRST": "재료 확인 전",
-    "WAIT_PULLBACK": "눌림/재돌파 대기",
-    "NO_CHASE": "추격 금지",
-    "matched_both": "예측 적중(상승률+거래량)",
-    "matched_pct": "예측 적중(상승률)",
-    "matched_volume": "예측 적중(거래량)",
-    "predicted_only": "예측만 됨",
-    "unpredicted_leader": "새로 떠오른 리더",
-    "OPEN": "보유 중",
-    "CLOSED": "종료",
-    "ACTIVE": "운용 중",
-    "BUY": "매수",
-    "SELL": "매도",
-    "ENTRY": "신규 진입",
-    "ADD": "불타기",
-    "EXIT": "청산",
-    "SESSION_END": "장 종료 청산",
-}
-
-PAPER_STRATEGY_LABELS = {
-    "auto_paper_v1": "Adaptive",
-    "baseline_pct_leader_v1": "상승률 리더",
-    "baseline_volume_leader_v1": "거래량 리더",
-}
-
-REASON_MAP = {
-    "low_float": "유통주식수가 작음",
-    "volatility_contraction": "변동성이 수렴한 상태",
-    "above_sma20": "20일 이동평균선 위",
-    "formal_catalyst": "공시/재료가 감지됨",
-    "theme_sympathy": "같은 테마 종목이 같이 움직임",
-    "dollar_volume_ok": "프리장 거래대금이 충분함",
-    "trade_count_ok": "체결 수가 충분함",
-    "rvol_ok": "프리장 상대거래량이 강함",
-    "spread_ok": "스프레드가 과도하지 않음",
-    "close_above_pm_vwap": "프리장 VWAP 위에서 마감",
-    "round_level_break": "라운드 가격대를 돌파함",
-    "tape_anomaly": "테이프 이상 신호가 감지됨",
-    "close_above_anchored_vwap": "앵커 VWAP 위를 유지함",
-    "broke_pm_high": "프리장 고점을 돌파함",
-    "opening_range_breakout": "시초 구간 돌파가 나옴",
-    "extension_ok": "과열 이격이 허용 범위 안쪽임",
-    "failed_avwap": "앵커 VWAP 회복에 실패함",
-    "mention_velocity_ok": "언급 속도가 빠르게 증가함",
-    "unique_author_support": "고유 작성자 수가 받쳐줌",
-    "cross_platform_sync": "여러 플랫폼에서 동시에 언급됨",
-    "engagement": "반응 수치가 받쳐줌",
-    "pct_leader": "상승률 상위권",
-    "pct_momentum": "상승률 모멘텀이 유지됨",
-    "pct_fading": "상승률이 꺾이고 있음",
-    "live_dollar_volume_strong": "실시간 거래대금이 매우 강함",
-    "live_dollar_volume_ok": "실시간 거래대금이 기준을 넘김",
-    "spread_wide": "스프레드가 넓어 추격 리스크가 큼",
-    "watchlist_predicted": "프리장 전 watchlist에 이미 있었음",
-    "watchlist_score_strong": "프리장 전 셋업 점수가 높았음",
-    "late_extension": "이미 많이 확장돼 늦을 수 있음",
-    "predicted_watchlist": "프리장 전 예측 종목",
-    "top_pct_change": "실시간 상승률 상위권",
-    "top_volume": "실시간 거래량 상위권",
-    "live_pct_leader": "방금 실시간 상승률 리더로 포착됨",
-    "live_pct_momentum": "실시간 상승률 모멘텀이 감지됨",
-    "live_volume_leader": "방금 실시간 거래량 리더로 포착됨",
-    "live_volume_support": "실시간 거래량 유입이 붙고 있음",
-    "recent_pct_leader": "직전 실시간 스캔에서 상승률 리더였음",
-    "recent_pct_momentum": "직전 실시간 스캔에서 상승률 상위권이었음",
-    "recent_volume_leader": "직전 실시간 스캔에서 거래량 리더였음",
-    "recent_volume_support": "직전 실시간 스캔에서 거래량 유입이 확인됨",
-    "recent_trade_quality": "직전 실시간 판독에서도 매매 후보로 남았음",
-    "recent_unverified_momentum": "직전에도 급등했지만 재료 검증은 미완료였음",
-    "first_pullback_only": "수직 추격 말고 첫 눌림/재돌파에서만 접근",
-    "news_check_required": "뉴스/공시 같은 공개 재료 확인이 먼저 필요함",
-    "context_missing": "프리장 전 예측이나 재료 맥락이 부족함",
-    "wait_for_reclaim": "VWAP 또는 분봉 고점 재회복 전까지 대기",
-    "no_chase": "지금 자리에서 추격 매수는 금지",
-    "top5_live_leader": "지금 상위 5위 리더군 안에 있음",
-    "top5_leader_persistence": "최근 몇 번의 스캔 동안 상위 5위권을 유지함",
-    "leader_persistence_strong": "리더 지위를 꾸준히 유지 중임",
-    "leader_reclaim": "잠깐 밀린 뒤 다시 순위권으로 치고 올라오는 중임",
-    "reclaim_entry_ready": "재돌파/재점화 패턴이 확인돼 재진입 감시 가치가 높음",
-    "pullback_absorption": "눌림에서 매도 물량을 흡수하는 흐름이 보임",
-    "spread_expanding": "스프레드가 벌어져 추격 효율이 악화되고 있음",
-    "trap_warning": "상승 흐름 대비 체결/순위가 약해져 가짜 돌파 위험이 커짐",
-    "stop_loss": "손절 기준에 닿아 청산됨",
-    "trailing_stop": "트레일링 스탑에 닿아 이익 보호 청산됨",
-    "momentum_cooldown": "모멘텀이 식어서 보수적으로 청산함",
-    "session_closed": "장 종료로 포지션을 정리함",
-}
-
-
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
@@ -357,50 +285,6 @@ def _live_empty_message(meta: dict[str, Any], market_phase: str) -> str:
             "미국 동부 04:00-09:30(한국 17:00-22:30) 사이에 `scan-market-activity --phase auto` 또는 실시간 모드가 돌아야 채워집니다."
         )
     return "아직 저장된 정규장 실시간 랭킹이 없습니다. `scan-market-activity --phase regular` 또는 실시간 모드를 실행하면 채워집니다."
-
-
-def _prepare_display_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    result = frame.copy()
-    for column in result.columns:
-        result[column] = result[column].apply(_prettify_cell)
-    return result
-
-
-def _prettify_cell(value: Any) -> Any:
-    if isinstance(value, list):
-        if not value:
-            return "-"
-        return ", ".join(_translate_reason(str(item)) for item in value)
-    if value is None:
-        return "-"
-    if isinstance(value, float) and pd.isna(value):
-        return "-"
-    if isinstance(value, str):
-        if value in LABEL_MAP:
-            return _translate_label(value)
-        if value in REASON_MAP:
-            return _translate_reason(value)
-    return value
-
-
-def _translate_label(value: Any) -> str:
-    if value is None or value == "":
-        return "-"
-    return LABEL_MAP.get(str(value), str(value))
-
-
-def _translate_reason(reason: str) -> str:
-    if not reason:
-        return "-"
-    if reason in REASON_MAP:
-        return REASON_MAP[reason]
-    if ":" in reason:
-        key, suffix = reason.split(":", 1)
-        if key in REASON_MAP:
-            return f"{REASON_MAP[key]} ({suffix})"
-    return reason.replace("_", " ")
 
 
 def _prepare_leaderboard(
@@ -856,14 +740,6 @@ def _render_interpretation_summary(
     st.info("\n\n".join(lines))
 
 
-def _coerce_reason_list(value: Any) -> list[str]:
-    if value is None or value == "" or value == "-":
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value if item]
-    return [part.strip() for part in str(value).split(",") if part.strip()]
-
-
 def _first_row(frame: pd.DataFrame, symbol: str) -> dict[str, Any]:
     if frame.empty or "symbol" not in frame.columns:
         return {}
@@ -871,24 +747,6 @@ def _first_row(frame: pd.DataFrame, symbol: str) -> dict[str, Any]:
     if subset.empty:
         return {}
     return subset.iloc[0].to_dict()
-
-
-def _metric_number(value: Any, precision: int) -> str:
-    if value is None or value == "-" or (isinstance(value, float) and pd.isna(value)):
-        return "-"
-    try:
-        return f"{float(value):.{precision}f}"
-    except Exception:
-        return str(value)
-
-
-def _metric_integer(value: Any) -> str:
-    if value is None or value == "-" or (isinstance(value, float) and pd.isna(value)):
-        return "-"
-    try:
-        return f"{int(float(value)):,}"
-    except Exception:
-        return str(value)
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -1330,7 +1188,7 @@ def _render_live_mode(
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown("<h3 class='section-title'>실시간 모니터</h3>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='small-note'>설정된 Polygon/Alpaca provider에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다. `시장 데이터 시각`은 마지막 실제 체결/스냅샷 시각이라 거래가 없으면 고정될 수 있습니다.</div>",
+        "<div class='small-note'>설정된 live provider(KIS/Alpaca)에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다. `시장 데이터 시각`은 마지막 실제 체결/스냅샷 시각이라 거래가 없으면 고정될 수 있습니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1369,8 +1227,14 @@ def _render_live_mode(
         st.code(
             "\n".join(
                 [
-                    "PENNY_STOCK_LIVE_MARKET_PROVIDER=auto",
-                    "PENNY_STOCK_POLYGON_API_KEY=",
+                    "PENNY_STOCK_LIVE_MARKET_PROVIDER=kis",
+                    "PENNY_STOCK_KIS_APP_KEY=",
+                    "PENNY_STOCK_KIS_APP_SECRET=",
+                    "PENNY_STOCK_KIS_NASDAQ_MASTER_PATH=./data/kis_master/NASMST.COD",
+                    "PENNY_STOCK_KIS_NYSE_MASTER_PATH=./data/kis_master/NYSMST.COD",
+                    "PENNY_STOCK_KIS_AMEX_MASTER_PATH=./data/kis_master/AMSMST.COD",
+                    "",
+                    "PENNY_STOCK_LIVE_MARKET_PROVIDER=alpaca",
                     "PENNY_STOCK_ALPACA_API_KEY=",
                     "PENNY_STOCK_ALPACA_SECRET_KEY=",
                 ]
@@ -1517,200 +1381,22 @@ def _render_paper_trading(
     positions: pd.DataFrame,
     orders: pd.DataFrame,
     snapshots: pd.DataFrame,
+    backtest_kpis: pd.DataFrame,
+    regime_split: pd.DataFrame,
+    predictor_kpis: pd.DataFrame,
+    execution_quality: pd.DataFrame,
 ) -> None:
-    if run_frame.empty:
-        st.info("모의투자 기록이 없습니다. `psradar run-paper-trading` 또는 `psradar paper-trader`를 먼저 실행하세요.")
-        return
-
-    row = run_frame.iloc[0]
-    open_positions = positions[positions["status"] == "OPEN"].copy() if not positions.empty and "status" in positions.columns else pd.DataFrame()
-    closed_positions = positions[positions["status"] == "CLOSED"].copy() if not positions.empty and "status" in positions.columns else pd.DataFrame()
-
-    top = st.columns(6)
-    top[0].metric("상태", _translate_label(row.get("status")))
-    top[1].metric("현금", _metric_number(row.get("cash_balance"), 2))
-    top[2].metric("에쿼티", _metric_number(row.get("equity"), 2))
-    top[3].metric("실현손익", _metric_number(row.get("realized_pnl"), 2))
-    top[4].metric("미실현손익", _metric_number(row.get("unrealized_pnl"), 2))
-    top[5].metric("누적 수익률", _metric_number(row.get("total_return_pct"), 2) + "%")
-
-    bottom = st.columns(6)
-    bottom[0].metric("보유 포지션", len(open_positions))
-    bottom[1].metric("종료 트레이드", _metric_integer(row.get("closed_trade_count")))
-    bottom[2].metric("승률", _metric_number(row.get("win_rate"), 2) + "%")
-    bottom[3].metric("Profit Factor", _metric_number(row.get("profit_factor"), 2))
-    bottom[4].metric("손익비", _metric_number(row.get("reward_risk_ratio"), 2))
-    bottom[5].metric("최대 낙폭", _metric_number(row.get("max_drawdown_pct"), 2) + "%")
-
-    notes = [_paper_note_text(item) for item in _coerce_reason_list(row.get("notes"))]
-    if notes:
-        st.info("\n\n".join(notes[:4]))
-
-    if not positions.empty and "strategy_bucket" in positions.columns:
-        bucket_frame = positions.copy()
-        bucket_frame["strategy_bucket"] = bucket_frame["strategy_bucket"].fillna("").replace("", "unknown")
-        if "day_regime" not in bucket_frame.columns:
-            bucket_frame["day_regime"] = "unknown"
-        else:
-            bucket_frame["day_regime"] = bucket_frame["day_regime"].fillna("unknown")
-        bucket_summary = (
-            bucket_frame.groupby(["strategy_bucket", "day_regime"], dropna=False)
-            .agg(
-                trade_count=("symbol", "count"),
-                total_pnl=("total_pnl", "sum"),
-                average_pnl=("total_pnl", "mean"),
-            )
-            .reset_index()
-            .sort_values(["total_pnl", "trade_count"], ascending=[False, False])
-        )
-        if not bucket_summary.empty:
-            st.markdown("**Bucket Attribution**")
-            st.dataframe(_prepare_display_frame(bucket_summary), use_container_width=True, hide_index=True)
-
-    if not strategy_runs.empty:
-        st.markdown("**전략 비교**")
-        comparison = strategy_runs.copy()
-        comparison["strategy"] = comparison["strategy_name"].map(PAPER_STRATEGY_LABELS).fillna(
-            comparison["strategy_name"]
-        )
-        display = _prepare_display_frame(comparison)
-        preferred = [
-            "strategy",
-            "equity",
-            "total_return_pct",
-            "closed_trade_count",
-            "win_rate",
-            "profit_factor",
-            "reward_risk_ratio",
-            "max_drawdown_pct",
-            "updated_at",
-        ]
-        available = [column for column in preferred if column in display.columns]
-        st.dataframe(display[available], use_container_width=True, hide_index=True)
-
-    chart_left, chart_right = st.columns((1.2, 1.0))
-    with chart_left:
-        st.markdown("**에쿼티 곡선**")
-        if snapshots.empty:
-            st.info("아직 저장된 에쿼티 곡선이 없습니다.")
-        else:
-            chart = snapshots.copy()
-            chart["created_at"] = pd.to_datetime(chart["created_at"], errors="coerce")
-            chart = chart.dropna(subset=["created_at"]).set_index("created_at")
-            cols = [column for column in ["equity", "realized_pnl", "unrealized_pnl"] if column in chart.columns]
-            if cols:
-                st.line_chart(chart[cols])
-            else:
-                st.info("표시할 곡선 데이터가 없습니다.")
-
-    with chart_right:
-        st.markdown("**종목별 손익**")
-        if closed_positions.empty:
-            st.info("아직 종료된 트레이드가 없습니다.")
-        else:
-            pnl_frame = (
-                closed_positions.groupby("symbol", as_index=True)["total_pnl"]
-                .sum()
-                .sort_values(ascending=False)
-                .to_frame()
-            )
-            st.bar_chart(pnl_frame)
-
-    st.divider()
-
-    show_open_only = st.checkbox("보유 포지션만 보기", value=False, key="paper_open_only")
-    positions_frame = open_positions if show_open_only else positions
-    if not positions_frame.empty:
-        positions_display = positions_frame.copy()
-        positions_display["entry_basis"] = positions_display.get("entry_label", "-")
-        display = _prepare_display_frame(positions_display)
-        preferred = [
-            "symbol",
-            "status",
-            "entry_phase",
-            "entry_basis",
-            "quantity",
-            "average_entry_price",
-            "last_price",
-            "market_value",
-            "total_pnl",
-            "stop_price",
-            "entry_reasons",
-            "exit_reasons",
-        ]
-        available = [column for column in preferred if column in display.columns]
-        st.markdown("**포지션 현황**")
-        st.dataframe(display[available], use_container_width=True, hide_index=True)
-    else:
-        st.info("표시할 포지션이 없습니다.")
-
-    order_limit = int(
-        st.slider("주문 로그 개수", min_value=5, max_value=100, value=20, step=5, key="paper_order_limit")
+    render_paper_trading_panel(
+        run_frame=run_frame,
+        strategy_runs=strategy_runs,
+        positions=positions,
+        orders=orders,
+        snapshots=snapshots,
+        backtest_kpis=backtest_kpis,
+        regime_split=regime_split,
+        predictor_kpis=predictor_kpis,
+        execution_quality=execution_quality,
     )
-    if not orders.empty:
-        orders_display = orders.head(order_limit).copy()
-        display = _prepare_display_frame(orders_display)
-        preferred = [
-            "created_at",
-            "symbol",
-            "action",
-            "intent",
-            "market_phase",
-            "quantity",
-            "price",
-            "notional",
-            "analysis_label",
-            "realized_pnl",
-            "realized_pnl_pct",
-            "reasons",
-        ]
-        available = [column for column in preferred if column in display.columns]
-        st.markdown("**최근 주문 로그**")
-        st.dataframe(display[available], use_container_width=True, hide_index=True)
-    else:
-        st.info("저장된 주문 로그가 없습니다.")
-
-    if not snapshots.empty:
-        snapshot_limit = min(len(snapshots), 30)
-        display = _prepare_display_frame(snapshots.tail(snapshot_limit))
-        preferred = [
-            "created_at",
-            "market_phase",
-            "cash_balance",
-            "equity",
-            "realized_pnl",
-            "unrealized_pnl",
-            "total_return_pct",
-            "max_drawdown_pct",
-            "win_rate",
-            "profit_factor",
-            "reward_risk_ratio",
-            "notes",
-        ]
-        available = [column for column in preferred if column in display.columns]
-        st.markdown("**에쿼티 스냅샷 로그**")
-        st.dataframe(display[available], use_container_width=True, hide_index=True)
-
-
-def _paper_note_text(value: str) -> str:
-    if not value:
-        return "-"
-    if value.startswith("focus:"):
-        parts = value.split(":", 3)
-        if len(parts) == 4:
-            _, symbol, label, score = parts
-            return f"`{symbol}`이 현재 집중 후보입니다. 판독은 `{_translate_label(label)}` 이고 점수는 `{score}` 입니다."
-    if value.startswith("entry:"):
-        return f"`{value.split(':', 1)[1]}` 신규 진입이 발생했습니다."
-    if value.startswith("add:"):
-        return f"`{value.split(':', 1)[1]}` 불타기가 발생했습니다."
-    if value.startswith("exit:"):
-        return f"`{value.split(':', 1)[1]}` 포지션이 청산되었습니다."
-    if value.startswith("session_exit:"):
-        return f"`{value.split(':', 1)[1]}` 포지션이 장 종료로 정리되었습니다."
-    if value == "hold":
-        return "이번 루프에서는 신규 체결 없이 기존 포지션만 감시했습니다."
-    return value.replace("_", " ")
 
 
 def _render_trade_plan_panel(result) -> None:
@@ -1845,6 +1531,10 @@ def main() -> None:
     paper_positions = _table_or_empty(load_paper_positions(database_path), ["symbol"])
     paper_orders = _table_or_empty(load_paper_orders(database_path), ["order_id"])
     paper_snapshots = _table_or_empty(load_paper_snapshots(database_path), ["run_id"])
+    paper_backtest_kpis = _table_or_empty(load_paper_backtest_kpis(settings.paper_trade_dir), ["strategy_name"])
+    paper_regime_split = _table_or_empty(load_paper_regime_split(settings.paper_trade_dir), ["strategy_name"])
+    paper_predictor_kpis = _table_or_empty(load_paper_predictor_kpis(settings.paper_trade_dir), ["strategy_name"])
+    paper_execution_quality = _table_or_empty(load_paper_execution_quality(settings.paper_trade_dir), ["strategy_name"])
 
     tabs = st.tabs(
         [
@@ -1888,6 +1578,10 @@ def main() -> None:
             paper_positions,
             paper_orders,
             paper_snapshots,
+            paper_backtest_kpis,
+            paper_regime_split,
+            paper_predictor_kpis,
+            paper_execution_quality,
         )
     with tabs[6]:
         _render_live_mode(

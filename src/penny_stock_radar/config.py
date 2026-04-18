@@ -52,7 +52,28 @@ class AppSettings(BaseSettings):
     market_data_mode: str = "replay"
     live_market_provider: str = "auto"
     live_market_timeout_seconds: float = 10.0
-    polygon_base_url: str = "https://api.polygon.io"
+    live_observability_enabled: bool = True
+    live_observability_path: Path = Path("automation/logs/live_metrics.jsonl")
+    backtest_coverage_report_dir: Path = Path("automation/state/backtest_coverage")
+    backtest_coverage_gate_path: Path = Path("automation/state/backtest_coverage_gate_status.json")
+    backtest_coverage_gate_pct: float = 60.0
+    broker_adapter: str = "null"
+    kis_base_url: str = "https://openapi.koreainvestment.com:9443"
+    kis_mock_base_url: str = "https://openapivts.koreainvestment.com:29443"
+    kis_websocket_url: str = "ws://ops.koreainvestment.com:21000"
+    kis_market_div_code: str = "J"
+    kis_custtype: str = "P"
+    kis_mock_account_number: str | None = None
+    kis_mock_account_product_code: str | None = "01"
+    kis_mock_contact_phone: str = "01000000000"
+    kis_mock_order_server_code: str = "0"
+    kis_mock_order_type: str = "00"
+    kis_mock_balance_exchange_code: str = "NASD"
+    kis_mock_balance_currency_code: str = "USD"
+    kis_mock_inquiry_exchange_code: str = ""
+    kis_nasdaq_master_path: Path = Path("data/kis_master/NASMST.COD")
+    kis_nyse_master_path: Path = Path("data/kis_master/NYSMST.COD")
+    kis_amex_master_path: Path = Path("data/kis_master/AMSMST.COD")
     alpaca_data_base_url: str = "https://data.alpaca.markets"
     alpaca_market_data_feed: str = "iex"
     premarket_min_dollar_volume: float = 100_000.0
@@ -66,6 +87,12 @@ class AppSettings(BaseSettings):
     paper_max_open_positions: int = 3
     paper_entry_size_fraction: float = 0.20
     paper_add_size_fraction: float = 0.10
+    multiday_starter_entry_fraction: float = 0.05
+    multiday_winner_add_fraction: float = 0.04
+    multiday_hold_score_threshold: float = 55.0
+    multiday_day2_survival_threshold: float = 45.0
+    multiday_replacement_min_edge: float = 15.0
+    multiday_max_adds: int = 2
     paper_add_trigger_pct: float = 3.0
     paper_max_adds_per_position: int = 1
     paper_entry_score_min: float = 2.75
@@ -82,6 +109,19 @@ class AppSettings(BaseSettings):
     paper_trailing_stop_pct: float = 3.0
     paper_fill_slippage_pct: float = 0.15
     paper_stop_gap_slippage_pct: float = 0.50
+    paper_premarket_spread_slippage_multiplier: float = 1.50
+    paper_regular_spread_slippage_multiplier: float = 1.00
+    paper_halt_resume_spread_slippage_multiplier: float = 2.00
+    paper_halt_resume_decay_minutes: float = 3.0
+    paper_min_trade_fee: float = 1.0
+    paper_notional_fee_rate_pct: float = 0.10
+    paper_volume_cap_large_dollar_volume: float = 10_000_000.0
+    paper_volume_cap_mid_dollar_volume: float = 2_000_000.0
+    paper_volume_cap_large_pct: float = 10.0
+    paper_volume_cap_mid_pct: float = 5.0
+    paper_volume_cap_small_pct: float = 2.0
+    paper_volume_cap_small_market_cap_threshold: int = 500_000_000
+    paper_volume_cap_small_market_cap_scale: float = 0.5
     paper_ai_consensus_enabled: bool = True
     paper_ai_consensus_limit: int = 3
     paper_ai_refresh_seconds: int = 180
@@ -90,6 +130,20 @@ class AppSettings(BaseSettings):
     paper_ai_escalation_limit: int = 1
     paper_ai_escalation_min_confidence: float = 45.0
     paper_ai_escalation_max_confidence: float = 75.0
+    paper_predictor_weight_k1: float = 0.0
+    paper_predictor_weight_k2: float = 0.0
+    predictor_weight_total_score: float = 11.0
+    predictor_weight_catalyst: float = 8.0
+    predictor_weight_technical: float = 4.0
+    predictor_weight_sympathy: float = 3.0
+    predictor_weight_market_context: float = 4.0
+    predictor_weight_social: float = 2.0
+    predictor_weight_low_float_bonus: float = 3.0
+    predictor_weight_filing_bonus: float = 6.0
+    predictor_weight_multi_theme_bonus: float = 4.0
+    predictor_max_hold_days_tier3_total: float = 6.5
+    predictor_max_hold_days_tier3_catalyst: float = 1.0
+    predictor_max_hold_days_tier2_total: float = 4.5
     trade_plan_per_trade_risk_pct: float = 0.35
     trade_plan_starter_notional_cap_pct: float = 8.0
     trade_plan_add_notional_cap_pct: float = 5.0
@@ -104,7 +158,10 @@ class AppSettings(BaseSettings):
     exclude_rights: bool = True
     exclude_spacs: bool = True
 
-    polygon_api_key: str | None = Field(default=None, repr=False)
+    kis_app_key: str | None = Field(default=None, repr=False)
+    kis_app_secret: str | None = Field(default=None, repr=False)
+    kis_mock_app_key: str | None = Field(default=None, repr=False)
+    kis_mock_app_secret: str | None = Field(default=None, repr=False)
     alpaca_api_key: str | None = Field(default=None, repr=False)
     alpaca_secret_key: str | None = Field(default=None, repr=False)
     reddit_client_id: str | None = Field(default=None, repr=False)
@@ -210,6 +267,7 @@ class AppSettings(BaseSettings):
         "paper_adaptive_time_stop_minutes",
         "trade_plan_stale_data_seconds",
         "trade_plan_halt_suspected_seconds",
+        "paper_volume_cap_small_market_cap_threshold",
     )
     @classmethod
     def _positive_integers(cls, value: int) -> int:
@@ -238,6 +296,18 @@ class AppSettings(BaseSettings):
         "paper_trailing_stop_pct",
         "paper_fill_slippage_pct",
         "paper_stop_gap_slippage_pct",
+        "paper_premarket_spread_slippage_multiplier",
+        "paper_regular_spread_slippage_multiplier",
+        "paper_halt_resume_spread_slippage_multiplier",
+        "paper_halt_resume_decay_minutes",
+        "paper_min_trade_fee",
+        "paper_notional_fee_rate_pct",
+        "paper_volume_cap_large_dollar_volume",
+        "paper_volume_cap_mid_dollar_volume",
+        "paper_volume_cap_large_pct",
+        "paper_volume_cap_mid_pct",
+        "paper_volume_cap_small_pct",
+        "paper_volume_cap_small_market_cap_scale",
         "small_cap_price_max",
         "paper_ai_escalation_min_confidence",
         "paper_ai_escalation_max_confidence",
@@ -246,6 +316,7 @@ class AppSettings(BaseSettings):
         "trade_plan_add_notional_cap_pct",
         "trade_plan_daily_loss_lock_pct",
         "trade_plan_max_concurrent_open_risk_pct",
+        "backtest_coverage_gate_pct",
     )
     @classmethod
     def _positive_floats(cls, value: float) -> float:
@@ -254,8 +325,46 @@ class AppSettings(BaseSettings):
         return value
 
     @field_validator(
+        "paper_predictor_weight_k1",
+        "paper_predictor_weight_k2",
+        "multiday_starter_entry_fraction",
+        "multiday_winner_add_fraction",
+        "multiday_hold_score_threshold",
+        "multiday_day2_survival_threshold",
+        "multiday_replacement_min_edge",
+        "predictor_weight_total_score",
+        "predictor_weight_catalyst",
+        "predictor_weight_technical",
+        "predictor_weight_sympathy",
+        "predictor_weight_market_context",
+        "predictor_weight_social",
+        "predictor_weight_low_float_bonus",
+        "predictor_weight_filing_bonus",
+        "predictor_weight_multi_theme_bonus",
+        "predictor_max_hold_days_tier3_total",
+        "predictor_max_hold_days_tier3_catalyst",
+        "predictor_max_hold_days_tier2_total",
+    )
+    @classmethod
+    def _nonnegative_floats(cls, value: float) -> float:
+        if value < 0:
+            raise ValueError("Expected a non-negative float.")
+        return value
+
+    @field_validator("multiday_max_adds")
+    @classmethod
+    def _nonnegative_integers(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("Expected a non-negative integer.")
+        return value
+
+    @field_validator(
         "market_scope",
         "live_market_provider",
+        "broker_adapter",
+        "kis_base_url",
+        "kis_mock_base_url",
+        "kis_websocket_url",
         "alpaca_market_data_feed",
         "gemini_model",
         "paper_ai_escalation_model",
@@ -276,11 +385,42 @@ class AppSettings(BaseSettings):
             raise ValueError(f"Expected one of {sorted(allowed)}.")
         return normalized
 
+    @field_validator("broker_adapter")
+    @classmethod
+    def _known_broker_adapter(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        allowed = {"null", "kis_mock"}
+        if normalized not in allowed:
+            raise ValueError(f"Expected one of {sorted(allowed)}.")
+        return normalized
+
+    @field_validator("kis_market_div_code")
+    @classmethod
+    def _known_kis_market_div_code(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        allowed = {"J", "US", "NAS", "NYS", "AMS"}
+        if normalized not in allowed:
+            raise ValueError(f"Expected one of {sorted(allowed)}.")
+        return normalized
+
+    @field_validator("kis_custtype")
+    @classmethod
+    def _known_kis_custtype(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        allowed = {"P", "B"}
+        if normalized not in allowed:
+            raise ValueError(f"Expected one of {sorted(allowed)}.")
+        return normalized
+
     def ensure_directories(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.replay_dir.mkdir(parents=True, exist_ok=True)
         self.paper_trade_dir.mkdir(parents=True, exist_ok=True)
+        self.kis_nasdaq_master_path.parent.mkdir(parents=True, exist_ok=True)
+        self.live_observability_path.parent.mkdir(parents=True, exist_ok=True)
+        self.backtest_coverage_report_dir.mkdir(parents=True, exist_ok=True)
+        self.backtest_coverage_gate_path.parent.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

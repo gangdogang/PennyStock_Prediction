@@ -110,3 +110,30 @@ def test_live_monitor_treats_inverted_quotes_as_no_spread(monkeypatch) -> None:
     rows = monitor.fetch(["AAA"], limit=1)
 
     assert rows[0].spread_pct is None
+
+
+def test_live_monitor_uses_oldest_valid_trade_or_quote_timestamp(monkeypatch) -> None:
+    class _StaleQuoteProvider(_FakeProvider):
+        def latest_snapshot(self, symbol: str) -> LiveSnapshot | None:
+            snapshot = super().latest_snapshot(symbol)
+            assert snapshot is not None and snapshot.latest_quote is not None
+            snapshot.latest_trade.timestamp = datetime(2026, 3, 24, 13, 45, tzinfo=timezone.utc)
+            snapshot.latest_quote.timestamp = datetime(2026, 3, 24, 13, 40, tzinfo=timezone.utc)
+            snapshot.updated_at = datetime(2026, 3, 24, 13, 45, tzinfo=timezone.utc)
+            return snapshot
+
+    monkeypatch.setattr(
+        "penny_stock_radar.services.live_monitor.build_live_market_provider",
+        lambda settings: _StaleQuoteProvider(),
+    )
+
+    monitor = LiveMonitor(AppSettings())
+    monkeypatch.setattr(
+        monitor,
+        "_now_utc",
+        lambda: datetime(2026, 3, 24, 13, 46, tzinfo=timezone.utc),
+    )
+    rows = monitor.fetch(["AAA"], limit=1)
+
+    assert rows[0].market_data_at == datetime(2026, 3, 24, 13, 40, tzinfo=timezone.utc)
+    assert rows[0].data_age_seconds == 360.0

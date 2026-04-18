@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from ..config import AppSettings
 from ..db import create_snapshot_run, init_database, insert_universe_candidates
 from ..models import ListingRecord, MetadataRecord, SnapshotRun, UniverseCandidate
-from ..providers.listings import NasdaqTraderListingProvider
+from ..providers.listings import ListingProvider, build_listing_provider
 from ..providers.metadata import YFinanceMetadataProvider
+from ..security_filters import listing_filter_reasons
 from ..universe import filter_universe
 
 
@@ -14,31 +16,44 @@ class UniverseBuilder:
     def __init__(
         self,
         settings: AppSettings,
-        listing_provider: NasdaqTraderListingProvider | None = None,
+        listing_provider: ListingProvider | None = None,
         metadata_provider: YFinanceMetadataProvider | None = None,
     ) -> None:
         self.settings = settings
-        cache_dir = getattr(settings, "cache_dir", Path("data/cache"))
-        self.listing_provider = listing_provider or NasdaqTraderListingProvider(
-            settings.nasdaq_trader_url,
-            cache_path=cache_dir / "nasdaqtraded.txt",
-        )
+        self.listing_provider = listing_provider or build_listing_provider(settings)
         self.metadata_provider = metadata_provider or YFinanceMetadataProvider()
 
-    def run(self, max_symbols: int | None = None) -> tuple[SnapshotRun, list[UniverseCandidate]]:
+    def run(
+        self,
+        max_symbols: int | None = None,
+        *,
+        market_date: date | str | None = None,
+        snapshot_role: str = "live",
+        point_in_time_tag: str | None = None,
+    ) -> tuple[SnapshotRun, list[UniverseCandidate]]:
         init_database(self.settings.database_path)
         seed_limit = max_symbols or self.settings.universe_max_seed_symbols
         listings = self.listing_provider.fetch(limit=seed_limit)
         filtered_listings = [listing for listing in listings if not self._drop_listing(listing)]
+        structurally_rejected: list[UniverseCandidate] = []
+        price_eligible_listings: list[ListingRecord] = []
+        for listing in filtered_listings:
+            reasons = self._structural_filter_reasons(listing)
+            if reasons:
+                structurally_rejected.append(self._candidate_from_listing(listing, reasons))
+                continue
+            price_eligible_listings.append(listing)
 
         price_map = self.metadata_provider.fetch_prices(
-            [listing.symbol for listing in filtered_listings]
+            [listing.symbol for listing in price_eligible_listings]
         )
 
         price_candidates = []
         rejected_by_price = []
-        for listing in filtered_listings:
+        for listing in price_eligible_listings:
             price = price_map.get(listing.symbol)
+            if price is None:
+                price = listing.base_price
             if price is None:
                 rejected_by_price.append(self._candidate_from_listing(listing, ["missing_price"]))
                 continue
@@ -63,11 +78,21 @@ class UniverseBuilder:
         ]
         final_candidates = self._apply_pass_fail(enriched_candidates)
         final_candidates.extend(rejected_by_price)
+        final_candidates.extend(structurally_rejected)
 
         snapshot = create_snapshot_run(
             self.settings.database_path,
-            source="nasdaq_trader+yfinance",
+            source=self._snapshot_source_label(),
             symbol_count=len(final_candidates),
+            market_date=(
+                market_date.isoformat()
+                if isinstance(market_date, date)
+                else str(market_date)
+                if market_date is not None
+                else None
+            ),
+            snapshot_role=snapshot_role,
+            point_in_time_tag=point_in_time_tag,
         )
         insert_universe_candidates(
             self.settings.database_path,
@@ -100,29 +125,13 @@ class UniverseBuilder:
         listing: ListingRecord,
         metadata: MetadataRecord | None,
     ) -> UniverseCandidate:
-        reasons: list[str] = []
+        reasons = self._structural_filter_reasons(listing)
         quote_type = metadata.quote_type if metadata else None
         market_cap = metadata.market_cap if metadata else None
         float_shares = metadata.float_shares if metadata else None
         shares_outstanding = metadata.shares_outstanding if metadata else None
         price = metadata.price if metadata else None
 
-        security_name = listing.company_name.lower()
-        if self.settings.exclude_preferred and "preferred" in security_name:
-            reasons.append("preferred_security")
-        if self.settings.exclude_warrants and any(
-            keyword in security_name for keyword in ("warrant", "warrants")
-        ):
-            reasons.append("warrant_security")
-        if self.settings.exclude_rights and any(
-            keyword in security_name for keyword in (" right", " rights")
-        ):
-            reasons.append("rights_security")
-        if self.settings.exclude_spacs and any(
-            keyword in security_name
-            for keyword in ("acquisition corp", "acquisition corporation", "blank check")
-        ):
-            reasons.append("spac_security")
         if quote_type and quote_type.upper() not in {"EQUITY", "MUTUALFUND"}:
             reasons.append(f"quote_type:{quote_type}")
         if not self.settings.market_cap_in_scope(market_cap):
@@ -207,4 +216,21 @@ class UniverseBuilder:
             price=price,
             passed_filters=False,
             filter_reasons=reasons,
+        )
+
+    def _snapshot_source_label(self) -> str:
+        provider_name = getattr(self.listing_provider, "source_name", "").lower()
+        if provider_name == "kis_master":
+            return "kis_master+yfinance"
+        return "nasdaq_trader+yfinance"
+
+    def _structural_filter_reasons(self, listing: ListingRecord) -> list[str]:
+        return listing_filter_reasons(
+            symbol=listing.symbol,
+            company_name=listing.company_name,
+            exclude_units=bool(getattr(self.settings, "exclude_units", True)),
+            exclude_preferred=self.settings.exclude_preferred,
+            exclude_warrants=self.settings.exclude_warrants,
+            exclude_rights=self.settings.exclude_rights,
+            exclude_spacs=self.settings.exclude_spacs,
         )
