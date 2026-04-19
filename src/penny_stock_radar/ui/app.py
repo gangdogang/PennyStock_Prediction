@@ -1188,7 +1188,7 @@ def _render_live_mode(
     st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown("<h3 class='section-title'>실시간 모니터</h3>", unsafe_allow_html=True)
     st.markdown(
-        "<div class='small-note'>설정된 live provider(KIS/Alpaca)에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다. `시장 데이터 시각`은 마지막 실제 체결/스냅샷 시각이라 거래가 없으면 고정될 수 있습니다.</div>",
+        "<div class='small-note'>설정된 live provider(KIS)에서 최신 trade, quote, snapshot을 주기적으로 다시 조회합니다. `시장 데이터 시각`은 마지막 실제 체결/스냅샷 시각이라 거래가 없으면 고정될 수 있습니다.</div>",
         unsafe_allow_html=True,
     )
 
@@ -1233,10 +1233,6 @@ def _render_live_mode(
                     "PENNY_STOCK_KIS_NASDAQ_MASTER_PATH=./data/kis_master/NASMST.COD",
                     "PENNY_STOCK_KIS_NYSE_MASTER_PATH=./data/kis_master/NYSMST.COD",
                     "PENNY_STOCK_KIS_AMEX_MASTER_PATH=./data/kis_master/AMSMST.COD",
-                    "",
-                    "PENNY_STOCK_LIVE_MARKET_PROVIDER=alpaca",
-                    "PENNY_STOCK_ALPACA_API_KEY=",
-                    "PENNY_STOCK_ALPACA_SECRET_KEY=",
                 ]
             )
         )
