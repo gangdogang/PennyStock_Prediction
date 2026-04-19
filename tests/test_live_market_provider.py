@@ -4,23 +4,19 @@ from datetime import datetime, timezone
 import json
 
 import httpx
+import pytest
 
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.providers.live_market import (
-    AlpacaLiveMarketProvider,
     KISLiveMarketProvider,
     NullLiveMarketProvider,
     build_live_market_provider,
 )
 
 
-def test_build_live_market_provider_falls_back_without_credentials() -> None:
+def test_build_live_market_provider_disabled_returns_null() -> None:
     settings = AppSettings(
-        live_market_provider="auto",
-        alpaca_api_key=None,
-        alpaca_secret_key=None,
-        kis_app_key=None,
-        kis_app_secret=None,
+        live_market_provider="disabled",
     )
 
     provider = build_live_market_provider(settings)
@@ -32,136 +28,27 @@ def test_build_live_market_provider_falls_back_without_credentials() -> None:
     assert provider.latest_snapshot("AAA") is None
 
 
-def test_build_live_market_provider_keeps_auto_priority_ahead_of_kis() -> None:
-    settings = AppSettings(
-        live_market_provider="auto",
-        alpaca_api_key="alpaca-key",
-        alpaca_secret_key="alpaca-secret",
-        kis_app_key="kis-app",
-        kis_app_secret="kis-secret",
-    )
-
-    provider = build_live_market_provider(settings)
-
-    assert isinstance(provider, AlpacaLiveMarketProvider)
-
-
-def test_build_live_market_provider_requires_kis_credentials_in_kis_mode() -> None:
+def test_build_live_market_provider_kis_without_credentials_raises() -> None:
     settings = AppSettings(
         live_market_provider="kis",
         kis_app_key=None,
         kis_app_secret=None,
     )
 
-    provider = build_live_market_provider(settings)
-
-    assert isinstance(provider, NullLiveMarketProvider)
-    assert provider.reason == "KIS API credentials are missing."
+    with pytest.raises(RuntimeError, match="KIS API credentials are required"):
+        build_live_market_provider(settings)
 
 
-def test_alpaca_live_provider_parses_rest_payloads() -> None:
-    requests: list[tuple[str, dict[str, str], httpx.Headers]] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append((request.url.path, dict(request.url.params), request.headers))
-        if request.url.path.endswith("/v2/stocks/AAA/trades/latest"):
-            return httpx.Response(
-                200,
-                json={
-                    "trade": {
-                        "p": 2.34,
-                        "s": 275,
-                        "t": "2026-03-24T00:02:02Z",
-                        "x": "V",
-                    }
-                },
-            )
-        if request.url.path.endswith("/v2/stocks/AAA/quotes/latest"):
-            return httpx.Response(
-                200,
-                json={
-                    "quote": {
-                        "bp": 2.30,
-                        "ap": 2.40,
-                        "bs": 80,
-                        "as": 90,
-                        "t": "2026-03-24T00:02:03Z",
-                    }
-                },
-            )
-        if request.url.path.endswith("/v2/stocks/AAA/snapshot"):
-            return httpx.Response(
-                200,
-                json={
-                    "latestTrade": {
-                        "p": 2.35,
-                        "s": 300,
-                        "t": "2026-03-24T00:02:04Z",
-                    },
-                    "latestQuote": {
-                        "bp": 2.31,
-                        "ap": 2.41,
-                        "bs": 75,
-                        "as": 85,
-                        "t": "2026-03-24T00:02:05Z",
-                    },
-                },
-            )
-        if request.url.path.endswith("/v1beta1/screener/stocks/movers"):
-            return httpx.Response(
-                200,
-                json={
-                    "last_updated": "2026-03-24T00:02:06Z",
-                    "gainers": [
-                        {
-                            "symbol": "AAA",
-                            "price": 2.35,
-                            "percent_change": 17.25,
-                        }
-                    ],
-                },
-            )
-        if request.url.path.endswith("/v1beta1/screener/stocks/most-actives"):
-            return httpx.Response(
-                200,
-                json={
-                    "last_updated": "2026-03-24T00:02:07Z",
-                    "most_actives": [
-                        {
-                            "symbol": "AAA",
-                            "volume": 123456,
-                            "trade_count": 987,
-                        }
-                    ],
-                },
-            )
-        return httpx.Response(404, json={"error": "not found"})
-
-    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://data.alpaca.markets")
-    provider = AlpacaLiveMarketProvider(
-        api_key="alpaca-key",
-        api_secret="alpaca-secret",
-        client=client,
-        feed="sip",
+def test_build_live_market_provider_kis_with_credentials_returns_kis_provider() -> None:
+    settings = AppSettings(
+        live_market_provider="kis",
+        kis_app_key="kis-app",
+        kis_app_secret="kis-secret",
     )
 
-    trade = provider.latest_trade("AAA")
-    quote = provider.latest_quote("AAA")
-    snapshot = provider.latest_snapshot("AAA")
-    gainers = provider.top_gainers(limit=20)
-    actives = provider.most_active(limit=20)
+    provider = build_live_market_provider(settings)
 
-    assert trade is not None and trade.price == 2.34 and trade.source == "alpaca"
-    assert quote is not None and quote.ask_price == 2.40 and quote.bid_size == 80
-    assert snapshot is not None and snapshot.latest_trade is not None
-    assert snapshot.latest_trade.price == 2.35
-    assert snapshot.latest_quote is not None and snapshot.latest_quote.ask_price == 2.41
-    assert gainers and gainers[0].symbol == "AAA" and gainers[0].pct_change == 17.25
-    assert actives and actives[0].symbol == "AAA" and actives[0].volume == 123456
-    assert any(path.endswith("/v2/stocks/AAA/trades/latest") for path, _, _ in requests)
-    assert any(headers.get("APCA-API-KEY-ID") == "alpaca-key" for _, _, headers in requests)
-    assert any(path.endswith("/v1beta1/screener/stocks/movers") for path, _, _ in requests)
-    assert any(path.endswith("/v1beta1/screener/stocks/most-actives") for path, _, _ in requests)
+    assert isinstance(provider, KISLiveMarketProvider)
 
 
 def test_kis_live_provider_parses_rest_payloads() -> None:

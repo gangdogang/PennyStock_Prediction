@@ -28,7 +28,6 @@ def test_settings_defaults_and_env_loading(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("PENNY_STOCK_BACKTEST_COVERAGE_REPORT_DIR", "/tmp/backtest_coverage")
     monkeypatch.setenv("PENNY_STOCK_BACKTEST_COVERAGE_GATE_PATH", "/tmp/backtest_coverage_gate_status.json")
     monkeypatch.setenv("PENNY_STOCK_BACKTEST_COVERAGE_GATE_PCT", "65.0")
-    monkeypatch.setenv("PENNY_STOCK_ALPACA_MARKET_DATA_FEED", "sip")
     monkeypatch.setenv("PENNY_STOCK_KIS_BASE_URL", "https://openapi.koreainvestment.com:9443")
     monkeypatch.setenv("PENNY_STOCK_KIS_MOCK_BASE_URL", "https://openapivts.koreainvestment.com:29443")
     monkeypatch.setenv("PENNY_STOCK_KIS_APP_KEY", "kis-app")
@@ -68,7 +67,6 @@ def test_settings_defaults_and_env_loading(monkeypatch: pytest.MonkeyPatch) -> N
     assert Path(settings.backtest_coverage_report_dir) == Path("/tmp/backtest_coverage")
     assert Path(settings.backtest_coverage_gate_path) == Path("/tmp/backtest_coverage_gate_status.json")
     assert settings.backtest_coverage_gate_pct == pytest.approx(65.0)
-    assert settings.alpaca_market_data_feed == "sip"
     assert settings.kis_base_url == "https://openapi.koreainvestment.com:9443"
     assert settings.kis_mock_base_url == "https://openapivts.koreainvestment.com:29443"
     assert settings.kis_app_key == "kis-app"
@@ -103,7 +101,8 @@ def test_settings_have_practical_defaults() -> None:
     }
     assert settings.log_level in {"INFO", "WARNING", "DEBUG", "ERROR"}
     assert settings.universe_price_min < settings.universe_price_max
-    assert settings.live_market_provider in {"auto", "alpaca", "kis", "disabled"}
+    assert settings.live_market_provider == "kis"
+    assert settings.live_market_provider in {"kis", "disabled"}
     assert settings.broker_adapter in {"null", "kis_mock"}
     assert settings.live_market_timeout_seconds > 0
     assert settings.live_observability_enabled is True
