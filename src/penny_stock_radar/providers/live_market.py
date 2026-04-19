@@ -258,206 +258,6 @@ class _BaseHttpLiveMarketProvider:
         self._metrics_emitter(metric_type, payload)
 
 
-class AlpacaLiveMarketProvider(_BaseHttpLiveMarketProvider):
-    source_name = "alpaca"
-
-    def __init__(
-        self,
-        api_key: str,
-        api_secret: str,
-        base_url: str = "https://data.alpaca.markets",
-        feed: str = "iex",
-        client: httpx.Client | None = None,
-        timeout_seconds: float = 10.0,
-        metrics_emitter: Callable[[str, dict[str, Any]], None] | None = None,
-    ) -> None:
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.feed = feed
-        self._auth_headers = {
-            "APCA-API-KEY-ID": api_key,
-            "APCA-API-SECRET-KEY": api_secret,
-        }
-        if client is None:
-            client = httpx.Client(
-                base_url=base_url.rstrip("/"),
-                headers=self._auth_headers,
-                timeout=timeout_seconds,
-            )
-        else:
-            client.headers.update(self._auth_headers)
-        super().__init__(
-            base_url=base_url,
-            client=client,
-            timeout_seconds=timeout_seconds,
-            metrics_emitter=metrics_emitter,
-        )
-
-    def latest_trade(self, symbol: str) -> LiveTrade | None:
-        data = self._get_json(
-            f"/v2/stocks/{symbol}/trades/latest",
-            params={"feed": self.feed},
-            headers=self._auth_headers,
-        )
-        if not data:
-            return None
-        payload = _first_mapping(data, "trade", "latestTrade", "result", "results")
-        if not payload:
-            payload = data
-        return LiveTrade(
-            symbol=symbol,
-            price=_coerce_float(_first_value(payload, "price", "p")),
-            size=_coerce_int(_first_value(payload, "size", "s")),
-            timestamp=_coerce_datetime(_first_value(payload, "timestamp", "t", "tape_timestamp")),
-            exchange=str(_first_value(payload, "exchange", "x")) if _first_value(payload, "exchange", "x") is not None else None,
-            conditions=_normalize_conditions(_first_value(payload, "conditions", "c")),
-            source=self.source_name,
-            raw=data,
-        )
-
-    def latest_quote(self, symbol: str) -> LiveQuote | None:
-        data = self._get_json(
-            f"/v2/stocks/{symbol}/quotes/latest",
-            params={"feed": self.feed},
-            headers=self._auth_headers,
-        )
-        if not data:
-            return None
-        payload = _first_mapping(data, "quote", "latestQuote", "result", "results")
-        if not payload:
-            payload = data
-        return LiveQuote(
-            symbol=symbol,
-            bid_price=_coerce_float(_first_value(payload, "bid_price", "bp", "bid")),
-            ask_price=_coerce_float(_first_value(payload, "ask_price", "ap", "ask")),
-            bid_size=_coerce_int(_first_value(payload, "bid_size", "bs")),
-            ask_size=_coerce_int(_first_value(payload, "ask_size", "as")),
-            timestamp=_coerce_datetime(_first_value(payload, "timestamp", "t")),
-            exchange=str(_first_value(payload, "exchange", "x")) if _first_value(payload, "exchange", "x") is not None else None,
-            source=self.source_name,
-            raw=data,
-        )
-
-    def latest_snapshot(self, symbol: str) -> LiveSnapshot | None:
-        data = self._get_json(
-            f"/v2/stocks/{symbol}/snapshot",
-            params={"feed": self.feed},
-            headers=self._auth_headers,
-        )
-        if not data:
-            return None
-        latest_trade = self._parse_trade_payload(symbol, data)
-        latest_quote = self._parse_quote_payload(symbol, data)
-        return LiveSnapshot(
-            symbol=symbol,
-            source=self.source_name,
-            latest_trade=latest_trade,
-            latest_quote=latest_quote,
-            market_status=str(_first_value(data, "marketStatus", "market_status")) if _first_value(data, "marketStatus", "market_status") is not None else None,
-            updated_at=_coerce_datetime(_first_value(data, "updated", "updatedAt")),
-            raw=data,
-        )
-
-    def top_gainers(self, limit: int = 20) -> list[LiveMover]:
-        data = self._get_json(
-            "/v1beta1/screener/stocks/movers",
-            params={"top": max(int(limit), 1)},
-            headers=self._auth_headers,
-        )
-        if not data:
-            return []
-        updated_at = _coerce_datetime(data.get("last_updated"))
-        gainers = data.get("gainers")
-        if not isinstance(gainers, list):
-            return []
-        rows: list[LiveMover] = []
-        for index, item in enumerate(gainers[: max(int(limit), 1)], start=1):
-            if not isinstance(item, dict):
-                continue
-            symbol = str(item.get("symbol") or "").upper()
-            if not symbol:
-                continue
-            rows.append(
-                LiveMover(
-                    symbol=symbol,
-                    source=self.source_name,
-                    price=_coerce_float(item.get("price")),
-                    pct_change=_coerce_float(item.get("percent_change")),
-                    rank=index,
-                    updated_at=updated_at,
-                    raw=item,
-                )
-            )
-        return rows
-
-    def most_active(self, limit: int = 20) -> list[LiveMover]:
-        data = self._get_json(
-            "/v1beta1/screener/stocks/most-actives",
-            params={"top": max(int(limit), 1)},
-            headers=self._auth_headers,
-        )
-        if not data:
-            return []
-        updated_at = _coerce_datetime(data.get("last_updated"))
-        actives = data.get("most_actives")
-        if not isinstance(actives, list):
-            return []
-        rows: list[LiveMover] = []
-        for index, item in enumerate(actives[: max(int(limit), 1)], start=1):
-            if not isinstance(item, dict):
-                continue
-            symbol = str(item.get("symbol") or "").upper()
-            if not symbol:
-                continue
-            rows.append(
-                LiveMover(
-                    symbol=symbol,
-                    source=self.source_name,
-                    volume=_coerce_float(item.get("volume")),
-                    trade_count=_coerce_int(item.get("trade_count")),
-                    rank=index,
-                    updated_at=updated_at,
-                    raw=item,
-                )
-            )
-        return rows
-
-    def _parse_trade_payload(self, symbol: str, data: dict[str, Any]) -> LiveTrade | None:
-        payload = _first_mapping(data, "latestTrade", "trade", "result", "results")
-        if not payload:
-            payload = data
-        if not payload:
-            return None
-        return LiveTrade(
-            symbol=symbol,
-            price=_coerce_float(_first_value(payload, "price", "p")),
-            size=_coerce_int(_first_value(payload, "size", "s")),
-            timestamp=_coerce_datetime(_first_value(payload, "timestamp", "t")),
-            exchange=str(_first_value(payload, "exchange", "x")) if _first_value(payload, "exchange", "x") is not None else None,
-            conditions=_normalize_conditions(_first_value(payload, "conditions", "c")),
-            source=self.source_name,
-            raw=data,
-        )
-
-    def _parse_quote_payload(self, symbol: str, data: dict[str, Any]) -> LiveQuote | None:
-        payload = _first_mapping(data, "latestQuote", "quote", "result", "results")
-        if not payload:
-            payload = data
-        if not payload:
-            return None
-        return LiveQuote(
-            symbol=symbol,
-            bid_price=_coerce_float(_first_value(payload, "bid_price", "bp", "bid")),
-            ask_price=_coerce_float(_first_value(payload, "ask_price", "ap", "ask")),
-            bid_size=_coerce_int(_first_value(payload, "bid_size", "bs")),
-            ask_size=_coerce_int(_first_value(payload, "ask_size", "as")),
-            timestamp=_coerce_datetime(_first_value(payload, "timestamp", "t")),
-            exchange=str(_first_value(payload, "exchange", "x")) if _first_value(payload, "exchange", "x") is not None else None,
-            source=self.source_name,
-            raw=data,
-        )
-
-
 class KISLiveMarketProvider(_BaseHttpLiveMarketProvider):
     source_name = "kis"
     _us_exchanges = ("NAS", "NYS", "AMS")
@@ -957,16 +757,6 @@ class KISLiveMarketProvider(_BaseHttpLiveMarketProvider):
         return self._access_token
 
 
-def _normalize_conditions(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple, set)):
-        return [str(item) for item in value if item is not None and str(item)]
-    return [str(value)]
-
-
 def build_live_market_provider(
     settings: AppSettings,
     client: httpx.Client | None = None,
@@ -977,18 +767,13 @@ def build_live_market_provider(
     if mode == "disabled":
         return NullLiveMarketProvider("Live market data disabled in settings.")
 
-    if mode in {"auto", "alpaca"} and settings.alpaca_api_key and settings.alpaca_secret_key:
-        return AlpacaLiveMarketProvider(
-            api_key=settings.alpaca_api_key,
-            api_secret=settings.alpaca_secret_key,
-            base_url=settings.alpaca_data_base_url,
-            feed=settings.alpaca_market_data_feed,
-            client=client,
-            timeout_seconds=settings.live_market_timeout_seconds,
-            metrics_emitter=metrics_emitter,
-        )
-
-    if mode in {"auto", "kis"} and settings.kis_app_key and settings.kis_app_secret:
+    if mode == "kis":
+        if not settings.kis_app_key or not settings.kis_app_secret:
+            raise RuntimeError(
+                "KIS API credentials are required when live_market_provider='kis'. "
+                "Set PENNY_STOCK_KIS_APP_KEY and PENNY_STOCK_KIS_APP_SECRET, or use "
+                "PENNY_STOCK_LIVE_MARKET_PROVIDER=disabled."
+            )
         return KISLiveMarketProvider(
             app_key=settings.kis_app_key,
             app_secret=settings.kis_app_secret,
@@ -1001,8 +786,4 @@ def build_live_market_provider(
             metrics_emitter=metrics_emitter,
         )
 
-    if mode == "alpaca":
-        return NullLiveMarketProvider("Alpaca API credentials are missing.")
-    if mode == "kis":
-        return NullLiveMarketProvider("KIS API credentials are missing.")
-    return NullLiveMarketProvider("No live market data provider is configured.")
+    raise ValueError(f"Unsupported live_market_provider: {mode!r}")
