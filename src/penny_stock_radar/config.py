@@ -50,7 +50,7 @@ class AppSettings(BaseSettings):
     watchlist_market_context_limit: int = 20
     replay_dir: Path = Path("data/replay")
     market_data_mode: str = "replay"
-    live_market_provider: str = "auto"
+    live_market_provider: str = "kis"
     live_market_timeout_seconds: float = 10.0
     live_observability_enabled: bool = True
     live_observability_path: Path = Path("automation/logs/live_metrics.jsonl")
@@ -74,8 +74,6 @@ class AppSettings(BaseSettings):
     kis_nasdaq_master_path: Path = Path("data/kis_master/NASMST.COD")
     kis_nyse_master_path: Path = Path("data/kis_master/NYSMST.COD")
     kis_amex_master_path: Path = Path("data/kis_master/AMSMST.COD")
-    alpaca_data_base_url: str = "https://data.alpaca.markets"
-    alpaca_market_data_feed: str = "iex"
     premarket_min_dollar_volume: float = 100_000.0
     premarket_min_trade_count: int = 25
     premarket_max_spread_pct: float = 0.08
@@ -162,8 +160,6 @@ class AppSettings(BaseSettings):
     kis_app_secret: str | None = Field(default=None, repr=False)
     kis_mock_app_key: str | None = Field(default=None, repr=False)
     kis_mock_app_secret: str | None = Field(default=None, repr=False)
-    alpaca_api_key: str | None = Field(default=None, repr=False)
-    alpaca_secret_key: str | None = Field(default=None, repr=False)
     reddit_client_id: str | None = Field(default=None, repr=False)
     reddit_client_secret: str | None = Field(default=None, repr=False)
     stocktwits_access_token: str | None = Field(default=None, repr=False)
@@ -365,7 +361,6 @@ class AppSettings(BaseSettings):
         "kis_base_url",
         "kis_mock_base_url",
         "kis_websocket_url",
-        "alpaca_market_data_feed",
         "gemini_model",
         "paper_ai_escalation_model",
         "gemini_api_base_url",
@@ -390,6 +385,15 @@ class AppSettings(BaseSettings):
     def _known_broker_adapter(cls, value: str) -> str:
         normalized = value.strip().lower()
         allowed = {"null", "kis_mock"}
+        if normalized not in allowed:
+            raise ValueError(f"Expected one of {sorted(allowed)}.")
+        return normalized
+
+    @field_validator("live_market_provider")
+    @classmethod
+    def _known_live_market_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        allowed = {"kis", "disabled"}
         if normalized not in allowed:
             raise ValueError(f"Expected one of {sorted(allowed)}.")
         return normalized
