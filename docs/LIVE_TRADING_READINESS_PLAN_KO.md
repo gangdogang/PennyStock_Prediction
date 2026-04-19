@@ -10,7 +10,7 @@
 
 ### 이미 있는 것
 - `universe -> watchlist -> premarket/regular 분석 -> snapshot -> paper trading -> AI supervisor` 파이프라인
-- `LiveMarketProvider` 추상화 (`kis` / `alpaca` / `null`)
+- `LiveMarketProvider` 추상화 (`kis` / `disabled`)
 - KIS 미국주식 master 파서 + `price / price-detail / asking-price / ranking` 정규화
 - `PaperTradingEngine`, `IntradayTradingEngine`, `MultidayTradingEngine` (초기)
 - stale quote / halt / spread / daily-loss-lock / open-risk-cap 가드레일 (paper 레벨)

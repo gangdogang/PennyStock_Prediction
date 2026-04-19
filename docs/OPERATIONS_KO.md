@@ -46,10 +46,7 @@ Windows:
   - `PENNY_STOCK_KIS_NASDAQ_MASTER_PATH`
   - `PENNY_STOCK_KIS_NYSE_MASTER_PATH`
   - `PENNY_STOCK_KIS_AMEX_MASTER_PATH`
-- 실시간 시세 공급자: Alpaca fallback
-  - `PENNY_STOCK_LIVE_MARKET_PROVIDER=alpaca`
-  - `PENNY_STOCK_ALPACA_API_KEY`
-  - `PENNY_STOCK_ALPACA_SECRET_KEY`
+- 실시간 시세 공급자: KIS 해외주식 시세 API 단일 경로. `PENNY_STOCK_LIVE_MARKET_PROVIDER=kis` 가 기본값이며, 키 미설정 시 앱 기동 시 오류.
 - KIS mock broker execution
   - `PENNY_STOCK_BROKER_ADAPTER=kis_mock`
   - `PENNY_STOCK_KIS_MOCK_APP_KEY`
