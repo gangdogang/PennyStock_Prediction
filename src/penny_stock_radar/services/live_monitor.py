@@ -32,7 +32,10 @@ class LiveMonitor:
         self.settings = settings
 
     def provider_status(self) -> tuple[bool, str]:
-        provider = build_live_market_provider(self.settings)
+        try:
+            provider = build_live_market_provider(self.settings)
+        except RuntimeError as exc:
+            return False, str(exc)
         available = provider.is_available()
         reason = getattr(provider, "reason", provider.source_name)
         self._close_provider(provider)

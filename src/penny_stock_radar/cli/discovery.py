@@ -96,7 +96,11 @@ def show_live_market(
 
     settings = root_cli.get_settings()
     root_cli.init_database(settings.database_path)
-    provider = build_live_market_provider(settings)
+    try:
+        provider = build_live_market_provider(settings)
+    except RuntimeError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
     if not provider.is_available():
         reason = getattr(provider, "reason", "No live market data provider is configured.")
         console.print(reason)

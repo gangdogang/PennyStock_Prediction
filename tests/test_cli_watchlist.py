@@ -100,3 +100,25 @@ def test_run_premkt_predictor_command_shows_latest_predictions(
     assert result.exit_code == 0
     assert "Stored 1 premarket predictions." in result.stdout
     assert "AAA" in result.stdout
+
+
+def test_show_live_market_command_reports_missing_kis_credentials(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        live_market_provider="kis",
+        kis_app_key=None,
+        kis_app_secret=None,
+    )
+
+    monkeypatch.setattr("penny_stock_radar.cli.get_settings", lambda: settings)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["show-live-market", "--symbol", "AAA"])
+
+    assert result.exit_code == 1
+    assert "KIS API credentials are required" in result.stdout

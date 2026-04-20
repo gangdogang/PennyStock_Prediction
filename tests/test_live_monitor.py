@@ -92,6 +92,23 @@ def test_live_monitor_provider_status_reports_unavailable(monkeypatch) -> None:
     assert reason == "missing credentials"
 
 
+def test_live_monitor_provider_status_reports_runtime_error(monkeypatch) -> None:
+    def _raise_provider_error(settings):
+        del settings
+        raise RuntimeError("KIS API credentials are required.")
+
+    monkeypatch.setattr(
+        "penny_stock_radar.services.live_monitor.build_live_market_provider",
+        _raise_provider_error,
+    )
+
+    monitor = LiveMonitor(AppSettings())
+    available, reason = monitor.provider_status()
+
+    assert available is False
+    assert reason == "KIS API credentials are required."
+
+
 def test_live_monitor_treats_inverted_quotes_as_no_spread(monkeypatch) -> None:
     class _BadQuoteProvider(_FakeProvider):
         def latest_snapshot(self, symbol: str) -> LiveSnapshot | None:
