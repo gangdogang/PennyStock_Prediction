@@ -54,8 +54,16 @@ missing = [name for name in required if importlib.util.find_spec(name) is None]
 sys.exit(1 if missing else 0)
 "@
 
-& $venvPython -c $dependencyCheck *> $null
-if ($LASTEXITCODE -ne 0) {
+$dependenciesReady = $false
+try {
+    & $venvPython -c $dependencyCheck *> $null
+    $dependenciesReady = $LASTEXITCODE -eq 0
+}
+catch {
+    $dependenciesReady = $false
+}
+
+if (-not $dependenciesReady) {
     Write-Host "Installing required packages. This can take 1-3 minutes on the first run."
     & $venvPip install -U pip
     & $venvPip install -e ".[dev,ui]"
@@ -88,8 +96,15 @@ created_at = datetime.fromisoformat(str(row[0]).replace("Z", "+00:00"))
 age_minutes = (datetime.now(timezone.utc) - created_at).total_seconds() / 60
 raise SystemExit(0 if age_minutes <= 15 else 1)
 "@
-    & $venvPython -c $refreshCheck $dbPath *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $refreshIsFresh = $false
+    try {
+        & $venvPython -c $refreshCheck $dbPath *> $null
+        $refreshIsFresh = $LASTEXITCODE -eq 0
+    }
+    catch {
+        $refreshIsFresh = $false
+    }
+    if ($refreshIsFresh) {
         $needsRefresh = $false
     }
 }

@@ -393,7 +393,7 @@ class AppSettings(BaseSettings):
     @classmethod
     def _known_live_market_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        allowed = {"kis", "disabled"}
+        allowed = {"kis", "disabled", "auto"}
         if normalized not in allowed:
             raise ValueError(f"Expected one of {sorted(allowed)}.")
         return normalized

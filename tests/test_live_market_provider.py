@@ -28,6 +28,18 @@ def test_build_live_market_provider_disabled_returns_null() -> None:
     assert provider.latest_snapshot("AAA") is None
 
 
+def test_build_live_market_provider_auto_without_credentials_returns_null() -> None:
+    settings = AppSettings(
+        live_market_provider="auto",
+        kis_app_key=None,
+        kis_app_secret=None,
+    )
+
+    provider = build_live_market_provider(settings)
+
+    assert isinstance(provider, NullLiveMarketProvider)
+
+
 def test_build_live_market_provider_kis_without_credentials_raises() -> None:
     settings = AppSettings(
         live_market_provider="kis",
@@ -42,6 +54,18 @@ def test_build_live_market_provider_kis_without_credentials_raises() -> None:
 def test_build_live_market_provider_kis_with_credentials_returns_kis_provider() -> None:
     settings = AppSettings(
         live_market_provider="kis",
+        kis_app_key="kis-app",
+        kis_app_secret="kis-secret",
+    )
+
+    provider = build_live_market_provider(settings)
+
+    assert isinstance(provider, KISLiveMarketProvider)
+
+
+def test_build_live_market_provider_auto_with_credentials_returns_kis_provider() -> None:
+    settings = AppSettings(
+        live_market_provider="auto",
         kis_app_key="kis-app",
         kis_app_secret="kis-secret",
     )

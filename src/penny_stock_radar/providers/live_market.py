@@ -762,6 +762,8 @@ def build_live_market_provider(
     client: httpx.Client | None = None,
 ) -> LiveMarketProvider:
     mode = settings.live_market_provider.lower()
+    if mode == "auto":
+        mode = "kis" if settings.kis_app_key and settings.kis_app_secret else "disabled"
     metrics_emitter = build_live_metric_emitter(settings)
 
     if mode == "disabled":
