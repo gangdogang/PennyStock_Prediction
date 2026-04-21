@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-04-19
+최종 정리일: 2026-04-21
 
 ## 현재 capabilities
 
@@ -24,7 +24,8 @@
 - DB 계층은 `db/connection.py`, `schema.py`, `paper.py`, `execution.py`, `historical.py`, `premkt.py` 중심 패키지로 분할됐고 기존 `from ..db import ...` import 경로는 유지된다.
 - CLI 는 `cli/__init__.py` 루트 앱 아래 `premkt.py`, `backtest.py`, `automation.py`, `paper.py`, `broker.py`와 보조 서브앱으로 분할됐고 기존 `psradar <cmd>` 명령 표면은 유지된다.
 - `predictor_weighted` 와 `momentum_only` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
-- paper trading 결과는 snapshots, orders, positions, KPI CSV, execution quality CSV 로 남길 수 있다.
+- paper trading 결과는 snapshots, orders, positions, KPI CSV, execution quality CSV, `run_manifest.json`, `paper_performance_gate.json` 으로 남길 수 있다.
+- paper trade log 는 predictor score/weight fallback 과 prediction source lineage 를 포함하고, performance gate 는 predictor lineage 공백, KPI 분모 불일치, bucket diff 부재를 검사할 수 있다.
 - KIS historical minute backfill, L1 snapshot archive, coverage report CLI 가 연결돼 있다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
@@ -32,6 +33,7 @@
 
 ## 현재 한계
 
+- 2026-04-21 이전에 생성된 paper 성능평가 CSV는 predictor lineage 와 KPI 분모가 불완전할 수 있으므로 새 export 로 다시 생성해야 한다.
 - `BACKTEST_ROADMAP_KO.md` Step 0 기준 KIS historical minute/L1 coverage 60% gate 는 아직 통과하지 못했다.
 - 임의의 과거 날짜 D 전체를 재현할 만큼 장기 archive 적재량이 아직 부족하다.
 - live observability 는 아직 JSONL sidecar 수준이며 대시보드 집계, 알람, broker execution reject telemetry 분리는 남아 있다.
@@ -43,9 +45,10 @@
 
 ## 다음 우선순위
 
-- 현재 제품 기준 최우선은 `BACKTEST_ROADMAP_KO.md` Step 0 완료다.
-- 이를 위해 `backfill-kis-minute`, `capture-kis-l1`, `capture-kis-l1-window`, `report-backtest-coverage` 경로로 coverage 를 계속 채우고 gate 통과 여부를 추적한다.
-- 현재 저장소 정리 작업의 Step 1~10은 완료됐고, 다음 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
+- `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
+- 다음 우선순위는 `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 `backfill-kis-minute`, `capture-kis-l1`, `capture-kis-l1-window`, `report-backtest-coverage` 경로로 coverage 를 계속 채우고 gate 통과 여부를 추적하는 것이다.
+- 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.
+- 현재 저장소 정리 작업의 Step 1~10과 Step -1은 완료됐고, 다음 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 그 다음에는 shadow 모드와 out-of-sample 검증으로 넘어간다.
 - Step 6은 완료됐고 multiday 설정은 `AppSettings` 와 `.env.example` 로 승격됐으며 env override 회귀 테스트와 골든 검증을 통과했다.
 - Step 7은 완료됐고 KIS live timestamp 정규화와 live JSONL observability 추가 후 전체 `173 passed` 를 확인했다.

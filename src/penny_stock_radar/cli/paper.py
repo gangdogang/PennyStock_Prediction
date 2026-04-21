@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import time
 
 import typer
@@ -128,3 +130,24 @@ def show_paper_summary(
         if table.row_count:
             console.print(table)
     console.print(f"CSV logs are in [bold]{settings.paper_trade_dir.resolve()}[/bold]")
+
+
+@app.command("review-paper-performance")
+def review_paper_performance(
+    export_dir: Path | None = typer.Option(
+        None,
+        help="Paper export directory to inspect. Defaults to PENNY_STOCK_PAPER_TRADE_DIR.",
+    ),
+) -> None:
+    """Evaluate whether paper performance CSVs are wired for predictor review."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    coordinator = PaperTradingCoordinator(
+        settings,
+        export_dir=export_dir or settings.paper_trade_dir,
+    )
+    payload = coordinator.reporting.evaluate_performance_review_gate()
+    console.print(json.dumps(payload, indent=2, sort_keys=True))
+    if payload["status"] != "pass":
+        raise typer.Exit(code=1)

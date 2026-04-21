@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 
 import pytest
@@ -1847,6 +1848,8 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     backtest_csv = export_dir / "paper_backtest_kpis.csv"
     regime_csv = export_dir / "paper_regime_split.csv"
     predictor_csv = export_dir / "paper_predictor_kpis.csv"
+    manifest_json = export_dir / "run_manifest.json"
+    gate_json = export_dir / "paper_performance_gate.json"
     strategy_runs = fetch_latest_paper_strategy_runs(db_path, limit=10)
     assert result.comparison_path == comparison_csv.resolve()
     assert comparison_csv.exists()
@@ -1858,6 +1861,8 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert backtest_csv.exists()
     assert regime_csv.exists()
     assert predictor_csv.exists()
+    assert manifest_json.exists()
+    assert gate_json.exists()
     assert len(strategy_runs) >= 4
     csv_text = comparison_csv.read_text(encoding="utf-8")
     bucket_text = bucket_csv.read_text(encoding="utf-8")
@@ -1879,6 +1884,10 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert "expectancy_r" in backtest_text
     assert "regime_bucket" in regime_text
     assert "predictor_hit_rate_pct" in predictor_text
+    manifest = json.loads(manifest_json.read_text(encoding="utf-8"))
+    gate = json.loads(gate_json.read_text(encoding="utf-8"))
+    assert manifest["artifacts"]["paper_trade_log"] == "paper_trade_log.csv"
+    assert gate["status"] == "pass"
 
 
 def test_paper_trading_partial_fill_is_logged_and_exported(tmp_path: Path) -> None:
@@ -2087,6 +2096,27 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
     assert "BOTH" in diff_text
     assert "predictor_total_pnl" in diff_text
     assert "momentum_total_pnl" in diff_text
+    diff_rows = _csv_rows(diff_csv)
+    assert any(abs(float(row["pnl_diff"])) > 0 for row in diff_rows if row["pnl_diff"])
+    trade_rows = _csv_rows(export_dir / "paper_trade_log.csv")
+    edge_rows = [
+        row
+        for row in trade_rows
+        if row["symbol"] == "EDGE" and row["bucket"] == PREDICTOR_WEIGHTED_BUCKET
+    ]
+    assert edge_rows
+    assert edge_rows[0]["predicted"] == "True"
+    assert edge_rows[0]["predictor_score"] == "90.0"
+    assert edge_rows[0]["predictor_weight"] == "1.0"
+    predictor_kpi_rows = _csv_rows(export_dir / "paper_predictor_kpis.csv")
+    primary_kpi = next(
+        row
+        for row in predictor_kpi_rows
+        if row["strategy_name"] == PRIMARY_PAPER_STRATEGY
+        and row["bucket"] == PREDICTOR_WEIGHTED_BUCKET
+    )
+    assert int(primary_kpi["candidate_count"]) == 2
+    assert int(primary_kpi["triggered_candidate_count"]) == 2
 
 
 def test_momentum_only_bucket_ignores_predictor_settings_even_when_enabled(tmp_path: Path) -> None:
@@ -2249,6 +2279,38 @@ def test_predictor_reasons_are_recorded_only_for_predictor_weighted_bucket(tmp_p
     assert any(reason.startswith("predictor_weight:") for reason in predictor_order.reasons)
     assert not any(reason.startswith("predictor_score:") for reason in momentum_order.reasons)
     assert not any(reason.startswith("predictor_weight:") for reason in momentum_order.reasons)
+
+
+def test_paper_performance_gate_fails_on_candidate_denominator_mismatch(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    export_dir.mkdir(parents=True)
+    (export_dir / "paper_trade_log.csv").write_text(
+        "run_id,strategy_name,bucket,symbol,status,predicted,predictor_score,predictor_weight\n"
+        "run-1,auto_paper_v1,predictor_weighted,AAA,CLOSED,True,90.0,1.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_predictor_kpis.csv").write_text(
+        "strategy_name,bucket,candidate_count,triggered_candidate_count\n"
+        "auto_paper_v1,predictor_weighted,0,1\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_trade_diff.csv").write_text(
+        "symbol,pnl_diff\nAAA,1.0\n",
+        encoding="utf-8",
+    )
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc))
+    payload = coordinator.reporting.evaluate_performance_review_gate()
+
+    assert payload["status"] == "fail"
+    assert "candidate_count is 0" in payload["failures"][0]
 
 
 def test_paper_trading_cohort_summary_keeps_day_regime_separate(tmp_path: Path) -> None:

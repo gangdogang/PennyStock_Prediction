@@ -10,8 +10,77 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 
 - 페니스탁 모멘텀 전략에서 1개월 백테스트는 버킷당 ~20-60 거래 수준이다.
 - 통계적으로 predictor의 edge를 의미있게 판단하기에 부족하고, 단일 장세(regime)에만 노출된다.
-- 따라서 1개월은 **sanity check** 로만 취급하고, 실매매 전환 판단에는 **최소 3개월**, 가능하면 **walk-forward / rolling** 평가를 사용한다.
+- 따라서 1개월은 **sanity check** 로만 취급하고, 실매매 전환 판단에는 **과거 데이터 재생 기준 최소 3개월**, 가능하면 **walk-forward / rolling** 평가를 사용한다.
 - 파라미터 튜닝 구간과 검증 구간은 반드시 분리(out-of-sample)한다.
+- 이 3개월 기준은 실제 시간을 기다리자는 뜻이 아니다. 과거 데이터를 모아 재생 백테스트로 빠르게 돌리는 검증 단위다.
+
+## 실행 원칙 — 기다리지 않는 백테스트 루프
+
+성능 개선은 "실시간으로 3개월 기다리기"가 아니라 아래 루프로 진행한다.
+
+1. **2일 이하 smoke replay**
+   - 코드/데이터 연결 버그를 빠르게 잡는다.
+   - predictor score/weight 기록, 버킷 분리, 주문/포지션/거래 로그 일관성, CSV export schema 를 검증한다.
+   - 이 단계 결과는 성능 우위 판단에 쓰지 않는다.
+2. **5-10 거래일 sanity replay**
+   - 손절, 슬리피지, 거래비용, daily lock, halt/stale guard 가 정상적으로 작동하는지 확인한다.
+   - 한 번의 이상 거래가 전체 결과를 지배하는지 확인한다.
+3. **1개월 calibration replay**
+   - 파라미터 후보를 좁히는 용도다.
+   - 여전히 최종 검증이 아니며, tuning set 으로만 취급한다.
+4. **3개월 이상 out-of-sample replay**
+   - 튜닝이 끝난 설정을 고정한 뒤 단 1회 실행한다.
+   - 실매매 전환 판단에는 이 결과와 shadow 결과를 함께 사용한다.
+
+각 루프는 반드시 `run_manifest.json`, `paper_backtest_kpis.csv`, `paper_trade_log.csv`, `paper_bucket_trade_diff.csv`, `paper_predictor_kpis.csv`, `paper_execution_quality.csv` 를 남겨야 한다.
+
+## Step -1 — 성능평가 배선 검증
+
+**목표**: 전략 성능을 논하기 전에 결과 파일이 실제로 predictor/bucket 차이를 측정하고 있는지 검증한다. 이 단계가 실패하면 Step 0 이후의 장기 백테스트도 해석할 수 없다.
+
+### 현재 관찰된 문제
+
+- 최근 paper 결과에서 `predictor_weighted` 와 `momentum_only` 의 거래/손익이 완전히 동일했다.
+- `paper_trade_log.csv` 의 `predictor_score`, `predictor_weight` 가 모두 비어 있었다.
+- `paper_predictor_kpis.csv` 에서 `candidate_count=0` 인데 `triggered_candidate_count` 와 predicted trade 가 존재했다.
+- 따라서 현재 CSV만으로는 predictor edge 를 판단할 수 없다.
+
+### 해야 할 것
+
+- **Predictor lineage 고정**
+  - 주문 생성 시점의 `predictor_score`, `predictor_weight`, `prediction_generated_at`, `prediction_cutoff_at`, `prediction_source` 를 order/position/trade log 에 끝까지 전파한다.
+  - 후보가 아닌 종목은 `predictor_weight=0.0` 과 `predicted=false` 로 명시 기록한다.
+- **KPI 분모 정의 고정**
+  - `candidate_count`: cutoff 이전 predictor 후보 수.
+  - `triggered_candidate_count`: 후보 중 실제 진입 조건을 만족해 주문까지 간 수.
+  - `predicted_trade_count`: predictor 후보로 태그된 전체 거래 수.
+  - `predictor_hit_rate_pct`: predictor 후보 거래 중 net PnL 또는 R 기준 수익 거래 비율.
+- **Bucket divergence smoke test**
+  - synthetic predictor 점수 fixture 로 `predictor_weighted` 는 진입하고 `momentum_only` 는 진입하지 않는 케이스를 만든다.
+  - `paper_bucket_trade_diff.csv` 에 최소 1건의 non-zero `pnl_diff` 가 생기는 회귀 테스트를 추가한다.
+- **Performance review gate**
+  - 최신 CSV를 읽어 아래 조건을 검사하는 CLI 또는 테스트를 추가한다.
+    - 종료 거래가 있는데 `predictor_score`/`predictor_weight` 가 전부 비어 있으면 fail.
+    - 두 bucket 의 closed trade 가 모두 동일하고 `pnl_diff` 가 전부 0이면 warning 또는 fail.
+    - `candidate_count=0` 이면서 `triggered_candidate_count>0` 이면 fail.
+    - `run_manifest.json` 이 없으면 warning.
+- **Run manifest**
+  - 각 replay/export 마다 기간, 데이터 소스, DB path, settings hash, git sha, 실행 명령, timezone, seed 를 `run_manifest.json` 으로 남긴다.
+
+### Exit Criteria
+
+- [x] `paper_trade_log.csv` 의 predictor 관련 컬럼이 closed trade 에서 비어 있지 않음
+- [x] `candidate_count`, `triggered_candidate_count`, `predicted_trade_count` 의 분모/분자 정의가 테스트로 고정됨
+- [x] synthetic smoke 에서 `predictor_weighted` 와 `momentum_only` 의 거래 diff 가 발생함
+- [x] 최신 결과 CSV에 대한 performance review gate 가 pass 또는 명시적 warning 을 출력함
+- [x] 모든 성능평가 산출물에 `run_manifest.json` 이 동반됨
+
+### 완료 기록
+
+- 2026-04-21: `paper_trade_log.csv` 에 predictor lineage fallback 과 `prediction_generated_at` / `prediction_cutoff_at` / `prediction_source` 컬럼을 추가했다.
+- 2026-04-21: `export_predictor_kpis()` 의 CSV boolean 해석을 고쳐 `"False"` 문자열이 truthy 로 취급되지 않게 했다.
+- 2026-04-21: `run_manifest.json`, `paper_performance_gate.json`, `psradar review-paper-performance` 를 추가했다.
+- 2026-04-21: 관련 smoke 와 전체 품질 게이트를 확인했다. `./scripts/check_quality.sh` 결과: `199 passed`; coverage gate 상태 파일은 아직 미생성이라 요약만 출력됨.
 
 ---
 

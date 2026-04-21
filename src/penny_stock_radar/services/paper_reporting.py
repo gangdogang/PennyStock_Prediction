@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
 import random
+import subprocess
 from typing import Callable
 
 from ..config import AppSettings
@@ -35,6 +37,8 @@ class PaperReportPaths:
     backtest_kpis: Path
     regime_split: Path
     predictor_kpis: Path
+    run_manifest: Path
+    performance_gate: Path
 
 
 def paper_report_paths(export_dir: Path) -> PaperReportPaths:
@@ -49,6 +53,8 @@ def paper_report_paths(export_dir: Path) -> PaperReportPaths:
         backtest_kpis=base / "paper_backtest_kpis.csv",
         regime_split=base / "paper_regime_split.csv",
         predictor_kpis=base / "paper_predictor_kpis.csv",
+        run_manifest=base / "run_manifest.json",
+        performance_gate=base / "paper_performance_gate.json",
     )
 
 
@@ -321,8 +327,16 @@ class PaperReportingService:
                 predictor_score = self._reason_value(position.entry_reasons, "predictor_score")
                 predictor_weight = self._reason_value(position.entry_reasons, "predictor_weight")
                 if predictor_score is None:
-                    predictor_score = float(prediction.get("score", 0.0) or 0.0) or None
-                predicted = "predicted_starter" in position.entry_reasons or predictor_score is not None
+                    predictor_score = float(prediction.get("score", 0.0) or 0.0)
+                if predictor_weight is None:
+                    predictor_weight = self._predictor_weight_from_score(
+                        predictor_score if predictor_score > 0.0 else None
+                    )
+                prediction_source = str(prediction.get("source", "none"))
+                predicted = (
+                    prediction_source == "premkt_prediction"
+                    and run.bucket != self.momentum_only_bucket
+                )
                 top_theme = ""
                 themes = prediction.get("themes", [])
                 if themes:
@@ -360,6 +374,9 @@ class PaperReportingService:
                         "predicted": predicted,
                         "predictor_score": predictor_score,
                         "predictor_weight": predictor_weight,
+                        "prediction_generated_at": prediction.get("generated_at", ""),
+                        "prediction_cutoff_at": prediction.get("cutoff_at", ""),
+                        "prediction_source": prediction_source,
                         "top_theme": top_theme,
                         "entry_phase": position.entry_phase,
                         "entry_label": position.entry_label or "",
@@ -494,7 +511,7 @@ class PaperReportingService:
         grouped = self._group_trade_rows(trade_rows)
         for run in self._latest_runs():
             run_rows = grouped.get(run.run_id, [])
-            predicted_rows = [row for row in run_rows if bool(row["predicted"])]
+            predicted_rows = [row for row in run_rows if self._csv_bool(row.get("predicted"))]
             closed_predicted = [row for row in predicted_rows if row["status"] == "CLOSED"]
             triggered_symbols = {str(row["symbol"]) for row in predicted_rows}
             day1_r = [float(row["r_multiple"]) for row in closed_predicted if row["r_multiple"] not in {None, ""} and float(row["hold_days"]) < 1.0]
@@ -521,6 +538,125 @@ class PaperReportingService:
         rows.sort(key=lambda item: (str(item["strategy_name"]), str(item["bucket"])))
         self._write_csv(self.paths.predictor_kpis, rows)
         return self.paths.predictor_kpis.resolve()
+
+    def export_run_manifest(self) -> Path:
+        trade_rows = self._load_trade_log_rows()
+        opened_at = sorted(str(row["opened_at"]) for row in trade_rows if row.get("opened_at"))
+        payload = {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "export_dir": str(self.export_dir.resolve()),
+            "database_path": str(self.settings.database_path.resolve()),
+            "git_sha": self._git_sha(),
+            "settings_hash": self._settings_hash(),
+            "trade_period": {
+                "first_opened_at": opened_at[0] if opened_at else None,
+                "last_opened_at": opened_at[-1] if opened_at else None,
+            },
+            "runs": [
+                {
+                    "run_id": run.run_id,
+                    "strategy_name": run.strategy_name,
+                    "bucket": run.bucket,
+                    "status": run.status,
+                    "last_market_date": run.last_market_date,
+                    "closed_trade_count": run.closed_trade_count,
+                    "total_return_pct": run.total_return_pct,
+                    "updated_at": run.updated_at.isoformat(),
+                }
+                for run in self._latest_runs()
+            ],
+            "artifacts": {
+                "paper_backtest_kpis": self.paths.backtest_kpis.name,
+                "paper_trade_log": self.paths.trade_log.name,
+                "paper_bucket_trade_diff": self.paths.bucket_trade_diff.name,
+                "paper_predictor_kpis": self.paths.predictor_kpis.name,
+                "paper_execution_quality": self.paths.execution_quality.name,
+            },
+        }
+        self.paths.run_manifest.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.run_manifest.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return self.paths.run_manifest.resolve()
+
+    def export_performance_review_gate(self) -> Path:
+        payload = self.evaluate_performance_review_gate()
+        self.paths.performance_gate.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.performance_gate.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return self.paths.performance_gate.resolve()
+
+    def evaluate_performance_review_gate(self) -> dict[str, object]:
+        trade_rows = self._load_trade_log_rows()
+        predictor_rows = read_csv_rows(self.paths.predictor_kpis)
+        diff_rows = read_csv_rows(self.paths.bucket_trade_diff)
+        failures: list[str] = []
+        warnings: list[str] = []
+
+        closed_rows = [row for row in trade_rows if row.get("status") == "CLOSED"]
+        missing_lineage = [
+            row
+            for row in closed_rows
+            if str(row.get("predictor_score") or "").strip() == ""
+            or str(row.get("predictor_weight") or "").strip() == ""
+        ]
+        if missing_lineage:
+            failures.append(
+                f"closed trades with blank predictor_score/predictor_weight: {len(missing_lineage)}"
+            )
+
+        inconsistent_candidate_rows = [
+            row
+            for row in predictor_rows
+            if self._float_value(row.get("candidate_count")) == 0.0
+            and self._float_value(row.get("triggered_candidate_count")) > 0.0
+        ]
+        if inconsistent_candidate_rows:
+            failures.append(
+                "candidate_count is 0 while triggered_candidate_count is positive"
+            )
+
+        predictor_closed = [
+            row
+            for row in closed_rows
+            if row.get("strategy_name") == self.primary_strategy_name
+            and row.get("bucket") == self.predictor_weighted_bucket
+        ]
+        momentum_closed = [
+            row
+            for row in closed_rows
+            if row.get("strategy_name") == self.primary_strategy_name
+            and row.get("bucket") == self.momentum_only_bucket
+        ]
+        if predictor_closed and momentum_closed and diff_rows:
+            nonzero_diff = [
+                row
+                for row in diff_rows
+                if abs(self._float_value(row.get("pnl_diff"))) > 1e-9
+                or bool(row.get("predictor_status")) != bool(row.get("momentum_status"))
+            ]
+            if not nonzero_diff:
+                warnings.append(
+                    "predictor_weighted and momentum_only closed trades are identical"
+                )
+
+        if not self.paths.run_manifest.exists():
+            warnings.append("run_manifest.json is missing")
+
+        return {
+            "status": "fail" if failures else "pass",
+            "failures": failures,
+            "warnings": warnings,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "closed_trade_count": len(closed_rows),
+            "trade_log_path": str(self.paths.trade_log),
+            "predictor_kpis_path": str(self.paths.predictor_kpis),
+            "bucket_trade_diff_path": str(self.paths.bucket_trade_diff),
+            "run_manifest_path": str(self.paths.run_manifest),
+        }
 
     def _latest_runs(self) -> list[PaperTradingRun]:
         return fetch_latest_paper_strategy_runs(self.settings.database_path, limit=10)
@@ -554,6 +690,9 @@ class PaperReportingService:
             lookup[str(row["symbol"]).upper()] = {
                 "score": float(row["score"]),
                 "themes": themes,
+                "generated_at": str(row["generated_at"]) if "generated_at" in row.keys() else "",
+                "cutoff_at": "",
+                "source": "premkt_prediction",
             }
         return lookup
 
@@ -566,6 +705,45 @@ class PaperReportingService:
                 except ValueError:
                     return None
         return None
+
+    def _predictor_weight_from_score(self, score: float | None) -> float:
+        if score is None or score <= 40.0:
+            return 0.0
+        if score >= 80.0:
+            return 1.0
+        return (float(score) - 40.0) / 40.0
+
+    def _csv_bool(self, value: object) -> bool:
+        return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+    def _float_value(self, value: object) -> float:
+        try:
+            if value in {None, ""}:
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _settings_hash(self) -> str:
+        payload = json.dumps(
+            self.settings.model_dump(mode="json"),
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _git_sha(self) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(__file__).resolve().parents[3],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return ""
+        return result.stdout.strip()
 
     def _regime_bucket(self, regime: str) -> str:
         normalized = regime.strip().lower()

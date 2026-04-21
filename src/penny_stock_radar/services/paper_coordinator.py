@@ -152,6 +152,8 @@ class PaperTradingCoordinator:
         self.export_backtest_kpis()
         self.export_regime_split()
         self.export_predictor_kpis()
+        self.export_run_manifest()
+        self.export_performance_review_gate()
         primary_result.comparison_path = comparison_path
         return primary_result
 
@@ -181,3 +183,9 @@ class PaperTradingCoordinator:
 
     def export_predictor_kpis(self) -> Path:
         return self.reporting.export_predictor_kpis()
+
+    def export_run_manifest(self) -> Path:
+        return self.reporting.export_run_manifest()
+
+    def export_performance_review_gate(self) -> Path:
+        return self.reporting.export_performance_review_gate()
