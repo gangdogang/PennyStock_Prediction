@@ -28,12 +28,15 @@ Interactive launchers:
 - `launch_paper_trader.ps1` / `.bat`
 - `live_api_setup.ps1` / `.bat`
 
-Paper performance review launcher:
+Paper run and review launchers:
 
+- `run_paper_drive.ps1` / `.bat`
+- `archive_paper_run_snapshot.ps1` / `.bat`
+- `cleanup_paper_runs.ps1` / `.bat`
 - `run_paper_24h_drive.ps1` / `.bat`
 - `archive_current_paper_run.ps1` / `.bat`
 
-Use `run_paper_24h_drive.ps1` for long-running paper performance checks. It writes run-scoped logs, initial pipeline outputs, paper CSV exports, `launcher_manifest.json`, a database copy, and a final `paper-performance.zip` archive under a Drive/OneDrive-style folder instead of overwriting the root `sample_outputs/paper_trading/` directory. Use `archive_current_paper_run.ps1` while the run is still active to create a point-in-time snapshot zip without stopping the paper process.
+Use `run_paper_drive.ps1` for long-running paper checks. It runs until stopped by default, writes run-scoped logs, initial pipeline outputs, paper CSV exports, `launcher_manifest.json`, a database copy, and a final `paper-performance.zip` archive under a Drive/OneDrive-style folder instead of overwriting the root `sample_outputs/paper_trading/` directory. Use `archive_paper_run_snapshot.ps1` while the run is still active to create a point-in-time snapshot zip without stopping the paper process. Use `cleanup_paper_runs.ps1` to dry-run and then prune old OneDrive run folders. The older `run_paper_24h_drive.*` and `archive_current_paper_run.*` names are compatibility aliases.
 
 Task Scheduler helpers:
 

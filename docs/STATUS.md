@@ -26,7 +26,7 @@
 - `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
 - paper trading 결과는 snapshots, orders, positions, KPI CSV, execution quality CSV, `run_manifest.json`, `paper_performance_gate.json` 으로 남길 수 있다.
 - paper trade log 는 predictor score/weight fallback 과 prediction source lineage 를 포함하고, performance gate 는 predictor lineage 공백, KPI 분모 불일치, bucket diff 부재를 검사할 수 있다.
-- Windows 24시간 paper 성능평가 런처는 run별 export/log/archive/manifest 를 Drive/OneDrive 경로에 남기고, 기본 SQLite DB 는 run별 로컬 DB 로 분리한 뒤 종료 시 사본을 복사한다.
+- Windows paper 실행 런처는 run별 export/log/archive/manifest 를 OneDrive 경로에 남기며, 기본 실행은 사용자가 끌 때까지 계속 돈다. 중간 검토는 snapshot archive 로 만들고, 종료 시 final archive 와 DB 사본을 남긴다.
 - KIS historical minute backfill, L1 snapshot archive, coverage report CLI 가 연결돼 있다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.

@@ -20,11 +20,12 @@ Windows:
 .\launchers\windows\launch_dashboard.ps1
 .\launchers\windows\launch_dashboard_lan.ps1
 .\launchers\windows\launch_paper_trader.ps1
-.\launchers\windows\run_paper_24h_drive.ps1
-.\launchers\windows\archive_current_paper_run.ps1
+.\launchers\windows\run_paper_drive.ps1
+.\launchers\windows\archive_paper_run_snapshot.ps1
+.\launchers\windows\cleanup_paper_runs.ps1
 ```
 
-Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. 장시간 성능평가 산출물을 남길 때는 `run_paper_24h_drive.ps1` 를 우선 사용한다.
+Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. OneDrive에 run 단위 성능평가 산출물을 남길 때는 `run_paper_drive.ps1` 를 우선 사용한다.
 
 ## Mac/Windows/OneDrive 역할 분리
 
@@ -89,13 +90,13 @@ Windows CMD 와 PowerShell 문법을 섞지 않는다.
 ```bat
 REM CMD
 mkdir "%OneDrive%\Penny_Stock_Runs"
-launchers\windows\run_paper_24h_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+launchers\windows\run_paper_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
 ```
 
 ```powershell
 # PowerShell
 mkdir "$env:OneDrive\Penny_Stock_Runs"
-.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
+.\launchers\windows\run_paper_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
 ```
 
 실행 창 구분:
@@ -103,7 +104,7 @@ mkdir "$env:OneDrive\Penny_Stock_Runs"
 ```bat
 cd /d C:\Dev\Penny_Stock
 title PAPER RUN - DO NOT CLOSE
-launchers\windows\run_paper_24h_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+launchers\windows\run_paper_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
 ```
 
 대시보드는 별도 창에서 선택적으로 실행한다.
@@ -114,58 +115,60 @@ title DASHBOARD
 launchers\windows\launch_dashboard_lan.bat
 ```
 
-`run_paper_24h_drive.bat` 창은 기록용 핵심 프로세스라 닫지 않는다. `launch_dashboard_lan.bat` 창은 보기용이므로 꺼도 기록에는 영향이 없다.
+`run_paper_drive.bat` 창은 기록용 핵심 프로세스라 닫지 않는다. `launch_dashboard_lan.bat` 창은 보기용이므로 꺼도 기록에는 영향이 없다.
 
 중간 점검 archive 는 paper 실행 창을 끄지 않고 별도 창에서 만든다.
 
 ```bat
 cd /d C:\Dev\Penny_Stock
-launchers\windows\archive_current_paper_run.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+launchers\windows\archive_paper_run_snapshot.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
 ```
 
 PowerShell:
 
 ```powershell
 cd C:\Dev\Penny_Stock
-.\launchers\windows\archive_current_paper_run.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
+.\launchers\windows\archive_paper_run_snapshot.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
 ```
 
-이 명령은 가장 최근 `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다.
+이 명령은 가장 최근 `paper_runs\<run_id>\` 또는 legacy `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다.
 
 ## Windows paper 실행과 중간 archive
 
 Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.
 
 ```powershell
-.\launchers\windows\run_paper_24h_drive.ps1
+.\launchers\windows\run_paper_drive.ps1
 ```
 
 기본 동작:
 
-- Drive/OneDrive 후보 경로 아래 `paper_24h_runs\<run_id>\` 를 만든다.
+- Drive/OneDrive 후보 경로 아래 `paper_runs\<run_id>\` 를 만든다. 기존 `paper_24h_runs\` 는 legacy run 폴더로만 유지한다.
 - paper CSV 는 `paper_trading\`, 초기 파이프라인 샘플 산출물은 `pipeline_outputs\`, 로그는 `logs\`, zip 은 `archives\<run_id>-paper-performance.zip` 에 남긴다.
-- 실행 중 SQLite DB 는 기본적으로 `data\paper_24h_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리한다. dashboard 와 같은 원본 DB 를 보려면 `-UseDefaultDatabase` 를 붙여 `data\penny_stock_radar.sqlite3` 를 쓴다.
+- 실행 중 SQLite DB 는 기본적으로 `data\paper_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리한다. dashboard 와 같은 원본 DB 를 보려면 `-UseDefaultDatabase` 를 붙여 `data\penny_stock_radar.sqlite3` 를 쓴다.
 - 종료 또는 실패 시에도 `archive-paper-performance --allow-fail` 로 전송용 zip 을 만든다.
 - `launcher_manifest.json` 에 run id, 경로, exit code 를 기록한다.
 
 기본 실행은 사용자가 끌 때까지 계속 돈다. 실행 시간을 제한하고 싶을 때만 `-MaxRuntimeSeconds` 를 준다.
 
 ```powershell
-.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase
-.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase -MaxRuntimeSeconds 86400
+.\launchers\windows\run_paper_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase
+.\launchers\windows\run_paper_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase -MaxRuntimeSeconds 86400
 ```
 
 Drive 위치를 직접 지정하려면:
 
 ```powershell
-.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "G:\My Drive\Penny_Stock"
+.\launchers\windows\run_paper_drive.ps1 -DriveRoot "G:\My Drive\Penny_Stock"
 ```
 
 짧은 smoke 실행:
 
 ```powershell
-.\launchers\windows\run_paper_24h_drive.ps1 -RunId smoke -MaxRuntimeSeconds 300 -CheckIntervalSeconds 30
+.\launchers\windows\run_paper_drive.ps1 -RunId smoke -MaxRuntimeSeconds 300 -CheckIntervalSeconds 30
 ```
+
+기존 `run_paper_24h_drive.*`, `archive_current_paper_run.*` 는 호환용 alias 로 남겨둔다. 새 실행/문서 기준은 `run_paper_drive.*`, `archive_paper_run_snapshot.*` 이다.
 
 맥북에서는 zip 을 받은 뒤 압축을 풀고 먼저 gate 를 확인한다.
 
@@ -174,6 +177,53 @@ Drive 위치를 직접 지정하려면:
 ```
 
 Step 0 L1/minute coverage 60% gate 통과 전까지는 이 결과가 좋아 보여도 live 판단 근거로 쓰지 않는다.
+
+## OneDrive run 폴더 정리
+
+OneDrive에는 코드 저장소를 두지 않고 실행 결과만 둔다. 기준 폴더는 아래 하나다.
+
+```text
+C:\Users\<user>\OneDrive\Penny_Stock_Runs
+```
+
+권장 보관 기준:
+
+- 현재 실행 중인 최신 run 폴더는 지우지 않는다.
+- `paper_runs\` 는 새 기준 run 폴더다.
+- `paper_24h_runs\` 는 예전 호환 run 폴더다. 이미 맥북에서 검토한 zip 만 남기고 오래된 실패 run 은 지운다.
+- 각 run 안에서는 `paper_trading\`, `logs\`, `pipeline_outputs\`, `archives\`, `launcher_manifest.json` 만 의미 있는 산출물이다.
+- `archives\*.zip` 은 맥북에서 검토할 때 쓰는 전송 단위다. 같은 run 에 snapshot zip 이 너무 많으면 가장 최근/중요 시점만 남긴다.
+
+먼저 dry-run 으로 삭제 후보만 본다.
+
+```powershell
+cd C:\Dev\Penny_Stock
+.\launchers\windows\cleanup_paper_runs.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
+```
+
+오래된 run 을 실제 삭제하려면 `-Apply` 를 붙인다. 기본값은 최신 20개 run 을 보호하고, 14일보다 오래된 run 만 지운다.
+
+```powershell
+.\launchers\windows\cleanup_paper_runs.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -Apply
+```
+
+초기 설정 실패로 생긴 빈 실패 run 까지 정리하려면 아래처럼 실행한다.
+
+```powershell
+.\launchers\windows\cleanup_paper_runs.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -DeleteFailedEmptyRuns -Apply
+```
+
+직접 손으로 정리할 때 삭제해도 되는 후보:
+
+- `paper_24h_20260422_153105` 처럼 실행 초반 pip/venv 오류로 실패했고 `paper_trading\paper_trade_log.csv` 가 비어 있는 폴더
+- `.snapshot_staging_*` 임시 폴더
+- 맥북에 이미 복사해서 검토 완료한 오래된 snapshot zip
+
+삭제하면 안 되는 후보:
+
+- 지금 열어 둔 `run_paper_drive` 창의 현재 run 폴더
+- 아직 맥북에서 검토하지 않은 최신 snapshot/final zip
+- `.env`, `C:\Dev\Penny_Stock`, Git 저장소 폴더
 
 ## 환경 설정
 
@@ -253,7 +303,7 @@ paper engine 실행:
 ./scripts/psradar archive-paper-performance --output-path sample_outputs/paper_trading_review.zip --allow-fail
 ```
 
-윈도우 장시간 실행 결과를 맥북에서 검토할 때는 위의 `run_paper_24h_drive.ps1` 런처가 만든 zip 을 기준으로 본다. 수동 실행 시에도 실행 창마다 `PENNY_STOCK_PAPER_TRADE_DIR` 를 별도 폴더로 지정하고, 종료 후 `archive-paper-performance` 로 zip 을 만든 뒤 맥북에서 `review-paper-performance --export-dir <압축해제>/paper_trading` 으로 gate 를 먼저 확인한다.
+윈도우 장시간 실행 결과를 맥북에서 검토할 때는 위의 `run_paper_drive.ps1` 런처가 만든 final zip 또는 `archive_paper_run_snapshot.ps1` 이 만든 snapshot zip 을 기준으로 본다. 수동 실행 시에도 실행 창마다 `PENNY_STOCK_PAPER_TRADE_DIR` 를 별도 폴더로 지정하고, 종료 후 `archive-paper-performance` 로 zip 을 만든 뒤 맥북에서 `review-paper-performance --export-dir <압축해제>/paper_trading` 으로 gate 를 먼저 확인한다.
 
 KIS mock broker execution:
 

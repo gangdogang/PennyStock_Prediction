@@ -36,8 +36,8 @@ Windows 대시보드:
 Windows paper 실행/스냅샷:
 
 ```powershell
-.\launchers\windows\run_paper_24h_drive.ps1
-.\launchers\windows\archive_current_paper_run.ps1
+.\launchers\windows\run_paper_drive.ps1
+.\launchers\windows\archive_paper_run_snapshot.ps1
 ```
 
 API 키 설정:
@@ -68,7 +68,7 @@ API 키 설정:
 - `archive/`: 전환 전 보관본, 완료된 계획 문서, 작업 스냅샷
 - `tests/`: 테스트
 - `scripts/`: 공통 CLI/pipeline/품질 게이트 스크립트
-- `launchers/windows/`: Windows 대화형 런처, Drive 성능평가 런처, 작업 스케줄러 스크립트
+- `launchers/windows/`: Windows 대화형 런처, OneDrive paper 실행/스냅샷 런처, 작업 스케줄러 스크립트
 - `automation/`: supervisor 프롬프트, launchd 템플릿, 상태/로그 폴더
 - `docs/`: 장기적으로 유지할 핵심 문서
 - `data/`: 로컬 DB, 캐시, replay 입력
