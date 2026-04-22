@@ -55,6 +55,9 @@ def render_watchlist(frame: pd.DataFrame) -> None:
         st.info("관심종목이 없습니다. 먼저 `psradar build-watchlist`를 실행하세요.")
         return
 
+    frame = frame.copy()
+    frame["total_score"] = numeric_series(frame, "total_score")
+    frame["catalyst_score"] = numeric_series(frame, "catalyst_score")
     min_score = st.slider(
         "최소 총점",
         min_value=0.0,

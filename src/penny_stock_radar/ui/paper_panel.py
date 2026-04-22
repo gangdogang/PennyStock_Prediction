@@ -88,6 +88,8 @@ def render_paper_trading_panel(
     if not strategy_runs.empty:
         st.markdown("**전략 비교**")
         comparison = strategy_runs.copy()
+        if "strategy_name" not in comparison.columns:
+            comparison["strategy_name"] = "unknown"
         comparison["strategy"] = comparison["strategy_name"].map(PAPER_STRATEGY_LABELS).fillna(
             comparison["strategy_name"]
         )
@@ -194,6 +196,8 @@ def render_paper_trading_panel(
         st.markdown("**에쿼티 곡선**")
         if snapshots.empty:
             st.info("아직 저장된 에쿼티 곡선이 없습니다.")
+        elif "created_at" not in snapshots.columns:
+            st.info("에쿼티 곡선 시각 컬럼이 없어 차트를 표시할 수 없습니다.")
         else:
             chart = snapshots.copy()
             chart["created_at"] = pd.to_datetime(chart["created_at"], errors="coerce")
@@ -208,6 +212,8 @@ def render_paper_trading_panel(
         st.markdown("**종목별 손익**")
         if closed_positions.empty:
             st.info("아직 종료된 트레이드가 없습니다.")
+        elif not {"symbol", "total_pnl"}.issubset(closed_positions.columns):
+            st.info("종목별 손익에 필요한 컬럼이 아직 없습니다.")
         else:
             pnl_frame = (
                 closed_positions.groupby("symbol", as_index=True)["total_pnl"]

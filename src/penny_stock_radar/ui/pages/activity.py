@@ -9,7 +9,7 @@ from ..formatting import (
     coerce_reason_list,
     prepare_display_frame,
 )
-from .shared import numeric_series
+from .shared import numeric_series, sort_by_available
 
 
 def live_empty_message(meta: dict[str, Any], market_phase: str) -> str:
@@ -121,7 +121,7 @@ def render_live_activity_panel(
 
     with left:
         st.markdown("상승률 상위")
-        top_pct = prepare_live_activity_display(frame.sort_values(["pct_rank", "symbol"]).copy())
+        top_pct = prepare_live_activity_display(sort_by_available(frame, ["pct_rank", "symbol"]))
         display = prepare_display_frame(top_pct)
         preferred = [
             "pct_rank",
@@ -143,9 +143,7 @@ def render_live_activity_panel(
 
     with right:
         st.markdown("거래량 상위")
-        top_volume = prepare_live_activity_display(
-            frame.sort_values(["volume_rank", "symbol"]).copy()
-        )
+        top_volume = prepare_live_activity_display(sort_by_available(frame, ["volume_rank", "symbol"]))
         display = prepare_display_frame(top_volume)
         preferred = [
             "volume_rank",
@@ -173,7 +171,8 @@ def render_live_activity_panel(
             lambda row: best_live_rank(row.get("pct_rank"), row.get("volume_rank")),
             axis=1,
         )
-        enriched_outcomes = enriched_outcomes.sort_values(
+        enriched_outcomes = sort_by_available(
+            enriched_outcomes,
             ["best_live_rank", "pct_rank", "volume_rank", "predicted", "symbol"],
             ascending=[True, True, True, False, True],
         )
@@ -319,6 +318,9 @@ def render_session(
     if frame.empty:
         st.info("정규장 판단 결과가 없습니다. 먼저 replay pipeline을 실행하세요.")
     else:
+        frame = frame.copy()
+        if "decision" not in frame.columns:
+            frame["decision"] = "UNKNOWN"
         decision_filter = st.multiselect(
             "판단 필터",
             options=sorted(frame["decision"].dropna().unique().tolist()),

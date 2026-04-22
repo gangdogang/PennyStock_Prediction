@@ -19,3 +19,19 @@ def numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(0.0, index=frame.index, dtype=float)
     series = pd.to_numeric(frame[column], errors="coerce")
     return series.fillna(0.0)
+
+
+def sort_by_available(
+    frame: pd.DataFrame,
+    columns: list[str],
+    *,
+    ascending: bool | list[bool] = True,
+) -> pd.DataFrame:
+    available = [column for column in columns if column in frame.columns]
+    if not available:
+        return frame.copy()
+    if isinstance(ascending, list):
+        sort_ascending = ascending[: len(available)]
+    else:
+        sort_ascending = ascending
+    return frame.sort_values(available, ascending=sort_ascending).copy()
