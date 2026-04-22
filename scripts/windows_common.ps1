@@ -32,6 +32,17 @@ function Invoke-PythonCommand {
     }
 }
 
+function Invoke-NativeCommandWithHostOutput {
+    param(
+        [scriptblock]$Command
+    )
+
+    & $Command 2>&1 | ForEach-Object {
+        Write-Host $_
+    }
+    return $LASTEXITCODE
+}
+
 function Ensure-EnvFile {
     param(
         [string]$RootDir
@@ -97,10 +108,18 @@ sys.exit(1 if missing else 0)
     if (-not $dependenciesReady) {
         $packageSpec = if ($IncludeUi) { ".[dev,ui]" } else { ".[dev]" }
         Write-Host "Installing required packages. This can take 1-3 minutes on the first run."
-        & $venvPython -m pip install -U pip
-        Assert-LastExitCode "Upgrading pip"
-        & $venvPython -m pip install -e $packageSpec
-        Assert-LastExitCode "Installing project dependencies"
+        $pipUpgradeExitCode = Invoke-NativeCommandWithHostOutput -Command {
+            & $venvPython -m pip install -U pip
+        }
+        if ($pipUpgradeExitCode -ne 0) {
+            throw "Upgrading pip failed with exit code $pipUpgradeExitCode."
+        }
+        $dependencyInstallExitCode = Invoke-NativeCommandWithHostOutput -Command {
+            & $venvPython -m pip install -e $packageSpec
+        }
+        if ($dependencyInstallExitCode -ne 0) {
+            throw "Installing project dependencies failed with exit code $dependencyInstallExitCode."
+        }
     }
     else {
         Write-Host "Dependencies are already installed. Skipping package install."
