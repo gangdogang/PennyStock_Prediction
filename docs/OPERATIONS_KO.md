@@ -25,6 +25,96 @@ Windows:
 
 Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. 장시간 성능평가 산출물을 남길 때는 `run_paper_24h_drive.ps1` 를 우선 사용한다.
 
+## Mac/Windows/OneDrive 역할 분리
+
+운영 기준은 `코드 동기화는 GitHub`, `실행 결과 공유는 OneDrive` 로 분리한다. OneDrive 안에 예전 `Penny_Stock` 저장소가 있더라도 실행/수정 기준으로 쓰지 않는다.
+
+권장 폴더 구조:
+
+```text
+macOS:
+  /Users/wondokyeong/Desktop/Penny_Stock
+    - 코드 수정, 테스트, commit, push
+
+Windows:
+  C:\Dev\Penny_Stock
+    - git pull, dashboard 실행, paper 24h 실행
+    - .env 는 이 폴더의 C:\Dev\Penny_Stock\.env 에 있어야 한다
+    - 실행 중 원본 SQLite DB 는 data\paper_24h_runs\<run_id>\ 아래에 둔다
+
+OneDrive:
+  C:\Users\<user>\OneDrive\Penny_Stock_Runs
+    - paper 24h 실행 결과 공유 전용
+    - logs, paper_trading CSV, archive zip, DB 사본만 둔다
+
+사용하지 않기:
+  C:\Users\<user>\OneDrive\Desktop\Penny_Stock
+  C:\Users\<user>\Desktop\Penny_Stock
+    - OneDrive Desktop 동기화 대상일 수 있으므로 git pull, 코드 수정, 장시간 실행에 쓰지 않는다
+```
+
+Mac 에서 코드 수정 후:
+
+```bash
+cd /Users/wondokyeong/Desktop/Penny_Stock
+git status
+git add <수정한 파일>
+git commit -m "<변경 요약>"
+git push origin main
+```
+
+Windows 에서 최신 코드 받기:
+
+```bat
+cd /d C:\Dev\Penny_Stock
+git pull --ff-only origin main
+```
+
+Windows 의 `.env` 는 GitHub 에 올라가지 않는다. 새로 clone 한 `C:\Dev\Penny_Stock` 에 API 키가 없으면 예전 폴더에서 복사하거나 직접 입력한다.
+
+```bat
+cd /d C:\Dev\Penny_Stock
+notepad .env
+```
+
+예전 Desktop 폴더에 `.env` 가 있을 때만 복사:
+
+```bat
+copy /Y "%OneDrive%\Desktop\Penny_Stock\.env" "C:\Dev\Penny_Stock\.env"
+```
+
+Windows CMD 와 PowerShell 문법을 섞지 않는다.
+
+```bat
+REM CMD
+mkdir "%OneDrive%\Penny_Stock_Runs"
+launchers\windows\run_paper_24h_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+```
+
+```powershell
+# PowerShell
+mkdir "$env:OneDrive\Penny_Stock_Runs"
+.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
+```
+
+실행 창 구분:
+
+```bat
+cd /d C:\Dev\Penny_Stock
+title PAPER 24H - DO NOT CLOSE
+launchers\windows\run_paper_24h_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+```
+
+대시보드는 별도 창에서 선택적으로 실행한다.
+
+```bat
+cd /d C:\Dev\Penny_Stock
+title DASHBOARD
+launchers\windows\launch_dashboard_lan.bat
+```
+
+`run_paper_24h_drive.bat` 창은 기록용 핵심 프로세스라 닫지 않는다. `launch_dashboard_lan.bat` 창은 보기용이므로 꺼도 기록에는 영향이 없다.
+
 ## Windows 24시간 paper 성능평가
 
 Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.
