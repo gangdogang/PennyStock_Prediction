@@ -65,8 +65,14 @@ catch {
 
 if (-not $dependenciesReady) {
     Write-Host "Installing required packages. This can take 1-3 minutes on the first run."
-    & $venvPip install -U pip
-    & $venvPip install -e ".[dev,ui]"
+    & $venvPython -m pip install -U pip
+    if (($null -ne $LASTEXITCODE) -and ($LASTEXITCODE -ne 0)) {
+        throw "Upgrading pip failed with exit code $LASTEXITCODE."
+    }
+    & $venvPython -m pip install -e ".[dev,ui]"
+    if (($null -ne $LASTEXITCODE) -and ($LASTEXITCODE -ne 0)) {
+        throw "Installing dashboard dependencies failed with exit code $LASTEXITCODE."
+    }
 }
 else {
     Write-Host "Dependencies are already installed. Skipping package install."

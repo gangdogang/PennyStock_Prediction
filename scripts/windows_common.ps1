@@ -97,9 +97,9 @@ sys.exit(1 if missing else 0)
     if (-not $dependenciesReady) {
         $packageSpec = if ($IncludeUi) { ".[dev,ui]" } else { ".[dev]" }
         Write-Host "Installing required packages. This can take 1-3 minutes on the first run."
-        & $venvPip install -U pip
+        & $venvPython -m pip install -U pip
         Assert-LastExitCode "Upgrading pip"
-        & $venvPip install -e $packageSpec
+        & $venvPython -m pip install -e $packageSpec
         Assert-LastExitCode "Installing project dependencies"
     }
     else {
