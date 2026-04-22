@@ -33,10 +33,11 @@ Windows 대시보드:
 .\launchers\windows\launch_dashboard.ps1
 ```
 
-Windows 24시간 paper 성능평가:
+Windows paper 실행/스냅샷:
 
 ```powershell
 .\launchers\windows\run_paper_24h_drive.ps1
+.\launchers\windows\archive_current_paper_run.ps1
 ```
 
 API 키 설정:

@@ -31,8 +31,9 @@ Interactive launchers:
 Paper performance review launcher:
 
 - `run_paper_24h_drive.ps1` / `.bat`
+- `archive_current_paper_run.ps1` / `.bat`
 
-Use `run_paper_24h_drive.ps1` for overnight or 24-hour paper performance checks. It writes run-scoped logs, initial pipeline outputs, paper CSV exports, `launcher_manifest.json`, a database copy, and a `paper-performance.zip` archive under a Drive/OneDrive-style folder instead of overwriting the root `sample_outputs/paper_trading/` directory.
+Use `run_paper_24h_drive.ps1` for long-running paper performance checks. It writes run-scoped logs, initial pipeline outputs, paper CSV exports, `launcher_manifest.json`, a database copy, and a final `paper-performance.zip` archive under a Drive/OneDrive-style folder instead of overwriting the root `sample_outputs/paper_trading/` directory. Use `archive_current_paper_run.ps1` while the run is still active to create a point-in-time snapshot zip without stopping the paper process.
 
 Task Scheduler helpers:
 

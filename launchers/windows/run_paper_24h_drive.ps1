@@ -71,6 +71,7 @@ function Resolve-DriveRoot {
     $candidates.Add("G:\내 드라이브\Penny_Stock")
     if ($env:USERPROFILE) {
         $candidates.Add((Join-Path $env:USERPROFILE "Google Drive\My Drive\Penny_Stock"))
+        $candidates.Add((Join-Path $env:USERPROFILE "OneDrive\Penny_Stock_Runs"))
         $candidates.Add((Join-Path $env:USERPROFILE "OneDrive\Penny_Stock"))
     }
 
@@ -145,7 +146,7 @@ $RunId = ($RunId -replace '[\\/:*?"<>|]', "_")
 if ([string]::IsNullOrWhiteSpace($RunId)) {
     $RunId = "paper_24h_" + (Get-Date -Format "yyyyMMdd_HHmmss")
 }
-$MaxRuntimeSeconds = Resolve-IntSetting -Value $MaxRuntimeSeconds -EnvName "PENNY_STOCK_PAPER_24H_MAX_RUNTIME_SECONDS" -DefaultValue 86400
+$MaxRuntimeSeconds = Resolve-IntSetting -Value $MaxRuntimeSeconds -EnvName "PENNY_STOCK_PAPER_24H_MAX_RUNTIME_SECONDS" -DefaultValue 0
 $CheckIntervalSeconds = Resolve-IntSetting -Value $CheckIntervalSeconds -EnvName "PENNY_STOCK_PAPER_24H_CHECK_INTERVAL_SECONDS" -DefaultValue 60
 $Phase = Resolve-TextSetting -Value $Phase -EnvName "PENNY_STOCK_PAPER_24H_PHASE" -DefaultValue "auto"
 
@@ -286,13 +287,23 @@ try {
             -Command { & $runtime.VenvPython -m penny_stock_radar run-premkt-predictor }
     }
 
-    Write-Host "[4/4] Starting paper trader for $MaxRuntimeSeconds seconds"
-    & $runtime.VenvPython -m penny_stock_radar paper-trader `
-        --check-interval-seconds $CheckIntervalSeconds `
-        --phase $Phase `
-        --max-runtime-seconds $MaxRuntimeSeconds `
-        1>> (Join-Path $LogDir "paper_trader_stdout.log") `
-        2>> (Join-Path $LogDir "paper_trader_stderr.log")
+    if ($MaxRuntimeSeconds -gt 0) {
+        Write-Host "[4/4] Starting paper trader for $MaxRuntimeSeconds seconds"
+        & $runtime.VenvPython -m penny_stock_radar paper-trader `
+            --check-interval-seconds $CheckIntervalSeconds `
+            --phase $Phase `
+            --max-runtime-seconds $MaxRuntimeSeconds `
+            1>> (Join-Path $LogDir "paper_trader_stdout.log") `
+            2>> (Join-Path $LogDir "paper_trader_stderr.log")
+    }
+    else {
+        Write-Host "[4/4] Starting paper trader until stopped"
+        & $runtime.VenvPython -m penny_stock_radar paper-trader `
+            --check-interval-seconds $CheckIntervalSeconds `
+            --phase $Phase `
+            1>> (Join-Path $LogDir "paper_trader_stdout.log") `
+            2>> (Join-Path $LogDir "paper_trader_stderr.log")
+    }
     $script:TraderExitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
     if ($script:TraderExitCode -ne 0) {
         throw "Paper trader failed with exit code $script:TraderExitCode. See $(Join-Path $LogDir 'paper_trader_stderr.log')"

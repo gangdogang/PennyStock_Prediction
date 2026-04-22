@@ -21,6 +21,7 @@ Windows:
 .\launchers\windows\launch_dashboard_lan.ps1
 .\launchers\windows\launch_paper_trader.ps1
 .\launchers\windows\run_paper_24h_drive.ps1
+.\launchers\windows\archive_current_paper_run.ps1
 ```
 
 Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. 장시간 성능평가 산출물을 남길 때는 `run_paper_24h_drive.ps1` 를 우선 사용한다.
@@ -38,14 +39,14 @@ macOS:
 
 Windows:
   C:\Dev\Penny_Stock
-    - git pull, dashboard 실행, paper 24h 실행
+    - git pull, dashboard 실행, paper 실행
     - .env 는 이 폴더의 C:\Dev\Penny_Stock\.env 에 있어야 한다
-    - 실행 중 원본 SQLite DB 는 data\paper_24h_runs\<run_id>\ 아래에 둔다
+    - dashboard 와 같은 DB 를 보려면 paper 실행 시 -UseDefaultDatabase 를 붙인다
 
 OneDrive:
   C:\Users\<user>\OneDrive\Penny_Stock_Runs
-    - paper 24h 실행 결과 공유 전용
-    - logs, paper_trading CSV, archive zip, DB 사본만 둔다
+    - paper 실행 결과 공유 전용
+    - logs, paper_trading CSV, snapshot/final archive zip, DB 사본만 둔다
 
 사용하지 않기:
   C:\Users\<user>\OneDrive\Desktop\Penny_Stock
@@ -101,7 +102,7 @@ mkdir "$env:OneDrive\Penny_Stock_Runs"
 
 ```bat
 cd /d C:\Dev\Penny_Stock
-title PAPER 24H - DO NOT CLOSE
+title PAPER RUN - DO NOT CLOSE
 launchers\windows\run_paper_24h_drive.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
 ```
 
@@ -115,7 +116,23 @@ launchers\windows\launch_dashboard_lan.bat
 
 `run_paper_24h_drive.bat` 창은 기록용 핵심 프로세스라 닫지 않는다. `launch_dashboard_lan.bat` 창은 보기용이므로 꺼도 기록에는 영향이 없다.
 
-## Windows 24시간 paper 성능평가
+중간 점검 archive 는 paper 실행 창을 끄지 않고 별도 창에서 만든다.
+
+```bat
+cd /d C:\Dev\Penny_Stock
+launchers\windows\archive_current_paper_run.bat -DriveRoot "%OneDrive%\Penny_Stock_Runs"
+```
+
+PowerShell:
+
+```powershell
+cd C:\Dev\Penny_Stock
+.\launchers\windows\archive_current_paper_run.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
+```
+
+이 명령은 가장 최근 `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다.
+
+## Windows paper 실행과 중간 archive
 
 Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.
 
@@ -127,9 +144,16 @@ Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample
 
 - Drive/OneDrive 후보 경로 아래 `paper_24h_runs\<run_id>\` 를 만든다.
 - paper CSV 는 `paper_trading\`, 초기 파이프라인 샘플 산출물은 `pipeline_outputs\`, 로그는 `logs\`, zip 은 `archives\<run_id>-paper-performance.zip` 에 남긴다.
-- 실행 중 SQLite DB 는 기본적으로 `data\paper_24h_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리하고, 종료 시 Drive run 폴더의 `database\` 로 사본을 복사한다.
+- 실행 중 SQLite DB 는 기본적으로 `data\paper_24h_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리한다. dashboard 와 같은 원본 DB 를 보려면 `-UseDefaultDatabase` 를 붙여 `data\penny_stock_radar.sqlite3` 를 쓴다.
 - 종료 또는 실패 시에도 `archive-paper-performance --allow-fail` 로 전송용 zip 을 만든다.
 - `launcher_manifest.json` 에 run id, 경로, exit code 를 기록한다.
+
+기본 실행은 사용자가 끌 때까지 계속 돈다. 실행 시간을 제한하고 싶을 때만 `-MaxRuntimeSeconds` 를 준다.
+
+```powershell
+.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase
+.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs" -UseDefaultDatabase -MaxRuntimeSeconds 86400
+```
 
 Drive 위치를 직접 지정하려면:
 
