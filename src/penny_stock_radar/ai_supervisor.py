@@ -58,6 +58,7 @@ DEFAULT_AI_SUPERVISOR_STATE_PATH = Path("automation/state/ai_supervisor_state.js
 SUPERVISOR_LOG_MAX_BYTES = 512 * 1024
 SUPERVISOR_LOG_BACKUP_COUNT = 5
 EASTERN = ZoneInfo("America/New_York")
+SNAPSHOT_MTIME_GRACE_SECONDS = 1.0
 
 
 def default_automation_status_path(project_root: Path | None = None) -> Path:
@@ -1041,16 +1042,13 @@ class AISupervisor:
             return False
 
         try:
-            return self.snapshot_output.stat().st_mtime < latest_data_mtime
+            snapshot_mtime = self.snapshot_output.stat().st_mtime
+            return snapshot_mtime + SNAPSHOT_MTIME_GRACE_SECONDS < latest_data_mtime
         except OSError:
             return True
 
     def _latest_data_mtime(self) -> float | None:
-        related_paths = [
-            self.settings.database_path,
-            self.settings.database_path.with_name(self.settings.database_path.name + "-wal"),
-            self.settings.database_path.with_name(self.settings.database_path.name + "-journal"),
-        ]
+        related_paths = [self.settings.database_path]
         mtimes: list[float] = []
         for path in related_paths:
             try:
