@@ -22,13 +22,15 @@ from penny_stock_radar.db import (
 )
 from penny_stock_radar.models import MarketActivity, PaperPosition, PremktPrediction
 from penny_stock_radar.services.momentum_advisor import MomentumAdvice, MomentumAdviceBundle
-from penny_stock_radar.services.market_activity import MarketActivityScanResult
+from penny_stock_radar.services.activity_sanitizer import sanitize_activity_for_bucket
+from penny_stock_radar.services.market_activity import MarketActivityScanner, MarketActivityScanResult
 from penny_stock_radar.services.paper_coordinator import PaperTradingCoordinator
 from penny_stock_radar.services.paper_trading import (
     MOMENTUM_ONLY_BUCKET,
     PREDICTOR_WEIGHTED_BUCKET,
     PRIMARY_PAPER_STRATEGY,
     PaperTradingEngine,
+    WATCHLIST_BLIND_MOMENTUM_BUCKET,
 )
 
 
@@ -104,6 +106,46 @@ class FakeAdvisor:
             for symbol, (stance, conviction, note) in self.stances.items()
         }
         return MomentumAdviceBundle(summary=f"{market_phase} consensus", items=items)
+
+
+def test_watchlist_blind_activity_sanitizer_removes_predictor_watchlist_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    settings = AppSettings(db_path=db_path, live_market_provider="disabled")
+    scanner = MarketActivityScanner(settings)
+    row = _activity(
+        "META",
+        phase="premarket",
+        price=1.00,
+        label="OPENING_RANGE_CANDIDATE",
+        score=4.50,
+        pct_change=20.0,
+        predicted=True,
+        watchlist_rank=1,
+        reasons=[
+            "watchlist_predicted",
+            "predicted_watchlist",
+            "watchlist_score_strong",
+            "predictor_score:90.0",
+            "live_dollar_volume_strong",
+        ],
+    )
+
+    sanitized = sanitize_activity_for_bucket(
+        scanner,
+        WATCHLIST_BLIND_MOMENTUM_BUCKET,
+        [row],
+    )[0]
+
+    assert row.predicted is True
+    assert sanitized.predicted is False
+    assert sanitized.watchlist_rank is None
+    assert sanitized.watchlist_score is None
+    assert sanitized.analysis_label == "NEWS_CHECK_FIRST"
+    assert sanitized.analysis_score == pytest.approx(3.5)
+    assert "live_dollar_volume_strong" in sanitized.reasons
+    assert not any("watchlist" in reason.lower() for reason in sanitized.reasons)
+    assert not any("predict" in reason.lower() for reason in sanitized.reasons)
 
 
 def _paper_position(
@@ -1842,6 +1884,7 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     comparison_csv = export_dir / "paper_strategy_comparison.csv"
     bucket_csv = export_dir / "paper_bucket_comparison.csv"
     diff_csv = export_dir / "paper_bucket_trade_diff.csv"
+    pair_diff_csv = export_dir / "paper_bucket_pair_diff.csv"
     cohort_csv = export_dir / "paper_cohort_summary.csv"
     execution_csv = export_dir / "paper_execution_quality.csv"
     trade_log_csv = export_dir / "paper_trade_log.csv"
@@ -1855,6 +1898,7 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert comparison_csv.exists()
     assert bucket_csv.exists()
     assert diff_csv.exists()
+    assert pair_diff_csv.exists()
     assert cohort_csv.exists()
     assert execution_csv.exists()
     assert trade_log_csv.exists()
@@ -1863,10 +1907,11 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert predictor_csv.exists()
     assert manifest_json.exists()
     assert gate_json.exists()
-    assert len(strategy_runs) >= 4
+    assert len(strategy_runs) >= 5
     csv_text = comparison_csv.read_text(encoding="utf-8")
     bucket_text = bucket_csv.read_text(encoding="utf-8")
     diff_text = diff_csv.read_text(encoding="utf-8")
+    pair_diff_rows = _csv_rows(pair_diff_csv)
     cohort_text = cohort_csv.read_text(encoding="utf-8")
     execution_text = execution_csv.read_text(encoding="utf-8")
     backtest_text = backtest_csv.read_text(encoding="utf-8")
@@ -1876,7 +1921,17 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert "baseline_pct_leader_v1" in csv_text
     assert PREDICTOR_WEIGHTED_BUCKET in bucket_text
     assert MOMENTUM_ONLY_BUCKET in bucket_text
+    assert WATCHLIST_BLIND_MOMENTUM_BUCKET in bucket_text
     assert "pnl_diff" in diff_text
+    assert pair_diff_rows
+    assert {
+        (row["left_bucket"], row["right_bucket"])
+        for row in pair_diff_rows
+    } == {
+        (PREDICTOR_WEIGHTED_BUCKET, MOMENTUM_ONLY_BUCKET),
+        (MOMENTUM_ONLY_BUCKET, WATCHLIST_BLIND_MOMENTUM_BUCKET),
+        (PREDICTOR_WEIGHTED_BUCKET, WATCHLIST_BLIND_MOMENTUM_BUCKET),
+    }
     assert "portfolio_bucket" in cohort_text
     assert "strategy_bucket" in cohort_text
     assert "predicted_starter" in cohort_text
@@ -1887,6 +1942,11 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     manifest = json.loads(manifest_json.read_text(encoding="utf-8"))
     gate = json.loads(gate_json.read_text(encoding="utf-8"))
     assert manifest["artifacts"]["paper_trade_log"] == "paper_trade_log.csv"
+    assert manifest["predictor_effect"]["enabled"] is False
+    trade_header = trade_log_csv.read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert "prediction_generated_at" in trade_header
+    assert "prediction_cutoff_at" in trade_header
+    assert "prediction_source" in trade_header
     assert gate["status"] == "pass"
 
 
@@ -2002,6 +2062,7 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
                 score=2.10,
                 pct_rank=8,
                 volume_rank=8,
+                pct_change=5.0,
                 predicted=True,
                 watchlist_rank=3,
                 behavioral_score=55.0,
@@ -2021,13 +2082,23 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
         "auto_paper_v1",
         bucket=MOMENTUM_ONLY_BUCKET,
     )
-    assert predictor_run is not None and momentum_run is not None
+    blind_run = fetch_latest_paper_trading_run(
+        db_path,
+        "auto_paper_v1",
+        bucket=WATCHLIST_BLIND_MOMENTUM_BUCKET,
+    )
+    assert predictor_run is not None and momentum_run is not None and blind_run is not None
 
     predictor_positions = fetch_paper_positions(db_path, predictor_run.run_id)
     momentum_positions = fetch_paper_positions(db_path, momentum_run.run_id)
+    blind_positions = fetch_paper_positions(db_path, blind_run.run_id)
     assert {row.symbol for row in predictor_positions if row.status == "OPEN"} == {"BOTH", "EDGE"}
     assert {row.symbol for row in momentum_positions if row.status == "OPEN"} == {"BOTH"}
+    assert {row.symbol for row in blind_positions if row.status == "OPEN"} == {"BOTH"}
+    assert all(row.watchlist_rank_at_entry is None for row in blind_positions)
+    assert all(row.strategy_bucket == "watchlist_blind_starter" for row in blind_positions)
     assert predictor_run.cash_balance != momentum_run.cash_balance
+    assert blind_run.cash_balance != momentum_run.cash_balance
 
     current_time = datetime(2026, 3, 26, 14, 5, tzinfo=timezone.utc)
     coordinator.process_market_activity(
@@ -2077,17 +2148,25 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
         "auto_paper_v1",
         bucket=MOMENTUM_ONLY_BUCKET,
     )
-    assert predictor_run is not None and momentum_run is not None
+    blind_run = fetch_latest_paper_trading_run(
+        db_path,
+        "auto_paper_v1",
+        bucket=WATCHLIST_BLIND_MOMENTUM_BUCKET,
+    )
+    assert predictor_run is not None and momentum_run is not None and blind_run is not None
     predictor_positions = fetch_paper_positions(db_path, predictor_run.run_id)
     momentum_positions = fetch_paper_positions(db_path, momentum_run.run_id)
+    blind_positions = fetch_paper_positions(db_path, blind_run.run_id)
 
     edge_predictor = next(row for row in predictor_positions if row.symbol == "EDGE")
     both_predictor = next(row for row in predictor_positions if row.symbol == "BOTH")
     both_momentum = next(row for row in momentum_positions if row.symbol == "BOTH")
+    both_blind = next(row for row in blind_positions if row.symbol == "BOTH")
     assert edge_predictor.status == "CLOSED"
     assert edge_predictor.exit_reason == "stop_loss"
     assert both_predictor.status == "OPEN"
     assert both_momentum.status == "OPEN"
+    assert both_blind.status == "OPEN"
     assert predictor_run.realized_pnl != momentum_run.realized_pnl
 
     diff_csv = export_dir / "paper_bucket_trade_diff.csv"
@@ -2098,16 +2177,34 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
     assert "momentum_total_pnl" in diff_text
     diff_rows = _csv_rows(diff_csv)
     assert any(abs(float(row["pnl_diff"])) > 0 for row in diff_rows if row["pnl_diff"])
+    pair_diff_rows = _csv_rows(export_dir / "paper_bucket_pair_diff.csv")
+    assert {
+        (row["left_bucket"], row["right_bucket"])
+        for row in pair_diff_rows
+    } == {
+        (PREDICTOR_WEIGHTED_BUCKET, MOMENTUM_ONLY_BUCKET),
+        (MOMENTUM_ONLY_BUCKET, WATCHLIST_BLIND_MOMENTUM_BUCKET),
+        (PREDICTOR_WEIGHTED_BUCKET, WATCHLIST_BLIND_MOMENTUM_BUCKET),
+    }
     trade_rows = _csv_rows(export_dir / "paper_trade_log.csv")
     edge_rows = [
         row
         for row in trade_rows
         if row["symbol"] == "EDGE" and row["bucket"] == PREDICTOR_WEIGHTED_BUCKET
     ]
+    blind_rows = [
+        row
+        for row in trade_rows
+        if row["bucket"] == WATCHLIST_BLIND_MOMENTUM_BUCKET
+    ]
     assert edge_rows
     assert edge_rows[0]["predicted"] == "True"
     assert edge_rows[0]["predictor_score"] == "90.0"
     assert edge_rows[0]["predictor_weight"] == "1.0"
+    assert blind_rows
+    assert {row["predicted"] for row in blind_rows} == {"False"}
+    assert {row["predictor_score"] for row in blind_rows} == {"0.0"}
+    assert {row["predictor_weight"] for row in blind_rows} == {"0.0"}
     predictor_kpi_rows = _csv_rows(export_dir / "paper_predictor_kpis.csv")
     primary_kpi = next(
         row
@@ -2117,6 +2214,122 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
     )
     assert int(primary_kpi["candidate_count"]) == 2
     assert int(primary_kpi["triggered_candidate_count"]) == 2
+
+
+def test_three_adaptive_buckets_diverge_on_synthetic_metadata_ablation(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    _seed_predictions(
+        db_path,
+        [
+            PremktPrediction(
+                symbol="PRED",
+                score=90.0,
+                max_hold_days=3,
+                entry_rationale="predictor-only setup",
+                themes=["biotech"],
+                filing_summary="8-K",
+            ),
+            PremktPrediction(
+                symbol="WATCH",
+                score=90.0,
+                max_hold_days=3,
+                entry_rationale="watchlist setup",
+                themes=["biotech"],
+                filing_summary="8-K",
+            ),
+        ],
+    )
+    current_time = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+        premarket_min_dollar_volume=50.0,
+        trade_plan_max_concurrent_open_risk_pct=5.0,
+        paper_predictor_weight_k1=1.0,
+    )
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: current_time)
+
+    coordinator.process_market_activity(
+        market_phase="premarket",
+        activity=[
+            _activity(
+                "PRED",
+                phase="premarket",
+                price=1.00,
+                label="WAIT_PULLBACK",
+                score=2.10,
+                pct_rank=8,
+                volume_rank=8,
+                pct_change=5.0,
+                predicted=True,
+                watchlist_rank=1,
+            ),
+            _activity(
+                "WATCH",
+                phase="premarket",
+                price=1.10,
+                label="OPENING_RANGE_CANDIDATE",
+                score=3.00,
+                pct_rank=4,
+                volume_rank=4,
+                pct_change=5.0,
+                predicted=True,
+                watchlist_rank=2,
+            ),
+            _activity(
+                "LIVE",
+                phase="premarket",
+                price=1.20,
+                label="OPENING_RANGE_CANDIDATE",
+                score=4.00,
+                pct_rank=1,
+                volume_rank=1,
+                pct_change=25.0,
+                predicted=False,
+                watchlist_rank=None,
+            ),
+        ],
+        export_csv=False,
+    )
+
+    predictor_run = fetch_latest_paper_trading_run(
+        db_path,
+        PRIMARY_PAPER_STRATEGY,
+        bucket=PREDICTOR_WEIGHTED_BUCKET,
+    )
+    momentum_run = fetch_latest_paper_trading_run(
+        db_path,
+        PRIMARY_PAPER_STRATEGY,
+        bucket=MOMENTUM_ONLY_BUCKET,
+    )
+    blind_run = fetch_latest_paper_trading_run(
+        db_path,
+        PRIMARY_PAPER_STRATEGY,
+        bucket=WATCHLIST_BLIND_MOMENTUM_BUCKET,
+    )
+    assert predictor_run is not None and momentum_run is not None and blind_run is not None
+
+    predictor_symbols = {
+        row.symbol
+        for row in fetch_paper_positions(db_path, predictor_run.run_id)
+        if row.status == "OPEN"
+    }
+    momentum_symbols = {
+        row.symbol
+        for row in fetch_paper_positions(db_path, momentum_run.run_id)
+        if row.status == "OPEN"
+    }
+    blind_positions = fetch_paper_positions(db_path, blind_run.run_id)
+    blind_symbols = {row.symbol for row in blind_positions if row.status == "OPEN"}
+
+    assert predictor_symbols == {"PRED", "WATCH", "LIVE"}
+    assert momentum_symbols == {"WATCH", "LIVE"}
+    assert blind_symbols == {"LIVE"}
+    assert all(row.watchlist_rank_at_entry is None for row in blind_positions)
+    assert all("watchlist_blind_momentum_entry" in row.entry_reasons for row in blind_positions)
 
 
 def test_momentum_only_bucket_ignores_predictor_settings_even_when_enabled(tmp_path: Path) -> None:
@@ -2306,11 +2519,114 @@ def test_paper_performance_gate_fails_on_candidate_denominator_mismatch(tmp_path
         encoding="utf-8",
     )
 
+    coordinator = PaperTradingCoordinator(
+        settings,
+        now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc),
+    )
+    payload = coordinator.reporting.evaluate_performance_review_gate()
+
+    assert payload["status"] == "fail"
+    assert any("candidate_count is 0" in failure for failure in payload["failures"])
+
+
+def test_paper_performance_gate_fails_on_missing_third_bucket_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    export_dir.mkdir(parents=True)
+    (export_dir / "paper_trade_log.csv").write_text(
+        "run_id,strategy_name,bucket,symbol,status,predicted,predictor_score,predictor_weight\n"
+        "run-1,auto_paper_v1,predictor_weighted,AAA,CLOSED,True,90.0,1.0\n"
+        "run-2,auto_paper_v1,momentum_only,AAA,CLOSED,False,0.0,0.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_predictor_kpis.csv").write_text(
+        "strategy_name,bucket,candidate_count,triggered_candidate_count\n"
+        "auto_paper_v1,predictor_weighted,1,1\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_trade_diff.csv").write_text(
+        "symbol,predictor_status,momentum_status,pnl_diff\nAAA,CLOSED,CLOSED,0.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_comparison.csv").write_text(
+        "strategy_name,bucket\n"
+        "auto_paper_v1,predictor_weighted\n"
+        "auto_paper_v1,momentum_only\n",
+        encoding="utf-8",
+    )
+
     coordinator = PaperTradingCoordinator(settings, now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc))
     payload = coordinator.reporting.evaluate_performance_review_gate()
 
     assert payload["status"] == "fail"
-    assert "candidate_count is 0" in payload["failures"][0]
+    failures = "\n".join(payload["failures"])
+    assert "paper_trade_log.csv is missing lineage columns" in failures
+    assert "adaptive bucket comparison is missing buckets: watchlist_blind_momentum" in failures
+    assert "watchlist_blind_momentum has zero trades" in failures
+    assert "paper_bucket_pair_diff.csv is missing or empty" in failures
+    assert "run_manifest.json is missing" in failures
+    assert WATCHLIST_BLIND_MOMENTUM_BUCKET in payload["required_buckets"]
+
+
+def test_paper_performance_gate_fails_on_identical_buckets_with_predictor_evidence(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    export_dir.mkdir(parents=True)
+    (export_dir / "paper_trade_log.csv").write_text(
+        "run_id,strategy_name,bucket,symbol,status,predicted,predictor_score,predictor_weight,"
+        "prediction_generated_at,prediction_cutoff_at,prediction_source\n"
+        "run-1,auto_paper_v1,predictor_weighted,AAA,CLOSED,True,90.0,1.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,premkt_prediction\n"
+        "run-2,auto_paper_v1,momentum_only,AAA,CLOSED,False,0.0,0.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,disabled\n"
+        "run-3,auto_paper_v1,watchlist_blind_momentum,AAA,CLOSED,False,0.0,0.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,disabled\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_predictor_kpis.csv").write_text(
+        "strategy_name,bucket,candidate_count,triggered_candidate_count,predicted_trade_count,closed_predicted_trade_count\n"
+        "auto_paper_v1,predictor_weighted,1,1,1,1\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_comparison.csv").write_text(
+        "strategy_name,bucket\n"
+        "auto_paper_v1,predictor_weighted\n"
+        "auto_paper_v1,momentum_only\n"
+        "auto_paper_v1,watchlist_blind_momentum\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_trade_diff.csv").write_text(
+        "symbol,predictor_status,momentum_status,pnl_diff\nAAA,CLOSED,CLOSED,0.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_pair_diff.csv").write_text(
+        "left_bucket,right_bucket,left_status,right_status,pnl_diff\n"
+        "predictor_weighted,momentum_only,CLOSED,CLOSED,0.0\n"
+        "momentum_only,watchlist_blind_momentum,CLOSED,OPEN,1.0\n"
+        "predictor_weighted,watchlist_blind_momentum,CLOSED,OPEN,1.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_backtest_kpis.csv").write_text("strategy_name,bucket\n", encoding="utf-8")
+    (export_dir / "paper_execution_quality.csv").write_text("strategy_name,bucket\n", encoding="utf-8")
+    (export_dir / "run_manifest.json").write_text("{}", encoding="utf-8")
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc))
+    payload = coordinator.reporting.evaluate_performance_review_gate()
+
+    assert payload["status"] == "fail"
+    assert any("predictor candidates exist" in failure for failure in payload["failures"])
 
 
 def test_paper_trading_cohort_summary_keeps_day_regime_separate(tmp_path: Path) -> None:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from ..config import AppSettings
 from ..db import (
@@ -15,6 +16,8 @@ from ..db import (
 )
 from ..models import FilingMatch, PremktPrediction, WatchlistEntry
 from .watchlist_builder import WatchlistBuilder
+
+EASTERN = ZoneInfo("America/New_York")
 
 
 class PremktPredictor:
@@ -50,10 +53,17 @@ class PremktPredictor:
             return []
 
         generated_at = self.now_fn()
+        cutoff_at = self._prediction_cutoff_at(
+            generated_at=generated_at,
+            market_date=market_date,
+            filing_cutoff=filing_cutoff,
+        )
         predictions = self._build_predictions(
             entries=entries,
             filings=filings,
             generated_at=generated_at,
+            cutoff_at=cutoff_at,
+            market_date=str(market_date) if market_date is not None else None,
         )
         if output_path is not None:
             self.export_json(predictions, output_path)
@@ -86,6 +96,8 @@ class PremktPredictor:
         entries: list[WatchlistEntry],
         filings: list[FilingMatch],
         generated_at: datetime,
+        cutoff_at: datetime,
+        market_date: str | None,
     ) -> list[PremktPrediction]:
         filings_by_symbol: dict[str, list[FilingMatch]] = defaultdict(list)
         for filing in filings:
@@ -104,10 +116,27 @@ class PremktPredictor:
                 themes=sorted(dict.fromkeys(entry.themes)),
                 filing_summary=filing_summary,
                 generated_at=generated_at,
+                cutoff_at=cutoff_at,
+                source="premkt_prediction",
+                market_date=market_date,
             )
             predictions.append(prediction)
 
         return sorted(predictions, key=lambda row: (-row.score, row.symbol))
+
+    def _prediction_cutoff_at(
+        self,
+        *,
+        generated_at: datetime,
+        market_date: date | str | None,
+        filing_cutoff: datetime | None,
+    ) -> datetime:
+        if filing_cutoff is not None:
+            return filing_cutoff
+        if market_date is not None:
+            session_date = market_date if isinstance(market_date, date) else date.fromisoformat(str(market_date))
+            return datetime.combine(session_date, time(8, 0), tzinfo=EASTERN)
+        return generated_at
 
     def _score_entry(
         self,

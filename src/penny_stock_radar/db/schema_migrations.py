@@ -228,6 +228,14 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 "behavioral_score",
                 "REAL NOT NULL DEFAULT 0",
             )
+            _ensure_column(connection, "premkt_predictions", "cutoff_at", "TEXT")
+            _ensure_column(
+                connection,
+                "premkt_predictions",
+                "source",
+                "TEXT NOT NULL DEFAULT 'premkt_prediction'",
+            )
+            _ensure_column(connection, "premkt_predictions", "market_date", "TEXT")
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

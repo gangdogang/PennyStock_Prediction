@@ -116,6 +116,9 @@ class PremktPrediction(BaseModel):
     themes: list[str] = Field(default_factory=list)
     filing_summary: str = ""
     generated_at: datetime = Field(default_factory=utc_now)
+    cutoff_at: datetime | None = None
+    source: str = "premkt_prediction"
+    market_date: str | None = None
 
 
 class MarketTick(BaseModel):

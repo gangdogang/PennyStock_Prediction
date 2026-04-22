@@ -32,7 +32,7 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
    - 튜닝이 끝난 설정을 고정한 뒤 단 1회 실행한다.
    - 실매매 전환 판단에는 이 결과와 shadow 결과를 함께 사용한다.
 
-각 루프는 반드시 `run_manifest.json`, `paper_backtest_kpis.csv`, `paper_trade_log.csv`, `paper_bucket_trade_diff.csv`, `paper_predictor_kpis.csv`, `paper_execution_quality.csv` 를 남겨야 한다.
+각 루프는 반드시 `run_manifest.json`, `paper_backtest_kpis.csv`, `paper_trade_log.csv`, `paper_bucket_trade_diff.csv`, `paper_bucket_pair_diff.csv`, `paper_predictor_kpis.csv`, `paper_execution_quality.csv` 를 남겨야 한다.
 
 ## Step -1 — 성능평가 배선 검증
 
@@ -81,6 +81,7 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 - 2026-04-21: `export_predictor_kpis()` 의 CSV boolean 해석을 고쳐 `"False"` 문자열이 truthy 로 취급되지 않게 했다.
 - 2026-04-21: `run_manifest.json`, `paper_performance_gate.json`, `psradar review-paper-performance` 를 추가했다.
 - 2026-04-21: 관련 smoke 와 전체 품질 게이트를 확인했다. `./scripts/check_quality.sh` 결과: `199 passed`; coverage gate 상태 파일은 아직 미생성이라 요약만 출력됨.
+- 2026-04-21: 기존 `momentum_only` 가 pure momentum 이 아니라 watchlist-aware momentum 이었음을 기준 문서에 반영하고, Step 3 을 3-bucket within-scan ablation 으로 보강하기로 했다.
 
 ---
 
@@ -177,35 +178,49 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 
 ## Step 3 — 버킷 분리 (독립 포트폴리오)
 
-**목표**: 가상 자금을 두 **독립 포트폴리오** 로 나눠 예측기의 실제 기여도를 측정한다. 통계적 해석을 명확히 하기 위해 60/40 분할 대신 **두 개의 병렬 100% 포트폴리오** 를 돌린다 (동일 초기 자본, 동일 기간).
+**목표**: 가상 자금을 세 **독립 포트폴리오** 로 나눠 같은 scanned activity universe 안에서 predictor score/weight, watchlist metadata, live momentum 의 기여를 분해한다. 통계적 해석을 명확히 하기 위해 60/40 분할 대신 **병렬 100% 포트폴리오** 를 돌린다 (동일 초기 자본, 동일 기간).
 
-### 구조
+### v1 구조
 
-```
-포트폴리오 A (predictor_weighted)
-  - Step 2 의 predictor_weight 적용
-  - 초기 자본 = X
+| Bucket | Universe | Predictor score/weight | Watchlist metadata | Live momentum | 의미 |
+| --- | --- | --- | --- | --- | --- |
+| `predictor_weighted` | watchlist/live scan activity universe | 사용 | 사용 | 사용 | 현재 조합 전략 |
+| `momentum_only` = `watchlist_momentum` | 같은 scanned activity universe | 미사용 | 사용 | 사용 | 기존 legacy bucket 의 실제 의미 |
+| `watchlist_blind_momentum` | 같은 scanned activity universe | 미사용 | 미사용 | 사용 | 같은 scan 후보군 안에서 watchlist/predictor metadata 를 제거한 ablation |
 
-포트폴리오 B (momentum_only)
-  - predictor_weight = 0 으로 고정
-  - 초기 자본 = X  (A와 동일)
+`momentum_only` key 는 DB/CSV/UI 호환을 위해 유지하되 문서와 label 에서는 `watchlist_momentum` legacy alias 로 설명한다.
 
-→ 같은 기간 병렬 실행, 개별 PnL 집계
-→ 버킷 독립은 설정값이 아니라 구조적 불변식으로 강제되어야 한다
-```
+### Bucket invariant
+
+| Bucket | 반드시 허용되는 정보 | 반드시 제거되는 정보 |
+| --- | --- | --- |
+| `predictor_weighted` | cutoff 이전 watchlist/predictor snapshot, predictor score/weight, watchlist rank/score, decision timestamp 이전 live activity | cutoff 이후 공시/성과, realized PnL, 미래 quote/bar |
+| `momentum_only` = `watchlist_momentum` | 같은 scan universe, watchlist rank/score, decision timestamp 이전 live activity | predictor score/weight 가 entry threshold, sort, sizing 에 미치는 영향 |
+| `watchlist_blind_momentum` | 같은 scan universe, pct/volume rank, live activity, stale/halt/spread guard | `predicted=True`, `watchlist_rank`, `watchlist_score`, `watchlist_predicted`, `predicted_watchlist`, predictor/watchlist reason, predictor score/weight 가 entry/sort/sizing 에 미치는 영향 |
+
+### 비교식
+
+- `predictor_weighted - watchlist_momentum` = predictor score/weight incremental effect
+- `watchlist_momentum - watchlist_blind_momentum` = watchlist metadata effect within same scan universe
+- `predictor_weighted - watchlist_blind_momentum` = predictor stack effect within same scan universe
+
+이 비교는 **진짜 pure momentum 검증이 아니다.** 현재 scanner universe 가 watchlist/live pipeline 에 묶여 있기 때문에 `watchlist_blind_momentum` 은 selection universe 를 공유하는 within-scan ablation 이다. `pure_momentum` 은 Step 0 이후 independent universe/replay provider 가 분리된 v2/v3 에서만 도입한다.
 
 ### 해야 할 것
 
-- `PaperTradingRun` 에 `bucket: str` 필드 추가 (`"predictor_weighted"` / `"momentum_only"`)
-- 두 포트폴리오를 독립된 cash_balance / positions 로 관리
-- 버킷별 PnL, 거래 수, 승률, 거래별 R 분포를 별도 집계
-- 두 버킷은 완전 독립이므로 같은 종목을 동시에 보유해도 무방
+- `PaperTradingRun.bucket` 은 포트폴리오 비교 단위로 유지하고, `strategy_bucket` 은 진입/포지션 내부 원인으로 유지한다.
+- 세 포트폴리오를 독립된 cash_balance / positions 로 관리한다.
+- 버킷별 activity view/sanitizer 를 둬 `watchlist_blind_momentum` 에 watchlist/predictor metadata 가 들어가지 않게 한다.
+- 버킷별 PnL, 거래 수, 승률, 거래별 R 분포를 별도 집계한다.
+- 기존 `paper_bucket_trade_diff.csv` 는 호환 파일로 유지하고, 3개 비교쌍은 `paper_bucket_pair_diff.csv` 또는 동등한 decomposition CSV 로 출력한다.
+- 세 버킷은 완전 독립이므로 같은 종목을 동시에 보유해도 무방하다.
 
 ### Exit Criteria
 
-- [ ] 두 버킷이 독립적으로 동작 (하나의 청산이 다른 쪽에 영향 없음)
-- [ ] 버킷별 수익/손실 집계가 대시보드에 표시됨
-- [ ] 백테스팅 종료 후 "포트폴리오 A vs B" 비교 리포트 + 거래 수준 diff 출력 가능
+- [ ] 세 버킷이 독립적으로 동작 (하나의 청산이 다른 쪽에 영향 없음)
+- [ ] `watchlist_blind_momentum` 에서 predicted/watchlist metadata 와 predictor score/weight 가 entry/sort/sizing 에 영향을 주지 않음
+- [ ] 버킷별 수익/손실 집계가 리포트에 표시됨
+- [ ] 백테스팅 종료 후 세 비교쌍의 거래 수준 diff/decomposition 출력 가능
 
 ---
 

@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 import subprocess
 from typing import Callable
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from ..config import AppSettings
 from ..db import (
@@ -23,6 +24,7 @@ from ..db import (
     fetch_paper_trading_run_by_id,
 )
 from ..models import PaperOrder, PaperPosition, PaperTradingRun
+from .paper_bucket_policy import bucket_uses_predictor_weight
 from .trading_support import predicted_rank_band
 
 
@@ -31,6 +33,7 @@ class PaperReportPaths:
     strategy_comparison: Path
     bucket_comparison: Path
     bucket_trade_diff: Path
+    bucket_pair_diff: Path
     cohort_summary: Path
     execution_quality: Path
     trade_log: Path
@@ -47,6 +50,7 @@ def paper_report_paths(export_dir: Path) -> PaperReportPaths:
         strategy_comparison=base / "paper_strategy_comparison.csv",
         bucket_comparison=base / "paper_bucket_comparison.csv",
         bucket_trade_diff=base / "paper_bucket_trade_diff.csv",
+        bucket_pair_diff=base / "paper_bucket_pair_diff.csv",
         cohort_summary=base / "paper_cohort_summary.csv",
         execution_quality=base / "paper_execution_quality.csv",
         trade_log=base / "paper_trade_log.csv",
@@ -66,6 +70,34 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in reader]
 
 
+def read_csv_header(path: Path) -> list[str]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader.fieldnames or [])
+
+
+def archive_paper_performance_export(
+    export_dir: Path,
+    *,
+    output_path: Path | None = None,
+    archive_prefix: str = "paper_trading",
+) -> Path:
+    base = Path(export_dir)
+    if output_path is None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_path = base.parent / "paper_trading_archives" / f"paper_performance_{timestamp}.zip"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_resolved = output_path.resolve()
+    with ZipFile(output_resolved, "w", compression=ZIP_DEFLATED) as archive:
+        for path in sorted(base.iterdir()):
+            if not path.is_file() or path.resolve() == output_resolved:
+                continue
+            archive.write(path, f"{archive_prefix}/{path.name}")
+    return output_resolved
+
+
 class PaperReportingService:
     def __init__(
         self,
@@ -78,6 +110,7 @@ class PaperReportingService:
         primary_strategy_name: str,
         predictor_weighted_bucket: str,
         momentum_only_bucket: str,
+        watchlist_blind_momentum_bucket: str,
         baseline_pct_strategy: str,
     ) -> None:
         self.settings = settings
@@ -89,7 +122,18 @@ class PaperReportingService:
         self.primary_strategy_name = primary_strategy_name
         self.predictor_weighted_bucket = predictor_weighted_bucket
         self.momentum_only_bucket = momentum_only_bucket
+        self.watchlist_blind_momentum_bucket = watchlist_blind_momentum_bucket
         self.baseline_pct_strategy = baseline_pct_strategy
+        self.comparison_buckets = (
+            self.predictor_weighted_bucket,
+            self.momentum_only_bucket,
+            self.watchlist_blind_momentum_bucket,
+        )
+        self.pair_diff_bucket_pairs = (
+            (self.predictor_weighted_bucket, self.momentum_only_bucket),
+            (self.momentum_only_bucket, self.watchlist_blind_momentum_bucket),
+            (self.predictor_weighted_bucket, self.watchlist_blind_momentum_bucket),
+        )
 
     def export_strategy_comparison(self) -> Path:
         runs = fetch_latest_paper_strategy_runs(self.settings.database_path, limit=10)
@@ -122,13 +166,9 @@ class PaperReportingService:
             fetch_latest_paper_trading_run(
                 self.settings.database_path,
                 self.primary_strategy_name,
-                bucket=self.predictor_weighted_bucket,
-            ),
-            fetch_latest_paper_trading_run(
-                self.settings.database_path,
-                self.primary_strategy_name,
-                bucket=self.momentum_only_bucket,
-            ),
+                bucket=bucket,
+            )
+            for bucket in self.comparison_buckets
         ]
         rows = [
             {
@@ -182,6 +222,39 @@ class PaperReportingService:
         self._write_csv(self.paths.bucket_trade_diff, rows)
         return self.paths.bucket_trade_diff.resolve()
 
+    def export_bucket_pair_diff(self) -> Path:
+        rows: list[dict[str, object]] = []
+        position_cache: dict[str, list[PaperPosition]] = {}
+        for left_bucket, right_bucket in self.pair_diff_bucket_pairs:
+            left_run = fetch_latest_paper_trading_run(
+                self.settings.database_path,
+                self.primary_strategy_name,
+                bucket=left_bucket,
+            )
+            right_run = fetch_latest_paper_trading_run(
+                self.settings.database_path,
+                self.primary_strategy_name,
+                bucket=right_bucket,
+            )
+            if left_run is None or right_run is None:
+                continue
+            for run in (left_run, right_run):
+                if run.run_id not in position_cache:
+                    position_cache[run.run_id] = fetch_paper_positions(
+                        self.settings.database_path,
+                        run.run_id,
+                    )
+            rows.extend(
+                self._pair_trade_diff_rows(
+                    left_bucket=left_bucket,
+                    right_bucket=right_bucket,
+                    left_positions=position_cache[left_run.run_id],
+                    right_positions=position_cache[right_run.run_id],
+                )
+            )
+        self._write_csv(self.paths.bucket_pair_diff, rows)
+        return self.paths.bucket_pair_diff.resolve()
+
     def export_cohort_summary(self, run_id: str | None = None) -> Path:
         runs: list[PaperTradingRun] = []
         if run_id is not None:
@@ -192,7 +265,7 @@ class PaperReportingService:
             if run is not None:
                 runs.append(run)
         else:
-            for bucket in (self.predictor_weighted_bucket, self.momentum_only_bucket):
+            for bucket in self.comparison_buckets:
                 run = fetch_latest_paper_trading_run(
                     self.settings.database_path,
                     self.primary_strategy_name,
@@ -324,21 +397,25 @@ class PaperReportingService:
                 sell_orders = [row for row in position_orders if row.action == "SELL"]
                 entry_order = buy_orders[0] if buy_orders else None
                 prediction = prediction_lookup.get(position.symbol.upper(), {})
-                predictor_score = self._reason_value(position.entry_reasons, "predictor_score")
-                predictor_weight = self._reason_value(position.entry_reasons, "predictor_weight")
-                if predictor_score is None:
-                    predictor_score = float(prediction.get("score", 0.0) or 0.0)
-                if predictor_weight is None:
-                    predictor_weight = self._predictor_weight_from_score(
-                        predictor_score if predictor_score > 0.0 else None
-                    )
-                prediction_source = str(prediction.get("source", "none"))
-                predicted = (
-                    prediction_source == "premkt_prediction"
-                    and run.bucket != self.momentum_only_bucket
-                )
+                uses_predictor = bucket_uses_predictor_weight(run.bucket)
+                if uses_predictor:
+                    predictor_score = self._reason_value(position.entry_reasons, "predictor_score")
+                    predictor_weight = self._reason_value(position.entry_reasons, "predictor_weight")
+                    if predictor_score is None:
+                        predictor_score = float(prediction.get("score", 0.0) or 0.0)
+                    if predictor_weight is None:
+                        predictor_weight = self._predictor_weight_from_score(
+                            predictor_score if predictor_score > 0.0 else None
+                        )
+                    prediction_source = str(prediction.get("source", "none"))
+                    predicted = prediction_source == "premkt_prediction"
+                else:
+                    predictor_score = 0.0
+                    predictor_weight = 0.0
+                    prediction_source = "disabled"
+                    predicted = False
                 top_theme = ""
-                themes = prediction.get("themes", [])
+                themes = prediction.get("themes", []) if uses_predictor else []
                 if themes:
                     top_theme = str(themes[0])
                 hold_minutes = max(
@@ -565,10 +642,19 @@ class PaperReportingService:
                 }
                 for run in self._latest_runs()
             ],
+            "predictor_effect": {
+                "paper_predictor_weight_k1": self.settings.paper_predictor_weight_k1,
+                "paper_predictor_weight_k2": self.settings.paper_predictor_weight_k2,
+                "enabled": (
+                    self.settings.paper_predictor_weight_k1 != 0.0
+                    or self.settings.paper_predictor_weight_k2 != 0.0
+                ),
+            },
             "artifacts": {
                 "paper_backtest_kpis": self.paths.backtest_kpis.name,
                 "paper_trade_log": self.paths.trade_log.name,
                 "paper_bucket_trade_diff": self.paths.bucket_trade_diff.name,
+                "paper_bucket_pair_diff": self.paths.bucket_pair_diff.name,
                 "paper_predictor_kpis": self.paths.predictor_kpis.name,
                 "paper_execution_quality": self.paths.execution_quality.name,
             },
@@ -592,11 +678,41 @@ class PaperReportingService:
     def evaluate_performance_review_gate(self) -> dict[str, object]:
         trade_rows = self._load_trade_log_rows()
         predictor_rows = read_csv_rows(self.paths.predictor_kpis)
+        bucket_rows = read_csv_rows(self.paths.bucket_comparison)
         diff_rows = read_csv_rows(self.paths.bucket_trade_diff)
+        pair_diff_rows = read_csv_rows(self.paths.bucket_pair_diff)
         failures: list[str] = []
         warnings: list[str] = []
+        required_artifacts = {
+            "run_manifest.json": self.paths.run_manifest,
+            "paper_backtest_kpis.csv": self.paths.backtest_kpis,
+            "paper_trade_log.csv": self.paths.trade_log,
+            "paper_bucket_trade_diff.csv": self.paths.bucket_trade_diff,
+            "paper_bucket_pair_diff.csv": self.paths.bucket_pair_diff,
+            "paper_predictor_kpis.csv": self.paths.predictor_kpis,
+            "paper_execution_quality.csv": self.paths.execution_quality,
+            "paper_bucket_comparison.csv": self.paths.bucket_comparison,
+        }
+        for artifact_name, artifact_path in required_artifacts.items():
+            if not artifact_path.exists() or artifact_path.stat().st_size == 0:
+                failures.append(f"{artifact_name} is missing or empty")
 
         closed_rows = [row for row in trade_rows if row.get("status") == "CLOSED"]
+        required_trade_columns = {
+            "predictor_score",
+            "predictor_weight",
+            "prediction_generated_at",
+            "prediction_cutoff_at",
+            "prediction_source",
+        }
+        if closed_rows:
+            present_trade_columns = set(read_csv_header(self.paths.trade_log))
+            missing_columns = sorted(required_trade_columns - present_trade_columns)
+            if missing_columns:
+                failures.append(
+                    "paper_trade_log.csv is missing lineage columns: "
+                    + ", ".join(missing_columns)
+                )
         missing_lineage = [
             row
             for row in closed_rows
@@ -619,6 +735,25 @@ class PaperReportingService:
                 "candidate_count is 0 while triggered_candidate_count is positive"
             )
 
+        if bucket_rows:
+            present_buckets = {
+                str(row.get("bucket"))
+                for row in bucket_rows
+                if row.get("strategy_name") == self.primary_strategy_name
+            }
+            missing_buckets = [
+                bucket
+                for bucket in self.comparison_buckets
+                if bucket not in present_buckets
+            ]
+            if missing_buckets:
+                failures.append(
+                    "adaptive bucket comparison is missing buckets: "
+                    + ", ".join(missing_buckets)
+                )
+        else:
+            failures.append("paper_bucket_comparison.csv is missing or empty")
+
         predictor_closed = [
             row
             for row in closed_rows
@@ -636,25 +771,79 @@ class PaperReportingService:
                 row
                 for row in diff_rows
                 if abs(self._float_value(row.get("pnl_diff"))) > 1e-9
-                or bool(row.get("predictor_status")) != bool(row.get("momentum_status"))
+                or str(row.get("predictor_status") or "") != str(row.get("momentum_status") or "")
             ]
             if not nonzero_diff:
-                warnings.append(
-                    "predictor_weighted and momentum_only closed trades are identical"
+                if self._has_primary_predictor_evidence(predictor_rows, predictor_closed):
+                    failures.append(
+                        "predictor candidates exist but predictor_weighted and momentum_only closed trades are identical"
+                    )
+                else:
+                    warnings.append(
+                        "predictor_weighted and momentum_only closed trades are identical"
+                    )
+
+        blind_trade_rows = [
+            row
+            for row in trade_rows
+            if row.get("strategy_name") == self.primary_strategy_name
+            and row.get("bucket") == self.watchlist_blind_momentum_bucket
+        ]
+        if not blind_trade_rows:
+            failures.append("watchlist_blind_momentum has zero trades")
+
+        if not self.paths.bucket_pair_diff.exists() or not pair_diff_rows:
+            if "paper_bucket_pair_diff.csv is missing or empty" not in failures:
+                failures.append("paper_bucket_pair_diff.csv is missing or empty")
+        else:
+            expected_pairs = {
+                (left_bucket, right_bucket)
+                for left_bucket, right_bucket in self.pair_diff_bucket_pairs
+            }
+            present_pairs = {
+                (str(row.get("left_bucket")), str(row.get("right_bucket")))
+                for row in pair_diff_rows
+            }
+            missing_pairs = sorted(expected_pairs - present_pairs)
+            if missing_pairs:
+                failures.append(
+                    "paper_bucket_pair_diff.csv is missing pairs: "
+                    + ", ".join(f"{left} vs {right}" for left, right in missing_pairs)
                 )
+            for left_bucket, right_bucket in sorted(expected_pairs & present_pairs):
+                rows_for_pair = [
+                    row
+                    for row in pair_diff_rows
+                    if row.get("left_bucket") == left_bucket
+                    and row.get("right_bucket") == right_bucket
+                ]
+                if not rows_for_pair:
+                    continue
+                nonzero_or_status_diff = [
+                    row
+                    for row in rows_for_pair
+                    if abs(self._float_value(row.get("pnl_diff"))) > 1e-9
+                    or str(row.get("left_status") or "") != str(row.get("right_status") or "")
+                ]
+                if not nonzero_or_status_diff:
+                    warnings.append(f"{left_bucket} and {right_bucket} pair diff is identical")
 
         if not self.paths.run_manifest.exists():
-            warnings.append("run_manifest.json is missing")
+            if "run_manifest.json is missing or empty" not in failures:
+                failures.append("run_manifest.json is missing")
 
         return {
             "status": "fail" if failures else "pass",
             "failures": failures,
             "warnings": warnings,
+            "warning_count": len(warnings),
+            "required_buckets": list(self.comparison_buckets),
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "closed_trade_count": len(closed_rows),
             "trade_log_path": str(self.paths.trade_log),
             "predictor_kpis_path": str(self.paths.predictor_kpis),
             "bucket_trade_diff_path": str(self.paths.bucket_trade_diff),
+            "bucket_pair_diff_path": str(self.paths.bucket_pair_diff),
             "run_manifest_path": str(self.paths.run_manifest),
         }
 
@@ -691,10 +880,39 @@ class PaperReportingService:
                 "score": float(row["score"]),
                 "themes": themes,
                 "generated_at": str(row["generated_at"]) if "generated_at" in row.keys() else "",
-                "cutoff_at": "",
-                "source": "premkt_prediction",
+                "cutoff_at": (
+                    str(row["cutoff_at"])
+                    if "cutoff_at" in row.keys() and row["cutoff_at"]
+                    else str(row["generated_at"]) if "generated_at" in row.keys() else ""
+                ),
+                "source": (
+                    str(row["source"])
+                    if "source" in row.keys() and row["source"]
+                    else "premkt_prediction"
+                ),
             }
         return lookup
+
+    def _has_primary_predictor_evidence(
+        self,
+        predictor_rows: list[dict[str, str]],
+        predictor_closed: list[dict[str, object]],
+    ) -> bool:
+        evidence_counts = [
+            max(
+                self._float_value(row.get("candidate_count")),
+                self._float_value(row.get("triggered_candidate_count")),
+                self._float_value(row.get("predicted_trade_count")),
+                self._float_value(row.get("closed_predicted_trade_count")),
+            )
+            for row in predictor_rows
+            if row.get("strategy_name") == self.primary_strategy_name
+            and row.get("bucket") == self.predictor_weighted_bucket
+        ]
+        return any(value > 0.0 for value in evidence_counts) or any(
+            self._csv_bool(row.get("predicted"))
+            for row in predictor_closed
+        )
 
     def _reason_value(self, reasons: list[str], prefix: str) -> float | None:
         needle = f"{prefix}:"
@@ -894,6 +1112,51 @@ class PaperReportingService:
                         "momentum_exit_reason": right.exit_reason if right is not None else "",
                         "momentum_total_pnl": right_pnl,
                         "momentum_strategy_bucket": right.strategy_bucket if right is not None else "",
+                        "pnl_diff": ((left_pnl or 0.0) - (right_pnl or 0.0)) if left_pnl is not None or right_pnl is not None else None,
+                    }
+                )
+        return rows
+
+    def _pair_trade_diff_rows(
+        self,
+        *,
+        left_bucket: str,
+        right_bucket: str,
+        left_positions: list[PaperPosition],
+        right_positions: list[PaperPosition],
+    ) -> list[dict[str, object]]:
+        left_grouped = self._positions_by_symbol_occurrence(left_positions)
+        right_grouped = self._positions_by_symbol_occurrence(right_positions)
+        rows: list[dict[str, object]] = []
+        for symbol in sorted(set(left_grouped) | set(right_grouped)):
+            left_rows = left_grouped.get(symbol, [])
+            right_rows = right_grouped.get(symbol, [])
+            trade_count = max(len(left_rows), len(right_rows))
+            for index in range(trade_count):
+                left = left_rows[index] if index < len(left_rows) else None
+                right = right_rows[index] if index < len(right_rows) else None
+                left_pnl = left.total_pnl if left is not None else None
+                right_pnl = right.total_pnl if right is not None else None
+                rows.append(
+                    {
+                        "left_bucket": left_bucket,
+                        "left_bucket_label": self.bucket_labels.get(left_bucket, left_bucket),
+                        "right_bucket": right_bucket,
+                        "right_bucket_label": self.bucket_labels.get(right_bucket, right_bucket),
+                        "symbol": symbol,
+                        "trade_index": index + 1,
+                        "left_status": left.status if left is not None else "",
+                        "left_entry_label": left.entry_label if left is not None else "",
+                        "left_entry_at": left.opened_at.isoformat() if left is not None else "",
+                        "left_exit_reason": left.exit_reason if left is not None else "",
+                        "left_total_pnl": left_pnl,
+                        "left_strategy_bucket": left.strategy_bucket if left is not None else "",
+                        "right_status": right.status if right is not None else "",
+                        "right_entry_label": right.entry_label if right is not None else "",
+                        "right_entry_at": right.opened_at.isoformat() if right is not None else "",
+                        "right_exit_reason": right.exit_reason if right is not None else "",
+                        "right_total_pnl": right_pnl,
+                        "right_strategy_bucket": right.strategy_bucket if right is not None else "",
                         "pnl_diff": ((left_pnl or 0.0) - (right_pnl or 0.0)) if left_pnl is not None or right_pnl is not None else None,
                     }
                 )

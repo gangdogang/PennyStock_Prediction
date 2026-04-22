@@ -16,6 +16,7 @@ jobs:
               tests/test_regression_golden.py
               tests/test_config.py
               tests/test_backtest_data.py
+              tests/test_quality_gates.py
               tests/test_runtime_scripts.py
               tests/test_dashboard_launcher.py
               tests/test_snapshot_dashboard.py
@@ -36,6 +37,7 @@ jobs:
             pytest_args: >-
               tests/test_live_market_provider.py
               tests/test_live_monitor.py
+              tests/test_observability_metrics.py
               tests/test_broker_execution.py
               tests/test_kis_historical.py
               tests/test_kis_mock_broker.py

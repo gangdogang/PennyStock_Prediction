@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Iterable
 
 from ..models import PremktPrediction, PremarketSignal
 from .connection import _resolve_scan_id, get_connection
@@ -22,6 +23,9 @@ def insert_premkt_predictions(
             json.dumps(row.themes),
             row.filing_summary,
             row.generated_at.isoformat(),
+            (row.cutoff_at or row.generated_at).isoformat(),
+            row.source,
+            row.market_date,
         )
         for row in predictions
     ]
@@ -39,9 +43,12 @@ def insert_premkt_predictions(
                 entry_rationale,
                 themes,
                 filing_summary,
-                generated_at
+                generated_at,
+                cutoff_at,
+                source,
+                market_date
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

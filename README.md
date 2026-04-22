@@ -33,6 +33,12 @@ Windows 대시보드:
 .\launchers\windows\launch_dashboard.ps1
 ```
 
+Windows 24시간 paper 성능평가:
+
+```powershell
+.\launchers\windows\run_paper_24h_drive.ps1
+```
+
 API 키 설정:
 
 ```bash
@@ -60,12 +66,14 @@ API 키 설정:
 - `src/penny_stock_radar/`: 애플리케이션 코드
 - `archive/`: 전환 전 보관본, 완료된 계획 문서, 작업 스냅샷
 - `tests/`: 테스트
-- `scripts/`: 공통 실행 스크립트
-- `launchers/windows/`: Windows 런처와 작업 스케줄러 스크립트
+- `scripts/`: 공통 CLI/pipeline/품질 게이트 스크립트
+- `launchers/windows/`: Windows 대화형 런처, Drive 성능평가 런처, 작업 스케줄러 스크립트
 - `automation/`: supervisor 프롬프트, launchd 템플릿, 상태/로그 폴더
 - `docs/`: 장기적으로 유지할 핵심 문서
 - `data/`: 로컬 DB, 캐시, replay 입력
 - `sample_outputs/`: 대시보드 HTML, CSV, 요약 리포트 같은 런타임 산출물
+
+런처 분류 기준은 [`launchers/README.md`](/Users/wondokyeong/Desktop/Penny_Stock/launchers/README.md)에 둔다.
 
 ## 자주 쓰는 명령
 

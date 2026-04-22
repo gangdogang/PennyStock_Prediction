@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-04-21
+최종 갱신일: 2026-04-22
 
 ## 운영 원칙
 
@@ -18,7 +18,7 @@
 
 | Step | 상태 | 메모 |
 | --- | --- | --- |
-| -1 | DONE | predictor score/weight lineage, KPI 분모 정의, bucket divergence smoke, run manifest, performance gate 고정. `./scripts/check_quality.sh` 기준 `199 passed` |
+| -1 | DONE | predictor score/weight lineage, KPI 분모 정의, bucket divergence smoke, run manifest, performance gate 고정. `./scripts/check_quality.sh` 기준 `199 passed`. 후속 보강으로 bucket semantic split / within-scan ablation v1 적용 |
 | 1 | DONE | `STATUS.md` 축약, handoff 중복 제거, archive 이동, live readiness 경로 교정 완료 |
 | 2 | DONE | `process_market_activity` 공통 오케스트레이터 도입, 골든 포함 전체 테스트 통과 |
 | 3 | DONE | `engine_rules/` 패키지로 entry/exit/profit 분리, `paper_trading.py` 891줄, 전체 테스트 통과 |
@@ -33,7 +33,11 @@
 ## 현재 메모
 
 - Step -1 완료 후에는 새 paper export 를 다시 생성해 이전 CSV의 predictor lineage 공백 여부를 재검증한다.
-- 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
+- UI cleanup v1 은 별도 구조 정리 작업으로 진행한다. 범위는 `ui/app.py` 를 page config/sidebar/data load/tab routing 중심으로 축소하고, 공통 style/layout helper, `ui/pages/` 탭 렌더러, 첫 화면 view model 을 분리하는 데 한정한다.
+- 첫 화면의 종합 상황판 정보 구조와 Streamlit 동작은 최대한 유지한다. 큰 service 파일 정리는 `report_builder.py` facade 유지형 분할을 다음 후보로 둔다.
+- Step -1 후속 보강으로 `momentum_only` 를 pure momentum 으로 오해하지 않게 하고, `watchlist_blind_momentum` 을 추가해 동일 scan universe 안에서 watchlist metadata 효과를 분리하는 v1 을 적용했다.
+- 이 보강은 Step 0 coverage 작업과 병행 가능한 얇은 semantic split 이지만, 성능평가 해석의 전제라 Step 0 장기 적재 루프를 재개하기 전에 먼저 고정한다.
+- 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.
 

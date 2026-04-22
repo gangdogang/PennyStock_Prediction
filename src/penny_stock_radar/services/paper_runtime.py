@@ -19,9 +19,12 @@ PAPER_STRATEGY_LABELS = {
 }
 PREDICTOR_WEIGHTED_BUCKET = "predictor_weighted"
 MOMENTUM_ONLY_BUCKET = "momentum_only"
+WATCHLIST_MOMENTUM_BUCKET = MOMENTUM_ONLY_BUCKET
+WATCHLIST_BLIND_MOMENTUM_BUCKET = "watchlist_blind_momentum"
 PAPER_BUCKET_LABELS = {
     PREDICTOR_WEIGHTED_BUCKET: "Predictor Weighted",
-    MOMENTUM_ONLY_BUCKET: "Momentum Only",
+    MOMENTUM_ONLY_BUCKET: "Watchlist Momentum (legacy momentum_only)",
+    WATCHLIST_BLIND_MOMENTUM_BUCKET: "Watchlist-Blind Momentum",
     BASELINE_PCT_STRATEGY: "Baseline Pct",
     BASELINE_VOLUME_STRATEGY: "Baseline Volume",
 }

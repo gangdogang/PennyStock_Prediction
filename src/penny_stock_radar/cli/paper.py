@@ -8,7 +8,7 @@ import typer
 
 from ..paper_console import build_paper_summary_tables
 from ..services.paper_coordinator import PaperTradingCoordinator
-from ..services.paper_reporting import paper_report_paths, read_csv_rows
+from ..services.paper_reporting import archive_paper_performance_export, paper_report_paths, read_csv_rows
 from ..services.paper_trading import PREDICTOR_WEIGHTED_BUCKET, PRIMARY_PAPER_STRATEGY
 from .common import console
 
@@ -62,6 +62,10 @@ def paper_trader(
         "--run-once/--watch",
         help="Run a single paper-trading pass and exit instead of looping.",
     ),
+    max_runtime_seconds: float | None = typer.Option(
+        None,
+        help="Stop the continuous trader after this many seconds.",
+    ),
 ) -> None:
     """Continuously run the automated paper-trading engine."""
     import penny_stock_radar.cli as root_cli
@@ -69,6 +73,7 @@ def paper_trader(
     settings = root_cli.get_settings()
     root_cli.init_database(settings.database_path)
     engine = PaperTradingCoordinator(settings)
+    started_at = time.monotonic()
 
     try:
         while True:
@@ -87,8 +92,17 @@ def paper_trader(
                 )
             if run_once:
                 break
-            console.print(f"Sleeping for {check_interval_seconds} seconds.")
-            time.sleep(check_interval_seconds)
+            if max_runtime_seconds is not None:
+                elapsed = time.monotonic() - started_at
+                remaining = max_runtime_seconds - elapsed
+                if remaining <= 0:
+                    console.print("Paper trader reached max runtime.")
+                    break
+                sleep_seconds = min(float(check_interval_seconds), remaining)
+            else:
+                sleep_seconds = float(check_interval_seconds)
+            console.print(f"Sleeping for {sleep_seconds:g} seconds.")
+            time.sleep(sleep_seconds)
     except KeyboardInterrupt:
         console.print("Paper trader stopped by user.")
 
@@ -151,3 +165,48 @@ def review_paper_performance(
     console.print(json.dumps(payload, indent=2, sort_keys=True))
     if payload["status"] != "pass":
         raise typer.Exit(code=1)
+
+
+@app.command("archive-paper-performance")
+def archive_paper_performance(
+    export_dir: Path | None = typer.Option(
+        None,
+        help="Paper export directory to archive. Defaults to PENNY_STOCK_PAPER_TRADE_DIR.",
+    ),
+    output_path: Path | None = typer.Option(
+        None,
+        "--output-path",
+        "--output",
+        help="Zip file path to create. Defaults to a timestamped archive next to the export directory.",
+    ),
+    refresh_gate: bool = typer.Option(
+        True,
+        "--refresh-gate/--no-refresh-gate",
+        help="Refresh paper_performance_gate.json before creating the archive.",
+    ),
+    allow_fail: bool = typer.Option(
+        False,
+        "--allow-fail/--require-pass",
+        help="Create the archive even when the performance gate fails.",
+    ),
+) -> None:
+    """Zip paper performance artifacts for transfer/review."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    target_dir = export_dir or settings.paper_trade_dir
+    coordinator = PaperTradingCoordinator(settings, export_dir=target_dir)
+    payload: dict[str, object] | None = None
+    if refresh_gate:
+        gate_path = coordinator.export_performance_review_gate()
+        payload = json.loads(gate_path.read_text(encoding="utf-8"))
+
+    archive_path = archive_paper_performance_export(
+        target_dir,
+        output_path=output_path,
+    )
+    console.print(f"Paper performance archive written to [bold]{archive_path}[/bold]")
+    if payload is not None:
+        console.print(json.dumps(payload, indent=2, sort_keys=True))
+        if payload["status"] != "pass" and not allow_fail:
+            raise typer.Exit(code=1)

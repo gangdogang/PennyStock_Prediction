@@ -1,34 +1,5 @@
 @echo off
 setlocal
 
-for %%I in ("%~dp0..\..") do set "ROOT_DIR=%%~fI\"
-cd /d "%ROOT_DIR%"
-
-if not exist ".env" if exist ".env.example" (
-    copy /Y ".env.example" ".env" >nul
-)
-
-if not exist ".env" (
-    echo .env.example was not found, so .env could not be created.
-    pause
-    exit /b 1
-)
-
-echo Opening .env in Notepad...
-echo.
-echo Fill in one of these:
-echo.
-echo PENNY_STOCK_LIVE_MARKET_PROVIDER=kis
-echo PENNY_STOCK_KIS_APP_KEY=
-echo PENNY_STOCK_KIS_APP_SECRET=
-echo PENNY_STOCK_KIS_NASDAQ_MASTER_PATH=./data/kis_master/NASMST.COD
-echo PENNY_STOCK_KIS_NYSE_MASTER_PATH=./data/kis_master/NYSMST.COD
-echo PENNY_STOCK_KIS_AMEX_MASTER_PATH=./data/kis_master/AMSMST.COD
-echo.
-echo Optional Gemini review:
-echo PENNY_STOCK_GEMINI_API_KEY=
-echo PENNY_STOCK_GEMINI_MODEL=gemini-3-flash-preview
-echo.
-
-start "" notepad "%ROOT_DIR%.env"
-endlocal
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0live_api_setup.ps1" %*
+exit /b %errorlevel%

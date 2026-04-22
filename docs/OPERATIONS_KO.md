@@ -9,6 +9,7 @@ macOS:
 ./launch_snapshot.command
 ./launch_ai_supervisor.command
 ./launch_paper_trader.command
+./stop_paper_trader_background.command
 ```
 
 `launch_paper_trader.command` 는 내부 paper engine 전용이다. KIS mock broker execution 은 별도 CLI 로 수동/세미오토 검증한다.
@@ -19,9 +20,46 @@ Windows:
 .\launchers\windows\launch_dashboard.ps1
 .\launchers\windows\launch_dashboard_lan.ps1
 .\launchers\windows\launch_paper_trader.ps1
+.\launchers\windows\run_paper_24h_drive.ps1
 ```
 
-Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다.
+Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. 장시간 성능평가 산출물을 남길 때는 `run_paper_24h_drive.ps1` 를 우선 사용한다.
+
+## Windows 24시간 paper 성능평가
+
+Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.
+
+```powershell
+.\launchers\windows\run_paper_24h_drive.ps1
+```
+
+기본 동작:
+
+- Drive/OneDrive 후보 경로 아래 `paper_24h_runs\<run_id>\` 를 만든다.
+- paper CSV 는 `paper_trading\`, 초기 파이프라인 샘플 산출물은 `pipeline_outputs\`, 로그는 `logs\`, zip 은 `archives\<run_id>-paper-performance.zip` 에 남긴다.
+- 실행 중 SQLite DB 는 기본적으로 `data\paper_24h_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리하고, 종료 시 Drive run 폴더의 `database\` 로 사본을 복사한다.
+- 종료 또는 실패 시에도 `archive-paper-performance --allow-fail` 로 전송용 zip 을 만든다.
+- `launcher_manifest.json` 에 run id, 경로, exit code 를 기록한다.
+
+Drive 위치를 직접 지정하려면:
+
+```powershell
+.\launchers\windows\run_paper_24h_drive.ps1 -DriveRoot "G:\My Drive\Penny_Stock"
+```
+
+짧은 smoke 실행:
+
+```powershell
+.\launchers\windows\run_paper_24h_drive.ps1 -RunId smoke -MaxRuntimeSeconds 300 -CheckIntervalSeconds 30
+```
+
+맥북에서는 zip 을 받은 뒤 압축을 풀고 먼저 gate 를 확인한다.
+
+```bash
+./scripts/psradar review-paper-performance --export-dir <압축해제>/paper_trading
+```
+
+Step 0 L1/minute coverage 60% gate 통과 전까지는 이 결과가 좋아 보여도 live 판단 근거로 쓰지 않는다.
 
 ## 환경 설정
 
@@ -98,7 +136,10 @@ paper engine 실행:
 ```bash
 ./scripts/psradar run-paper-trading
 ./scripts/psradar show-paper-summary
+./scripts/psradar archive-paper-performance --output-path sample_outputs/paper_trading_review.zip --allow-fail
 ```
+
+윈도우 장시간 실행 결과를 맥북에서 검토할 때는 위의 `run_paper_24h_drive.ps1` 런처가 만든 zip 을 기준으로 본다. 수동 실행 시에도 실행 창마다 `PENNY_STOCK_PAPER_TRADE_DIR` 를 별도 폴더로 지정하고, 종료 후 `archive-paper-performance` 로 zip 을 만든 뒤 맥북에서 `review-paper-performance --export-dir <압축해제>/paper_trading` 으로 gate 를 먼저 확인한다.
 
 KIS mock broker execution:
 
@@ -159,7 +200,7 @@ macOS background paper trader:
 ```bash
 ./start_paper_trader_background.command
 ./paper_trader_status.command
-./scripts/stop_paper_trader_background.command
+./stop_paper_trader_background.command
 ```
 
 위 background launcher 는 paper engine 전용이다. KIS mock broker execution 은 현재 background daemon 이 아니라 CLI 기반 세미오토 운영 범위만 지원한다.

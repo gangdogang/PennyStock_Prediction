@@ -8,7 +8,10 @@ from ...config import AppSettings
 from ...models import MarketActivity, PaperOrder, PaperPosition, PaperTradingRun
 from ..fill_model import FillModel
 from ..momentum_advisor import MomentumAdvice
-from ..paper_runtime import MOMENTUM_ONLY_BUCKET
+from ..paper_bucket_policy import (
+    bucket_recomputes_analysis_without_watchlist,
+    bucket_uses_predictor_weight,
+)
 from ..trading_support import (
     best_live_rank,
     current_open_risk,
@@ -423,6 +426,15 @@ def adaptive_entry_tag(
         traded_today=traded_today,
     ):
         return None
+    if bucket_recomputes_analysis_without_watchlist(deps.bucket):
+        if eligible_for_watchlist_blind_momentum_entry(
+            deps,
+            row=row,
+            advice=advice,
+            market_phase=market_phase,
+        ):
+            return "watchlist_blind_starter"
+        return None
     if eligible_for_predicted_priority_entry(deps, row=row):
         return "predicted_starter"
     if eligible_for_live_exception_entry(
@@ -526,6 +538,38 @@ def eligible_for_live_exception_entry(
     return True
 
 
+def eligible_for_watchlist_blind_momentum_entry(
+    deps: EntryRuleDeps,
+    *,
+    row: MarketActivity,
+    advice: MomentumAdvice | None,
+    market_phase: str,
+) -> bool:
+    if row.predicted or row.watchlist_rank is not None or row.watchlist_score is not None:
+        return False
+    if advice is not None and advice.stance == "avoid":
+        return False
+    if row.analysis_label not in {
+        "NEWS_CHECK_FIRST",
+        "OPENING_RANGE_CANDIDATE",
+        "CONDITIONAL_ENTRY",
+    }:
+        return False
+    if row.analysis_score < entry_score_threshold(
+        deps,
+        base_threshold=deps.settings.paper_entry_score_min,
+        row=row,
+    ):
+        return False
+    if best_rank(row) > 5:
+        return False
+    if row.dollar_volume is not None and row.dollar_volume < deps.settings.premarket_min_dollar_volume:
+        return False
+    if row.spread_pct is not None and row.spread_pct > deps.settings.premarket_max_spread_pct:
+        return False
+    return market_phase in {"premarket", "regular"}
+
+
 def eligible_news_entry(
     deps: EntryRuleDeps,
     *,
@@ -578,7 +622,7 @@ def can_add(
         return can_add_baseline(deps, position, row)
     if market_phase != "regular" or not is_winner_add_window(now):
         return False
-    if position.strategy_bucket != "predicted_starter":
+    if position.strategy_bucket not in {"predicted_starter", "watchlist_blind_starter"}:
         return False
     if advice is not None and advice.stance == "avoid":
         return False
@@ -714,6 +758,8 @@ def entry_reasons(
             reasons.append("predicted_priority_entry")
         elif entry_tag == "live_exception":
             reasons.append("live_exception_entry")
+        elif entry_tag == "watchlist_blind_starter":
+            reasons.append("watchlist_blind_momentum_entry")
     if score is not None:
         reasons.append(f"predictor_score:{score:.1f}")
         reasons.append(f"predictor_weight:{weight:.2f}")
@@ -734,7 +780,7 @@ def entry_fraction(
 ) -> float:
     if deps.strategy_mode != "adaptive":
         return deps.settings.paper_entry_size_fraction
-    if entry_tag == "live_exception":
+    if entry_tag in {"live_exception", "watchlist_blind_starter"}:
         base_fraction = deps.settings.paper_adaptive_live_exception_entry_size_fraction
     elif row.watchlist_rank is not None and row.watchlist_rank <= 2:
         base_fraction = deps.settings.paper_adaptive_predicted_entry_size_fraction
@@ -749,7 +795,7 @@ def entry_fraction(
 
 
 def predictor_score(deps: EntryRuleDeps, row: MarketActivity) -> float | None:
-    if deps.bucket == MOMENTUM_ONLY_BUCKET:
+    if not bucket_uses_predictor_weight(deps.bucket):
         return None
     return deps.predictor_score_by_symbol.get(row.symbol.upper())
 
@@ -763,7 +809,7 @@ def predictor_weight_for_score(score: float | None) -> float:
 
 
 def predictor_weight(deps: EntryRuleDeps, row: MarketActivity) -> float:
-    if deps.bucket == MOMENTUM_ONLY_BUCKET:
+    if not bucket_uses_predictor_weight(deps.bucket):
         return 0.0
     if not row.predicted:
         return 0.0

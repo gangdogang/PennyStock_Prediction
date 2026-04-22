@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-04-21
+최종 정리일: 2026-04-22
 
 ## 현재 capabilities
 
@@ -23,13 +23,15 @@
 - `services/engine_rules/entry.py`, `exit.py`, `profit.py` 로 intraday 규칙이 분리됐고 multiday도 같은 exit/close 경계를 재사용한다.
 - DB 계층은 `db/connection.py`, `schema.py`, `paper.py`, `execution.py`, `historical.py`, `premkt.py` 중심 패키지로 분할됐고 기존 `from ..db import ...` import 경로는 유지된다.
 - CLI 는 `cli/__init__.py` 루트 앱 아래 `premkt.py`, `backtest.py`, `automation.py`, `paper.py`, `broker.py`와 보조 서브앱으로 분할됐고 기존 `psradar <cmd>` 명령 표면은 유지된다.
-- `predictor_weighted` 와 `momentum_only` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
+- `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
 - paper trading 결과는 snapshots, orders, positions, KPI CSV, execution quality CSV, `run_manifest.json`, `paper_performance_gate.json` 으로 남길 수 있다.
 - paper trade log 는 predictor score/weight fallback 과 prediction source lineage 를 포함하고, performance gate 는 predictor lineage 공백, KPI 분모 불일치, bucket diff 부재를 검사할 수 있다.
+- Windows 24시간 paper 성능평가 런처는 run별 export/log/archive/manifest 를 Drive/OneDrive 경로에 남기고, 기본 SQLite DB 는 run별 로컬 DB 로 분리한 뒤 종료 시 사본을 복사한다.
 - KIS historical minute backfill, L1 snapshot archive, coverage report CLI 가 연결돼 있다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
-- Streamlit 대시보드, snapshot HTML, AI supervisor, launcher 스크립트가 같은 저장소 구조를 기준으로 동작한다.
+- Streamlit 대시보드는 v1 cleanup 기준으로 `ui/app.py` 를 bootstrap/sidebar/data load/tab routing 중심으로 줄이고, 공통 layout helper, `ui/pages/` 탭 렌더러, 첫 화면 view model 로 분리한다.
+- snapshot HTML, AI supervisor, launcher 스크립트가 같은 저장소 구조를 기준으로 동작한다.
 
 ## 현재 한계
 
@@ -39,13 +41,18 @@
 - live observability 는 아직 JSONL sidecar 수준이며 대시보드 집계, 알람, broker execution reject telemetry 분리는 남아 있다.
 - stale/halt/trade-condition hard gate 는 live smoke 기준으로 다시 검증해야 한다.
 - `report_builder.py`, `ai_supervisor.py`, `providers/live_market.py` 는 여전히 단일 파일이 커서 변경 범위가 넓다.
+- Streamlit UI cleanup v1 은 구조 분리와 첫 화면 정보 구조 보존이 목표이며, 디자인 polish 와 비즈니스 로직 변경은 후속 작업으로 둔다.
+- 큰 service 파일 cleanup 은 `report_builder.py` 를 1순위로 두고 facade/API 를 유지한 채 payload loading, markdown export, snapshot HTML renderer, HTML formatting helper 순서로 나눈다.
 - KIS mock broker execution 은 `trade-plan` 기반 반자동 검증 범위만 지원하고 auto loop, reconciliation, recovery runbook 이 없다.
 - full tape/websocket 기반 실시간 엔진이 아니며 기본 구조는 계속 `replay/mock-first` 성격이 강하다.
+- 기존 `momentum_only` 버킷은 pure momentum 이 아니라 watchlist universe 와 watchlist metadata 를 유지한 watchlist-aware momentum 이었다. 현재 scanner input universe 자체가 watchlist/live pipeline 에 묶여 있으므로 이 이름만으로 predictor/watchlist/momentum alpha 를 분리했다고 해석하면 안 된다.
+- 현재 단계에서 가능한 비교는 동일 scanned activity universe 안에서 metadata 를 제거하는 `watchlist_blind_momentum` 방식의 within-scan ablation 이며, 진짜 `pure_momentum` 은 independent universe/replay provider 가 분리된 뒤에만 도입한다.
 - Step 4/5 리포트는 존재하지만 Step 0 coverage 와 shadow/out-of-sample 검증 전에는 live 판단 근거가 될 수 없다.
 
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
+- Step 0 coverage 장기 루프로 돌아가기 전에 얇은 bucket taxonomy v2 의 v1 범위를 고정했다. 범위는 `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 3개 버킷과 pairwise within-scan ablation 리포트다.
 - 다음 우선순위는 `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 `backfill-kis-minute`, `capture-kis-l1`, `capture-kis-l1-window`, `report-backtest-coverage` 경로로 coverage 를 계속 채우고 gate 통과 여부를 추적하는 것이다.
 - 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.
 - 현재 저장소 정리 작업의 Step 1~10과 Step -1은 완료됐고, 다음 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
@@ -57,6 +64,7 @@
 - Step 10은 완료됐고 로컬 품질 게이트 스크립트와 GitHub Actions CI 를 추가한 뒤 전체 `184 passed` 를 확인했다.
 - Step 0 보강으로 `capture-kis-l1-window` 반복 archive runner 를 추가했고 관련/전체 테스트 `185 passed` 를 확인했다.
 - 이후에는 Step 0 coverage 확보와 shadow/out-of-sample 검증 순으로 다시 돌아간다.
+- UI cleanup v1 이후 남은 구조 정리 후보는 `report_builder.py`, `providers/live_market.py`, `ai_supervisor.py`, `paper_reporting.py`, `market_activity.py` 순서다. `ai_supervisor.py` 는 현재 freshness 테스트 실패 원인을 먼저 분리한 뒤 착수한다.
 - live readiness Phase 1 은 timestamp/observability 기반은 들어왔지만 live smoke 와 hard gate 검증 전까지는 여전히 문서/검증 단계로 유지한다.
 - 골든 스냅샷과 `tests/golden/` 은 의도된 diff 가 아니면 건드리지 않는다.
 - 각 Step 완료 시 이 문서를 먼저 갱신하고, 그 다음 진행 기록과 관련 문서를 맞춘다.

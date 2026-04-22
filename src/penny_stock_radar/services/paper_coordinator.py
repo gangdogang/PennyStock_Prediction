@@ -6,6 +6,7 @@ from typing import Callable
 
 from ..config import AppSettings
 from ..models import MarketActivity
+from .activity_sanitizer import sanitize_activity_for_bucket
 from .engine_shared import collect_active_symbols
 from .intraday_engine import IntradayTradingEngine
 from .paper_reporting import PaperReportingService
@@ -18,6 +19,7 @@ from .paper_runtime import (
     PREDICTOR_WEIGHTED_BUCKET,
     PRIMARY_PAPER_STRATEGY,
     PaperTradingStepResult,
+    WATCHLIST_BLIND_MOMENTUM_BUCKET,
     write_csv,
 )
 from .paper_trading import PaperTradingEngine
@@ -60,7 +62,16 @@ class PaperTradingCoordinator:
                 advisor=advisor,
                 now_fn=now_fn,
                 strategy_mode="adaptive",
-            )
+            ),
+            PaperTradingEngine(
+                momentum_only_settings,
+                strategy_name=PRIMARY_PAPER_STRATEGY,
+                bucket=WATCHLIST_BLIND_MOMENTUM_BUCKET,
+                export_dir=self.export_dir,
+                advisor=advisor,
+                now_fn=now_fn,
+                strategy_mode="adaptive",
+            ),
         ]
         self.baseline_engines = [
             PaperTradingEngine(
@@ -91,6 +102,7 @@ class PaperTradingCoordinator:
             primary_strategy_name=PRIMARY_PAPER_STRATEGY,
             predictor_weighted_bucket=PREDICTOR_WEIGHTED_BUCKET,
             momentum_only_bucket=MOMENTUM_ONLY_BUCKET,
+            watchlist_blind_momentum_bucket=WATCHLIST_BLIND_MOMENTUM_BUCKET,
             baseline_pct_strategy=BASELINE_PCT_STRATEGY,
         )
 
@@ -126,15 +138,25 @@ class PaperTradingCoordinator:
         activity: list[MarketActivity],
         export_csv: bool = True,
     ) -> PaperTradingStepResult:
+        primary_activity = sanitize_activity_for_bucket(
+            self.primary_engine.scanner,
+            self.primary_engine.bucket,
+            activity,
+        )
         primary_result = self.primary_engine.process_market_activity(
             market_phase=market_phase,
-            activity=activity,
+            activity=primary_activity,
             export_csv=export_csv,
         )
         for engine in self.bucket_engines:
+            bucket_activity = sanitize_activity_for_bucket(
+                self.primary_engine.scanner,
+                engine.bucket,
+                activity,
+            )
             engine.process_market_activity(
                 market_phase=market_phase,
-                activity=activity,
+                activity=bucket_activity,
                 export_csv=False,
             )
         for engine in self.baseline_engines:
@@ -146,6 +168,7 @@ class PaperTradingCoordinator:
         comparison_path = self.export_strategy_comparison()
         self.export_bucket_comparison()
         self.export_bucket_trade_diff()
+        self.export_bucket_pair_diff()
         self.export_cohort_summary()
         self.export_execution_quality()
         self.export_trade_log()
@@ -165,6 +188,9 @@ class PaperTradingCoordinator:
 
     def export_bucket_trade_diff(self) -> Path:
         return self.reporting.export_bucket_trade_diff()
+
+    def export_bucket_pair_diff(self) -> Path:
+        return self.reporting.export_bucket_pair_diff()
 
     def export_cohort_summary(self, run_id: str | None = None) -> Path:
         return self.reporting.export_cohort_summary(run_id)

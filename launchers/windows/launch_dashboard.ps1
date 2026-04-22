@@ -112,6 +112,9 @@ raise SystemExit(0 if age_minutes <= 15 else 1)
 if ($needsRefresh) {
     Write-Host "Running the full pipeline. This can take a little while."
     & (Join-Path $RootDir "scripts\run_full_pipeline.ps1")
+    if (($null -ne $LASTEXITCODE) -and ($LASTEXITCODE -ne 0)) {
+        throw "Full pipeline failed with exit code $LASTEXITCODE."
+    }
 }
 else {
     Write-Host "Recent data found in the last 15 minutes. Skipping startup refresh."

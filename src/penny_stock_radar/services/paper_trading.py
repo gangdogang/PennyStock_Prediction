@@ -43,6 +43,7 @@ from .engine_rules import (
 from .fill_model import FillModel
 from .market_activity import MarketActivityScanner
 from .momentum_advisor import MomentumAdvice, build_momentum_advisor
+from .paper_bucket_policy import bucket_uses_predictor_weight
 from .paper_runtime import (
     MARKET_STATUS_STATE_PREFIX,
     MOMENTUM_ONLY_BUCKET,
@@ -51,6 +52,7 @@ from .paper_runtime import (
     PAPER_BUCKET_LABELS,
     PAPER_STRATEGY_LABELS,
     PaperTradingStepResult,
+    WATCHLIST_BLIND_MOMENTUM_BUCKET,
     active_position_symbols, default_paper_bucket, export_run_csv,
     paper_market_date, run_engine_once,
 )
@@ -852,7 +854,7 @@ class PaperTradingEngine:
         )
 
     def _refresh_predictor_scores(self) -> None:
-        if self.strategy_mode != "adaptive" or self.bucket == MOMENTUM_ONLY_BUCKET:
+        if self.strategy_mode != "adaptive" or not bucket_uses_predictor_weight(self.bucket):
             self._predictor_score_by_symbol = {}
             return
         rows = fetch_latest_premkt_predictions(
