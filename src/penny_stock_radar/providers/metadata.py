@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -16,15 +17,23 @@ class YFinanceMetadataProvider:
     """
 
     def fetch_prices(self, symbols: list[str]) -> dict[str, float]:
-        if not symbols:
+        download_symbols = self._downloadable_symbols(symbols)
+        if not download_symbols:
             return {}
+        try:
+            frame = self._download_prices(download_symbols)
+        except Exception:
+            return self._fetch_prices_individually(download_symbols)
+        return self._prices_from_frame(frame, download_symbols)
+
+    def _download_prices(self, symbols: list[str]):
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="Timestamp.utcnow is deprecated and will be removed",
                 category=Warning,
             )
-            frame = yf.download(
+            return yf.download(
                 tickers=symbols,
                 period="5d",
                 interval="1d",
@@ -33,6 +42,18 @@ class YFinanceMetadataProvider:
                 progress=False,
                 threads=True,
             )
+
+    def _fetch_prices_individually(self, symbols: list[str]) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for symbol in symbols:
+            try:
+                frame = self._download_prices([symbol])
+            except Exception:
+                continue
+            prices.update(self._prices_from_frame(frame, [symbol]))
+        return prices
+
+    def _prices_from_frame(self, frame, symbols: list[str]) -> dict[str, float]:
         prices: dict[str, float] = {}
         if getattr(frame, "empty", True):
             return prices
@@ -51,6 +72,19 @@ class YFinanceMetadataProvider:
             if not close_series.empty:
                 prices[symbol] = float(close_series.iloc[-1])
         return prices
+
+    def _downloadable_symbols(self, symbols: list[str]) -> list[str]:
+        seen: set[str] = set()
+        normalized: list[str] = []
+        for symbol in symbols:
+            candidate = str(symbol or "").strip().upper()
+            if not candidate or candidate in seen:
+                continue
+            if not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]*", candidate):
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
 
     def fetch_metadata(
         self,

@@ -17,6 +17,12 @@ def listing_filter_reasons(
     security_name = str(company_name or "").strip().lower()
     reasons: list[str] = []
 
+    if (
+        not normalized_symbol
+        or normalized_symbol.startswith("$")
+        or re.search(r"[^A-Z0-9.\-]", normalized_symbol)
+    ):
+        reasons.append("invalid_symbol_format")
     if exclude_units and _is_unit_security(normalized_symbol, security_name):
         reasons.append("unit_security")
     if exclude_preferred and _is_preferred_security(normalized_symbol, security_name):

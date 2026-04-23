@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from penny_stock_radar.config import AppSettings
 from penny_stock_radar.models import ListingRecord, MetadataRecord
+from penny_stock_radar.providers.metadata import YFinanceMetadataProvider
 from penny_stock_radar.services.universe_builder import UniverseBuilder
 
 
@@ -111,6 +114,52 @@ def test_universe_builder_skips_structurally_filtered_symbols_before_yfinance(tm
     assert by_symbol["ABCD"].passed_filters is True
     assert "warrant_security" in by_symbol["ACHR.W"].filter_reasons
     assert "preferred_security" in by_symbol["ABR$E"].filter_reasons
+
+
+def test_universe_builder_skips_invalid_symbols_before_yfinance_even_when_preferred_allowed(tmp_path) -> None:
+    settings = AppSettings(db_path=tmp_path / "radar.sqlite3", exclude_preferred=False)
+    metadata_provider = RecordingMetadataProvider()
+    builder = UniverseBuilder(
+        settings,
+        listing_provider=FakeListingProvider(
+            [
+                ListingRecord(symbol="ABCD", company_name="ABCD Corp", exchange="Q"),
+                ListingRecord(symbol="$ADSEW", company_name="Invalid Symbol", exchange="Q"),
+            ]
+        ),
+        metadata_provider=metadata_provider,
+    )
+
+    _, candidates = builder.run(max_symbols=10)
+
+    assert metadata_provider.price_requests == ["ABCD"]
+    assert metadata_provider.metadata_requests == ["ABCD"]
+    by_symbol = {row.symbol: row for row in candidates}
+    assert "invalid_symbol_format" in by_symbol["$ADSEW"].filter_reasons
+
+
+def test_yfinance_metadata_provider_falls_back_when_batch_price_download_fails(monkeypatch) -> None:
+    provider = YFinanceMetadataProvider()
+    calls: list[tuple[str, ...]] = []
+
+    def fake_download(*, tickers, **kwargs):
+        del kwargs
+        key = tuple(tickers)
+        calls.append(key)
+        if key == ("ABCD", "BAD"):
+            raise RuntimeError("BAD: possibly delisted")
+        if key == ("ABCD",):
+            return pd.DataFrame({"Close": [1.25]})
+        raise RuntimeError("BAD: possibly delisted")
+
+    monkeypatch.setattr("penny_stock_radar.providers.metadata.yf.download", fake_download)
+
+    prices = provider.fetch_prices(["ABCD", "$ADSEW", "BAD"])
+
+    assert prices == {"ABCD": 1.25}
+    assert ("ABCD", "BAD") in calls
+    assert ("ABCD",) in calls
+    assert ("BAD",) in calls
 
 
 def test_universe_builder_uses_kis_master_universe_when_configured(tmp_path: Path) -> None:
