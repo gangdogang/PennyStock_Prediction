@@ -96,6 +96,11 @@ def test_universe_builder_skips_structurally_filtered_symbols_before_yfinance(tm
                     exchange="Q",
                 ),
                 ListingRecord(
+                    symbol="ADSEW",
+                    company_name="ADS-TEC Energy PLC",
+                    exchange="Q",
+                ),
+                ListingRecord(
                     symbol="ABR$E",
                     company_name="Arbor Realty Trust 8.250% Series E Preferred Stock",
                     exchange="N",
@@ -113,6 +118,7 @@ def test_universe_builder_skips_structurally_filtered_symbols_before_yfinance(tm
     by_symbol = {row.symbol: row for row in candidates}
     assert by_symbol["ABCD"].passed_filters is True
     assert "warrant_security" in by_symbol["ACHR.W"].filter_reasons
+    assert "warrant_security" in by_symbol["ADSEW"].filter_reasons
     assert "preferred_security" in by_symbol["ABR$E"].filter_reasons
 
 

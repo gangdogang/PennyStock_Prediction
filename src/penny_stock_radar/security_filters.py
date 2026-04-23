@@ -39,11 +39,15 @@ def listing_filter_reasons(
 def _is_preferred_security(symbol: str, security_name: str) -> bool:
     if "preferred" in security_name or "preference" in security_name:
         return True
+    if re.search(r"^[A-Z]{4,5}P[A-Z]?$", symbol):
+        return True
     return bool(re.search(r"(?:\$|[.\-](?:P|PR|PRA|PRB|PRC|PRD|PRE|PF))", symbol))
 
 
 def _is_unit_security(symbol: str, security_name: str) -> bool:
     if any(keyword in security_name for keyword in (" unit", " units", "unit ", "units ", "유닛")):
+        return True
+    if re.search(r"^[A-Z]{4,5}U$", symbol):
         return True
     return bool(re.search(r"(?:[.\-/])(U|UN|UNT)$", symbol))
 
@@ -51,11 +55,15 @@ def _is_unit_security(symbol: str, security_name: str) -> bool:
 def _is_warrant_security(symbol: str, security_name: str) -> bool:
     if any(keyword in security_name for keyword in ("warrant", "warrants")):
         return True
+    if re.search(r"^[A-Z]{4,5}W$", symbol):
+        return True
     return bool(re.search(r"(?:[.\-/])(W|WS|WT|WTS)$", symbol))
 
 
 def _is_rights_security(symbol: str, security_name: str) -> bool:
     if any(keyword in security_name for keyword in (" right", " rights", "권리")):
+        return True
+    if re.search(r"^[A-Z]{4,5}R$", symbol):
         return True
     return bool(re.search(r"(?:[.\-/])(R|RT|RTS)$", symbol))
 
