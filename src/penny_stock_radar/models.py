@@ -414,6 +414,14 @@ class PaperOrder(BaseModel):
     planned_risk_pct: float | None = None
     fill_reference_price: float | None = None
     fill_slippage_pct: float | None = None
+    bar_volume: float | None = None
+    bar_dollar_volume: float | None = None
+    shares_pct_of_bar_volume: float | None = None
+    notional_pct_of_bar_dollar_volume: float | None = None
+    estimated_capacity_at_1pct_volume: float | None = None
+    estimated_capacity_at_2pct_volume: float | None = None
+    capacity_limited: bool = False
+    participation_slippage_pct: float = 0.0
     day_regime: str | None = None
     watchlist_rank_at_entry: int | None = None
     reasons: list[str] = Field(default_factory=list)

@@ -24,7 +24,7 @@ from ..db import (
     fetch_paper_trading_run_by_id,
 )
 from ..models import PaperOrder, PaperPosition, PaperTradingRun
-from .paper_bucket_policy import bucket_uses_predictor_weight
+from .paper_bucket_policy import bucket_uses_predictor_weight, paper_bucket_policy
 from .trading_support import predicted_rank_band
 
 
@@ -36,10 +36,13 @@ class PaperReportPaths:
     bucket_pair_diff: Path
     cohort_summary: Path
     execution_quality: Path
+    capacity_report: Path
     trade_log: Path
     backtest_kpis: Path
     regime_split: Path
     predictor_kpis: Path
+    intraday_edge_decay: Path
+    catalyst_kpis: Path
     run_manifest: Path
     performance_gate: Path
 
@@ -53,10 +56,13 @@ def paper_report_paths(export_dir: Path) -> PaperReportPaths:
         bucket_pair_diff=base / "paper_bucket_pair_diff.csv",
         cohort_summary=base / "paper_cohort_summary.csv",
         execution_quality=base / "paper_execution_quality.csv",
+        capacity_report=base / "paper_capacity_report.csv",
         trade_log=base / "paper_trade_log.csv",
         backtest_kpis=base / "paper_backtest_kpis.csv",
         regime_split=base / "paper_regime_split.csv",
         predictor_kpis=base / "paper_predictor_kpis.csv",
+        intraday_edge_decay=base / "paper_intraday_edge_decay.csv",
+        catalyst_kpis=base / "paper_catalyst_kpis.csv",
         run_manifest=base / "run_manifest.json",
         performance_gate=base / "paper_performance_gate.json",
     )
@@ -379,6 +385,54 @@ class PaperReportingService:
         self._write_csv(self.paths.execution_quality, rows)
         return self.paths.execution_quality.resolve()
 
+    def export_capacity_report(self) -> Path:
+        rows: list[dict[str, object]] = []
+        for run in self._latest_runs():
+            orders = fetch_paper_orders(self.settings.database_path, run.run_id)
+            for order in orders:
+                if order.intent not in {"ENTRY", "ADD", "EXIT", "EXIT_PARTIAL", "TRIM"}:
+                    continue
+                rows.append(
+                    {
+                        "run_id": run.run_id,
+                        "strategy_name": run.strategy_name,
+                        "strategy_label": self.strategy_labels.get(run.strategy_name, run.strategy_name),
+                        "bucket": run.bucket,
+                        "bucket_label": self.bucket_labels.get(run.bucket, run.bucket),
+                        "order_id": order.order_id,
+                        "position_id": order.position_id or "",
+                        "symbol": order.symbol,
+                        "market_phase": order.market_phase,
+                        "action": order.action,
+                        "intent": order.intent,
+                        "quantity": order.quantity,
+                        "requested_quantity": order.requested_quantity,
+                        "remaining_quantity": order.remaining_quantity,
+                        "fill_status": order.fill_status,
+                        "price": order.price,
+                        "notional": order.notional,
+                        "bar_volume": order.bar_volume,
+                        "bar_dollar_volume": order.bar_dollar_volume,
+                        "shares_pct_of_bar_volume": order.shares_pct_of_bar_volume,
+                        "notional_pct_of_bar_dollar_volume": order.notional_pct_of_bar_dollar_volume,
+                        "estimated_capacity_at_1pct_volume": order.estimated_capacity_at_1pct_volume,
+                        "estimated_capacity_at_2pct_volume": order.estimated_capacity_at_2pct_volume,
+                        "capacity_limited": order.capacity_limited,
+                        "participation_slippage_pct": order.participation_slippage_pct,
+                        "created_at": order.created_at.isoformat(),
+                    }
+                )
+        rows.sort(
+            key=lambda item: (
+                str(item["strategy_name"]),
+                str(item["bucket"]),
+                str(item["created_at"]),
+                str(item["symbol"]),
+            )
+        )
+        self._write_csv(self.paths.capacity_report, rows)
+        return self.paths.capacity_report.resolve()
+
     def export_trade_log(self) -> Path:
         rows: list[dict[str, object]] = []
         prediction_lookup = self._prediction_lookup()
@@ -415,9 +469,14 @@ class PaperReportingService:
                     prediction_source = "disabled"
                     predicted = False
                 top_theme = ""
-                themes = prediction.get("themes", []) if uses_predictor else []
+                themes = prediction.get("themes", [])
                 if themes:
                     top_theme = str(themes[0])
+                capacity_order = entry_order or self._max_capacity_order(position_orders)
+                catalyst_type = self._catalyst_type(
+                    prediction=prediction,
+                    reasons=[*position.entry_reasons, *position.exit_reasons],
+                )
                 hold_minutes = max(
                     ((position.closed_at or position.updated_at) - position.opened_at).total_seconds() / 60.0,
                     0.0,
@@ -455,6 +514,7 @@ class PaperReportingService:
                         "prediction_cutoff_at": prediction.get("cutoff_at", ""),
                         "prediction_source": prediction_source,
                         "top_theme": top_theme,
+                        "catalyst_type": catalyst_type,
                         "entry_phase": position.entry_phase,
                         "entry_label": position.entry_label or "",
                         "strategy_bucket": position.strategy_bucket,
@@ -466,6 +526,31 @@ class PaperReportingService:
                         "quantity": position.quantity,
                         "entry_price": entry_price,
                         "fill_reference_price": position.fill_reference_price,
+                        "shares_pct_of_bar_volume": (
+                            capacity_order.shares_pct_of_bar_volume
+                            if capacity_order is not None
+                            else None
+                        ),
+                        "notional_pct_of_bar_dollar_volume": (
+                            capacity_order.notional_pct_of_bar_dollar_volume
+                            if capacity_order is not None
+                            else None
+                        ),
+                        "estimated_capacity_at_1pct_volume": (
+                            capacity_order.estimated_capacity_at_1pct_volume
+                            if capacity_order is not None
+                            else None
+                        ),
+                        "estimated_capacity_at_2pct_volume": (
+                            capacity_order.estimated_capacity_at_2pct_volume
+                            if capacity_order is not None
+                            else None
+                        ),
+                        "capacity_limited": (
+                            capacity_order.capacity_limited
+                            if capacity_order is not None
+                            else False
+                        ),
                         "planned_stop_price": planned_stop_price,
                         "planned_risk_dollars": planned_risk_dollars,
                         "gross_pnl": gross_pnl,
@@ -490,6 +575,16 @@ class PaperReportingService:
             net_pnls = [float(row["net_pnl"]) for row in closed_rows]
             r_values = [float(row["r_multiple"]) for row in closed_rows if row["r_multiple"] not in {None, ""}]
             hold_minutes = [float(row["hold_minutes"]) for row in closed_rows]
+            winner_holds = [
+                float(row["hold_minutes"])
+                for row in closed_rows
+                if self._float_value(row.get("net_pnl")) > 0
+            ]
+            loser_holds = [
+                float(row["hold_minutes"])
+                for row in closed_rows
+                if self._float_value(row.get("net_pnl")) < 0
+            ]
             stop_slippage = [float(row["stop_exit_slippage_pct"]) for row in closed_rows if row["stop_exit_slippage_pct"] not in {None, ""}]
             sharpe = self._trade_sharpe(net_pnls)
             sharpe_ci_low, sharpe_ci_high = self._bootstrap_ci(net_pnls, self._trade_sharpe)
@@ -514,7 +609,29 @@ class PaperReportingService:
                     "sharpe_ratio": sharpe,
                     "sharpe_ci_low": sharpe_ci_low,
                     "sharpe_ci_high": sharpe_ci_high,
+                    "sortino_ratio": self._trade_sortino(net_pnls),
+                    "calmar_ratio": (
+                        run.total_return_pct / run.max_drawdown_pct
+                        if run.max_drawdown_pct > 0
+                        else 0.0
+                    ),
+                    "max_consecutive_losses": self._max_consecutive_losses(closed_rows),
+                    "worst_trade_r": min(r_values) if r_values else 0.0,
+                    "p5_trade_r": self._percentile(r_values, 5.0) if r_values else 0.0,
+                    "cvar_5pct_trade_r": self._cvar(r_values, 5.0) if r_values else 0.0,
                     "avg_hold_minutes": (sum(hold_minutes) / len(hold_minutes)) if hold_minutes else 0.0,
+                    "median_hold_minutes": self._median(hold_minutes),
+                    "p90_hold_minutes": self._percentile(hold_minutes, 90.0) if hold_minutes else 0.0,
+                    "winner_avg_hold_minutes": (
+                        sum(winner_holds) / len(winner_holds)
+                        if winner_holds
+                        else 0.0
+                    ),
+                    "loser_avg_hold_minutes": (
+                        sum(loser_holds) / len(loser_holds)
+                        if loser_holds
+                        else 0.0
+                    ),
                     "avg_hold_days": ((sum(hold_minutes) / len(hold_minutes)) / (60.0 * 24.0)) if hold_minutes else 0.0,
                     "one_winner_dependency_pct": self._one_winner_dependency_pct(net_pnls),
                     "avg_stop_slippage_pct": (sum(stop_slippage) / len(stop_slippage)) if stop_slippage else 0.0,
@@ -616,9 +733,104 @@ class PaperReportingService:
         self._write_csv(self.paths.predictor_kpis, rows)
         return self.paths.predictor_kpis.resolve()
 
+    def export_intraday_edge_decay(self) -> Path:
+        grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+        for row in self._load_trade_log_rows():
+            if row.get("status") != "CLOSED":
+                continue
+            bucket = self._intraday_decay_bucket(self._float_value(row.get("hold_minutes")))
+            key = (str(row["strategy_name"]), str(row["bucket"]), bucket)
+            if key not in grouped:
+                grouped[key] = {
+                    "strategy_name": key[0],
+                    "strategy_label": self.strategy_labels.get(key[0], key[0]),
+                    "bucket": key[1],
+                    "bucket_label": self.bucket_labels.get(key[1], key[1]),
+                    "decay_bucket": key[2],
+                    "trade_count": 0,
+                    "win_rate": 0.0,
+                    "avg_r_multiple": 0.0,
+                    "total_net_pnl": 0.0,
+                }
+            item = grouped[key]
+            item["trade_count"] = int(item["trade_count"]) + 1
+            item["total_net_pnl"] = float(item["total_net_pnl"]) + self._float_value(row.get("net_pnl"))
+            item.setdefault("_wins", []).append(self._float_value(row.get("net_pnl")) > 0)
+            if row.get("r_multiple") not in {None, ""}:
+                item.setdefault("_r_values", []).append(self._float_value(row.get("r_multiple")))
+
+        rows: list[dict[str, object]] = []
+        for item in grouped.values():
+            trade_count = int(item["trade_count"])
+            wins = [value for value in item.pop("_wins", []) if value]
+            r_values = item.pop("_r_values", [])
+            item["win_rate"] = (len(wins) / trade_count) * 100.0 if trade_count > 0 else 0.0
+            item["avg_r_multiple"] = sum(r_values) / len(r_values) if r_values else 0.0
+            rows.append(item)
+        rows.sort(
+            key=lambda item: (
+                str(item["strategy_name"]),
+                str(item["bucket"]),
+                self._intraday_decay_sort_key(str(item["decay_bucket"])),
+            )
+        )
+        self._write_csv(self.paths.intraday_edge_decay, rows)
+        return self.paths.intraday_edge_decay.resolve()
+
+    def export_catalyst_kpis(self) -> Path:
+        grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+        for row in self._load_trade_log_rows():
+            if row.get("status") != "CLOSED":
+                continue
+            catalyst_type = str(row.get("catalyst_type") or "no_clear_catalyst")
+            key = (str(row["strategy_name"]), str(row["bucket"]), catalyst_type)
+            if key not in grouped:
+                grouped[key] = {
+                    "strategy_name": key[0],
+                    "strategy_label": self.strategy_labels.get(key[0], key[0]),
+                    "bucket": key[1],
+                    "bucket_label": self.bucket_labels.get(key[1], key[1]),
+                    "catalyst_type": key[2],
+                    "closed_trade_count": 0,
+                    "win_rate": 0.0,
+                    "expectancy_r": 0.0,
+                    "total_net_pnl": 0.0,
+                    "avg_hold_minutes": 0.0,
+                }
+            item = grouped[key]
+            item["closed_trade_count"] = int(item["closed_trade_count"]) + 1
+            item["total_net_pnl"] = float(item["total_net_pnl"]) + self._float_value(row.get("net_pnl"))
+            item.setdefault("_wins", []).append(self._float_value(row.get("net_pnl")) > 0)
+            item.setdefault("_holds", []).append(self._float_value(row.get("hold_minutes")))
+            if row.get("r_multiple") not in {None, ""}:
+                item.setdefault("_r_values", []).append(self._float_value(row.get("r_multiple")))
+
+        rows: list[dict[str, object]] = []
+        for item in grouped.values():
+            trade_count = int(item["closed_trade_count"])
+            wins = [value for value in item.pop("_wins", []) if value]
+            holds = item.pop("_holds", [])
+            r_values = item.pop("_r_values", [])
+            item["win_rate"] = (len(wins) / trade_count) * 100.0 if trade_count > 0 else 0.0
+            item["expectancy_r"] = sum(r_values) / len(r_values) if r_values else 0.0
+            item["avg_hold_minutes"] = sum(holds) / len(holds) if holds else 0.0
+            rows.append(item)
+        rows.sort(
+            key=lambda item: (
+                str(item["strategy_name"]),
+                str(item["bucket"]),
+                str(item["catalyst_type"]),
+            )
+        )
+        self._write_csv(self.paths.catalyst_kpis, rows)
+        return self.paths.catalyst_kpis.resolve()
+
     def export_run_manifest(self) -> Path:
         trade_rows = self._load_trade_log_rows()
         opened_at = sorted(str(row["opened_at"]) for row in trade_rows if row.get("opened_at"))
+        predictor_k1 = float(self.settings.paper_predictor_weight_k1)
+        predictor_k2 = float(self.settings.paper_predictor_weight_k2)
+        predictor_effect_enabled = predictor_k1 != 0.0 or predictor_k2 != 0.0
         payload = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "export_dir": str(self.export_dir.resolve()),
@@ -643,12 +855,46 @@ class PaperReportingService:
                 for run in self._latest_runs()
             ],
             "predictor_effect": {
+                "enabled": predictor_effect_enabled,
+                "k1": predictor_k1,
+                "k2": predictor_k2,
                 "paper_predictor_weight_k1": self.settings.paper_predictor_weight_k1,
                 "paper_predictor_weight_k2": self.settings.paper_predictor_weight_k2,
-                "enabled": (
-                    self.settings.paper_predictor_weight_k1 != 0.0
-                    or self.settings.paper_predictor_weight_k2 != 0.0
+                "scope": "predictor_weighted bucket only; comparison buckets force predictor weight to 0",
+                "threshold_formula": "entry_threshold = base_threshold - k1 * predictor_weight",
+                "sizing_formula": "entry_fraction = base_fraction * (1 + k2 * predictor_weight), capped by paper_entry_size_fraction",
+                "disabled_reason": (
+                    None
+                    if predictor_effect_enabled
+                    else "paper_predictor_weight_k1 and paper_predictor_weight_k2 are both 0"
                 ),
+            },
+            "bucket_policies": self._bucket_policy_manifest(),
+            "slippage_model": {
+                "name": "l1_minute_volume_nonlinear_proxy",
+                "depth_source": "none_l2_depth_unavailable",
+                "base_slippage_pct": self.settings.paper_fill_slippage_pct,
+                "premarket_spread_multiplier": self.settings.paper_premarket_spread_slippage_multiplier,
+                "regular_spread_multiplier": self.settings.paper_regular_spread_slippage_multiplier,
+                "halt_resume_spread_multiplier": self.settings.paper_halt_resume_spread_slippage_multiplier,
+                "participation_penalty": {
+                    "enabled": self.settings.paper_participation_slippage_enabled,
+                    "soft_threshold_pct": self.settings.paper_participation_slippage_soft_pct,
+                    "mid_threshold_pct": self.settings.paper_participation_slippage_mid_pct,
+                    "hard_threshold_pct": self.settings.paper_participation_slippage_hard_pct,
+                    "shape": "piecewise_quadratic",
+                    "mid_penalty_pct": self.settings.paper_participation_slippage_mid_penalty_pct,
+                    "hard_penalty_pct": self.settings.paper_participation_slippage_hard_penalty_pct,
+                    "extreme_penalty_pct": self.settings.paper_participation_slippage_extreme_penalty_pct,
+                },
+            },
+            "capacity_model": {
+                "name": "bar_volume_participation_capacity",
+                "volume_cap_large_pct": self.settings.paper_volume_cap_large_pct,
+                "volume_cap_mid_pct": self.settings.paper_volume_cap_mid_pct,
+                "volume_cap_small_pct": self.settings.paper_volume_cap_small_pct,
+                "conservative_participation_scenarios_pct": [1.0, 2.0],
+                "capacity_limited_threshold_pct": self.settings.paper_capacity_limited_pct,
             },
             "artifacts": {
                 "paper_backtest_kpis": self.paths.backtest_kpis.name,
@@ -657,6 +903,9 @@ class PaperReportingService:
                 "paper_bucket_pair_diff": self.paths.bucket_pair_diff.name,
                 "paper_predictor_kpis": self.paths.predictor_kpis.name,
                 "paper_execution_quality": self.paths.execution_quality.name,
+                "paper_capacity_report": self.paths.capacity_report.name,
+                "paper_intraday_edge_decay": self.paths.intraday_edge_decay.name,
+                "paper_catalyst_kpis": self.paths.catalyst_kpis.name,
             },
         }
         self.paths.run_manifest.parent.mkdir(parents=True, exist_ok=True)
@@ -681,8 +930,13 @@ class PaperReportingService:
         bucket_rows = read_csv_rows(self.paths.bucket_comparison)
         diff_rows = read_csv_rows(self.paths.bucket_trade_diff)
         pair_diff_rows = read_csv_rows(self.paths.bucket_pair_diff)
+        capacity_rows = read_csv_rows(self.paths.capacity_report)
+        manifest_payload = self._load_json_object(self.paths.run_manifest)
+        predictor_effect = self._predictor_effect_from_manifest(manifest_payload)
+        coverage_gate = self._step0_coverage_gate_summary()
         failures: list[str] = []
         warnings: list[str] = []
+        edge_judgment_blockers: list[str] = []
         required_artifacts = {
             "run_manifest.json": self.paths.run_manifest,
             "paper_backtest_kpis.csv": self.paths.backtest_kpis,
@@ -692,10 +946,44 @@ class PaperReportingService:
             "paper_predictor_kpis.csv": self.paths.predictor_kpis,
             "paper_execution_quality.csv": self.paths.execution_quality,
             "paper_bucket_comparison.csv": self.paths.bucket_comparison,
+            "paper_capacity_report.csv": self.paths.capacity_report,
+            "paper_intraday_edge_decay.csv": self.paths.intraday_edge_decay,
+            "paper_catalyst_kpis.csv": self.paths.catalyst_kpis,
+        }
+        allow_empty_artifacts = {
+            "paper_intraday_edge_decay.csv",
+            "paper_catalyst_kpis.csv",
         }
         for artifact_name, artifact_path in required_artifacts.items():
-            if not artifact_path.exists() or artifact_path.stat().st_size == 0:
+            if not artifact_path.exists():
                 failures.append(f"{artifact_name} is missing or empty")
+            elif artifact_name not in allow_empty_artifacts and artifact_path.stat().st_size == 0:
+                failures.append(f"{artifact_name} is missing or empty")
+
+        if self.paths.run_manifest.exists() and self.paths.run_manifest.stat().st_size > 0:
+            if predictor_effect is None:
+                failures.append("run_manifest.json is missing predictor_effect settings")
+            elif not bool(predictor_effect.get("enabled")):
+                edge_judgment_blockers.append(
+                    "predictor_effect disabled; predictor edge 판단 금지"
+                )
+                failures.append(
+                    "predictor_effect disabled "
+                    f"(k1={self._float_value(predictor_effect.get('k1'))}, "
+                    f"k2={self._float_value(predictor_effect.get('k2'))}); "
+                    "run cannot evaluate predictor edge"
+                )
+            if not isinstance(manifest_payload.get("slippage_model"), dict):
+                failures.append("run_manifest.json is missing slippage_model settings")
+            if not isinstance(manifest_payload.get("capacity_model"), dict):
+                failures.append("run_manifest.json is missing capacity_model settings")
+
+        if not bool(coverage_gate.get("gate_passed")):
+            message = (
+                "Step 0 L1 coverage gate not passed or missing; predictor edge 판단 금지"
+            )
+            warnings.append(message)
+            edge_judgment_blockers.append(message)
 
         closed_rows = [row for row in trade_rows if row.get("status") == "CLOSED"]
         required_trade_columns = {
@@ -724,15 +1012,47 @@ class PaperReportingService:
                 f"closed trades with blank predictor_score/predictor_weight: {len(missing_lineage)}"
             )
 
+        if capacity_rows:
+            capacity_metric_names = {
+                "shares_pct_of_bar_volume",
+                "notional_pct_of_bar_dollar_volume",
+                "estimated_capacity_at_1pct_volume",
+                "estimated_capacity_at_2pct_volume",
+            }
+            has_capacity_signal = any(
+                any(self._float_value(row.get(name)) > 0.0 for name in capacity_metric_names)
+                for row in capacity_rows
+            )
+            if not has_capacity_signal:
+                warnings.append(
+                    "capacity metrics are all zero or blank; strategy capacity cannot be evaluated"
+                )
+
         inconsistent_candidate_rows = [
             row
             for row in predictor_rows
             if self._float_value(row.get("candidate_count")) == 0.0
-            and self._float_value(row.get("triggered_candidate_count")) > 0.0
+            and (
+                self._float_value(row.get("triggered_candidate_count")) > 0.0
+                or self._float_value(row.get("predicted_trade_count")) > 0.0
+                or self._float_value(row.get("closed_predicted_trade_count")) > 0.0
+            )
         ]
         if inconsistent_candidate_rows:
             failures.append(
-                "candidate_count is 0 while triggered_candidate_count is positive"
+                "candidate_count is 0 while predictor-triggered or predicted trades are positive"
+            )
+        impossible_candidate_rows = [
+            row
+            for row in predictor_rows
+            if self._float_value(row.get("triggered_candidate_count"))
+            > self._float_value(row.get("candidate_count"))
+            or self._float_value(row.get("closed_predicted_trade_count"))
+            > self._float_value(row.get("predicted_trade_count"))
+        ]
+        if impossible_candidate_rows:
+            failures.append(
+                "paper_predictor_kpis.csv has inconsistent candidate/predicted trade counts"
             )
 
         if bucket_rows:
@@ -774,9 +1094,13 @@ class PaperReportingService:
                 or str(row.get("predictor_status") or "") != str(row.get("momentum_status") or "")
             ]
             if not nonzero_diff:
-                if self._has_primary_predictor_evidence(predictor_rows, predictor_closed):
+                if predictor_effect is not None and not bool(predictor_effect.get("enabled")):
+                    warnings.append(
+                        "predictor_weighted and momentum_only closed trades are identical because predictor_effect is disabled"
+                    )
+                elif self._has_primary_predictor_evidence(predictor_rows, predictor_closed):
                     failures.append(
-                        "predictor candidates exist but predictor_weighted and momentum_only closed trades are identical"
+                        "predictor_effect enabled but predictor_weighted and momentum_only closed trades are identical"
                     )
                 else:
                     warnings.append(
@@ -832,11 +1156,20 @@ class PaperReportingService:
             if "run_manifest.json is missing or empty" not in failures:
                 failures.append("run_manifest.json is missing")
 
+        if failures:
+            edge_judgment_blockers.append(
+                "performance review gate failed; predictor edge 판단 금지"
+            )
+        edge_judgment_allowed = not edge_judgment_blockers
+
         return {
             "status": "fail" if failures else "pass",
             "failures": failures,
             "warnings": warnings,
             "warning_count": len(warnings),
+            "edge_judgment_allowed": edge_judgment_allowed,
+            "edge_judgment_blockers": edge_judgment_blockers,
+            "step0_coverage_gate": coverage_gate,
             "required_buckets": list(self.comparison_buckets),
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "closed_trade_count": len(closed_rows),
@@ -844,11 +1177,84 @@ class PaperReportingService:
             "predictor_kpis_path": str(self.paths.predictor_kpis),
             "bucket_trade_diff_path": str(self.paths.bucket_trade_diff),
             "bucket_pair_diff_path": str(self.paths.bucket_pair_diff),
+            "capacity_report_path": str(self.paths.capacity_report),
+            "intraday_edge_decay_path": str(self.paths.intraday_edge_decay),
+            "catalyst_kpis_path": str(self.paths.catalyst_kpis),
             "run_manifest_path": str(self.paths.run_manifest),
         }
 
     def _latest_runs(self) -> list[PaperTradingRun]:
         return fetch_latest_paper_strategy_runs(self.settings.database_path, limit=10)
+
+    def _bucket_policy_manifest(self) -> dict[str, dict[str, object]]:
+        payload: dict[str, dict[str, object]] = {}
+        for bucket in self.comparison_buckets:
+            policy = paper_bucket_policy(bucket)
+            payload[bucket] = {
+                "canonical_bucket": policy.canonical_bucket,
+                "label": policy.label,
+                "uses_predictor_weight": policy.uses_predictor_weight,
+                "uses_watchlist_metadata": policy.uses_watchlist_metadata,
+                "recompute_analysis_without_watchlist": policy.recompute_analysis_without_watchlist,
+            }
+        return payload
+
+    def _load_json_object(self, path: Path) -> dict[str, object] | None:
+        if not path.exists() or path.stat().st_size == 0:
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _predictor_effect_from_manifest(
+        self,
+        manifest_payload: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        if manifest_payload is None:
+            return None
+        raw = manifest_payload.get("predictor_effect")
+        if not isinstance(raw, dict):
+            return None
+        normalized = dict(raw)
+        if "k1" not in normalized:
+            normalized["k1"] = normalized.get("paper_predictor_weight_k1")
+        if "k2" not in normalized:
+            normalized["k2"] = normalized.get("paper_predictor_weight_k2")
+        if "enabled" not in normalized:
+            normalized["enabled"] = (
+                self._float_value(normalized.get("k1")) != 0.0
+                or self._float_value(normalized.get("k2")) != 0.0
+            )
+        return normalized
+
+    def _step0_coverage_gate_summary(self) -> dict[str, object]:
+        payload = self._load_json_object(self.settings.backtest_coverage_gate_path)
+        if payload is None:
+            return {
+                "status": "missing",
+                "gate_passed": False,
+                "path": str(self.settings.backtest_coverage_gate_path),
+                "message": "Step 0 L1 coverage gate status is missing; edge 판단 금지",
+            }
+        gate_passed = bool(payload.get("gate_passed")) and str(payload.get("status")) == "passed"
+        return {
+            "status": payload.get("status", "unknown"),
+            "gate_name": payload.get("gate_name", ""),
+            "gate_passed": gate_passed,
+            "threshold_pct": payload.get("threshold_pct"),
+            "symbol_coverage_pct": payload.get("symbol_coverage_pct"),
+            "interval_coverage_pct": payload.get("interval_coverage_pct"),
+            "market_date": payload.get("market_date", ""),
+            "session": payload.get("session", ""),
+            "path": str(self.settings.backtest_coverage_gate_path),
+            "message": (
+                "Step 0 L1 coverage gate passed"
+                if gate_passed
+                else "Step 0 L1 coverage gate not passed; edge 판단 금지"
+            ),
+        }
 
     def _load_trade_log_rows(self) -> list[dict[str, object]]:
         path = self.paths.trade_log
@@ -879,6 +1285,8 @@ class PaperReportingService:
             lookup[str(row["symbol"]).upper()] = {
                 "score": float(row["score"]),
                 "themes": themes,
+                "entry_rationale": str(row["entry_rationale"]) if "entry_rationale" in row.keys() else "",
+                "filing_summary": str(row["filing_summary"]) if "filing_summary" in row.keys() else "",
                 "generated_at": str(row["generated_at"]) if "generated_at" in row.keys() else "",
                 "cutoff_at": (
                     str(row["cutoff_at"])
@@ -892,6 +1300,50 @@ class PaperReportingService:
                 ),
             }
         return lookup
+
+    def _max_capacity_order(self, orders: list[PaperOrder]) -> PaperOrder | None:
+        if not orders:
+            return None
+        return max(
+            orders,
+            key=lambda order: (
+                float(order.shares_pct_of_bar_volume or 0.0),
+                float(order.notional_pct_of_bar_dollar_volume or 0.0),
+                order.created_at,
+            ),
+        )
+
+    def _catalyst_type(
+        self,
+        *,
+        prediction: dict[str, object],
+        reasons: list[str],
+    ) -> str:
+        raw_themes = prediction.get("themes", [])
+        themes = " ".join(str(theme).lower() for theme in raw_themes if theme)
+        text = " ".join(
+            [
+                str(prediction.get("entry_rationale", "")),
+                str(prediction.get("filing_summary", "")),
+                themes,
+                " ".join(str(reason) for reason in reasons),
+            ]
+        ).lower()
+        if any(token in text for token in ("paid promo", "promotion", "stocktwits", "reddit", "social hype", "discord")):
+            return "social_hype_or_paid_promo"
+        if any(token in text for token in ("offering", "dilution", "shelf", "atm", "registered direct", "private placement")):
+            return "offering_or_dilution"
+        if "reverse split" in text or "reverse-split" in text:
+            return "reverse_split"
+        if "warrant" in text:
+            return "warrant"
+        if any(token in text for token in ("fda", "clinical", "phase 1", "phase 2", "phase 3", "trial", "topline", "pdufa")):
+            return "fda_or_clinical"
+        if any(token in text for token in ("contract", "agreement", "purchase order", "customer", "partnership", "award", "license", "business news")):
+            return "contract_or_business_news"
+        if any(token in text for token in ("sympathy", "theme", "ai", "crypto", "bitcoin", "energy", "ev", "sector")):
+            return "sympathy_or_theme"
+        return "no_clear_catalyst"
 
     def _has_primary_predictor_evidence(
         self,
@@ -1017,6 +1469,82 @@ class PaperReportingService:
         if std <= 0:
             return 0.0
         return (mean / std) * math.sqrt(len(net_pnls))
+
+    def _trade_sortino(self, net_pnls: list[float]) -> float:
+        if len(net_pnls) < 2:
+            return 0.0
+        mean = sum(net_pnls) / len(net_pnls)
+        downside = [min(value, 0.0) for value in net_pnls]
+        downside_variance = sum(value * value for value in downside) / len(downside)
+        downside_std = math.sqrt(downside_variance)
+        if downside_std <= 0:
+            return 0.0
+        return (mean / downside_std) * math.sqrt(len(net_pnls))
+
+    def _max_consecutive_losses(self, rows: list[dict[str, object]]) -> int:
+        max_losses = 0
+        current = 0
+        for row in sorted(rows, key=lambda item: str(item.get("closed_at") or item.get("opened_at") or "")):
+            if self._float_value(row.get("net_pnl")) < 0:
+                current += 1
+                max_losses = max(max_losses, current)
+            else:
+                current = 0
+        return max_losses
+
+    def _median(self, values: list[float]) -> float:
+        if not values:
+            return 0.0
+        sorted_values = sorted(values)
+        mid = len(sorted_values) // 2
+        if len(sorted_values) % 2:
+            return sorted_values[mid]
+        return (sorted_values[mid - 1] + sorted_values[mid]) / 2.0
+
+    def _percentile(self, values: list[float], percentile: float) -> float:
+        if not values:
+            return 0.0
+        sorted_values = sorted(values)
+        if len(sorted_values) == 1:
+            return sorted_values[0]
+        rank = (max(0.0, min(percentile, 100.0)) / 100.0) * (len(sorted_values) - 1)
+        lower = int(math.floor(rank))
+        upper = int(math.ceil(rank))
+        if lower == upper:
+            return sorted_values[lower]
+        weight = rank - lower
+        return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+    def _cvar(self, values: list[float], percentile: float) -> float:
+        if not values:
+            return 0.0
+        cutoff = self._percentile(values, percentile)
+        tail = [value for value in values if value <= cutoff]
+        return sum(tail) / len(tail) if tail else cutoff
+
+    def _intraday_decay_bucket(self, hold_minutes: float) -> str:
+        if hold_minutes < 5.0:
+            return "0-5m"
+        if hold_minutes < 15.0:
+            return "5-15m"
+        if hold_minutes < 30.0:
+            return "15-30m"
+        if hold_minutes < 60.0:
+            return "30-60m"
+        if hold_minutes < 120.0:
+            return "1-2h"
+        return "2h+"
+
+    def _intraday_decay_sort_key(self, bucket: str) -> int:
+        order = {
+            "0-5m": 0,
+            "5-15m": 1,
+            "15-30m": 2,
+            "30-60m": 3,
+            "1-2h": 4,
+            "2h+": 5,
+        }
+        return order.get(bucket, 999)
 
     def _bootstrap_ci(
         self,

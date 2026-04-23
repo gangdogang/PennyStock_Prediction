@@ -82,6 +82,8 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 - 2026-04-21: `run_manifest.json`, `paper_performance_gate.json`, `psradar review-paper-performance` 를 추가했다.
 - 2026-04-21: 관련 smoke 와 전체 품질 게이트를 확인했다. `./scripts/check_quality.sh` 결과: `199 passed`; coverage gate 상태 파일은 아직 미생성이라 요약만 출력됨.
 - 2026-04-21: 기존 `momentum_only` 가 pure momentum 이 아니라 watchlist-aware momentum 이었음을 기준 문서에 반영하고, Step 3 을 3-bucket within-scan ablation 으로 보강하기로 했다.
+- 2026-04-23: Windows paper drive 런처가 평가 run 에서 predictor effect 를 기본 활성화(`k1=1.0`, `k2=1.0`)하도록 고정했고, `run_manifest.json`/`launcher_manifest.json` 에 predictor effect 와 bucket policy 를 남긴다.
+- 2026-04-23: `review-paper-performance` 는 predictor effect disabled, k1/k2 0, enabled-but-identical closed trade 결과를 구분해 fail/warning 을 낸다. predictor effect disabled run 과 Step 0 coverage 60% 미만 run 은 predictor edge 판단 근거로 쓰지 않는다.
 
 ---
 
@@ -101,7 +103,8 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 - **Historical L1 quote / minute bar**
   - Step 4 의 bid/ask 체결 모델을 돌리려면 과거 L1 quote 또는 최소한 minute OHLC + spread 가 필요하다.
   - 이 저장소의 기준 데이터 소스는 `KIS` 로 고정한다. Step 0 구현은 KIS historical/minute 경로를 우선하고, 다른 provider 확장은 우선순위 밖으로 둔다.
-  - 현재 저장소에는 `psradar backfill-kis-minute`, `psradar capture-kis-l1`, `psradar report-backtest-coverage` 경로가 추가되었다. 다음 단계는 이 경로로 실제 coverage 를 채워 60% 기준을 검증하는 것이다.
+  - 현재 저장소에는 `psradar backfill-kis-minute`, `psradar capture-kis-l1`, `psradar capture-kis-l1-window`, `psradar report-backtest-coverage` 경로가 추가되었다. `capture-kis-l1-window` 는 반복 capture 후 latest coverage report/gate 를 갱신한다. 다음 단계는 이 경로로 실제 coverage 를 채워 60% 기준을 검증하는 것이다.
+  - L1 `snapshot_date` mismatch 또는 120분 초과 timestamp drift 는 coverage report note 와 gate failure 로 반영한다.
   - 커버리지 60% 미만이면 전략 백테스트 이전에 소스 보강이 우선이다.
 - **Halt / LULD 이벤트 기록**
   - 페니 종목은 halt 가 잦다. 과거 halt 이벤트(시각, 사유, 재개가)를 수집한다.
@@ -238,6 +241,19 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 | 진입 가격 | last price | ask 기준 + 추가 틱 | ask 기준 |
 | 청산 가격 | last price | bid 기준 - 추가 틱 | bid 기준 |
 
+### 보수적 capacity / participation 리포트
+
+- 기존 volume cap 은 유지하되, 성과 리포트에는 주문/거래별 `shares_pct_of_bar_volume`, `notional_pct_of_bar_dollar_volume`, `estimated_capacity_at_1pct_volume`, `estimated_capacity_at_2pct_volume`, `capacity_limited` 를 남긴다.
+- 10%/5%/2% cap 은 체결 가능 상한으로만 보고, 전략 해석에는 1-2% participation 기준의 보수 capacity 시나리오를 함께 본다.
+- capacity 가 모두 0 또는 공백인 run 은 유동성 검증이 되지 않은 것으로 보고 performance review 에서 경고 또는 실패 처리한다.
+
+### 보수적 nonlinear slippage proxy
+
+- L2 historical depth 가 없으므로 정밀 order book 시뮬레이션은 보류한다.
+- 대신 L1 bid/ask, minute/bar volume, participation rate 를 이용해 `base_slippage + spread_penalty + participation_penalty` 형태의 보수 proxy 를 적용한다.
+- participation 이 1%, 2%, 5% 를 넘을수록 penalty 는 선형이 아니라 계단식/제곱형으로 악화시킨다.
+- `run_manifest.json` 에 slippage model 과 capacity model 설정을 남겨 사후 해석 가능하게 한다.
+
 ### 체결량 cap
 
 - 시총/일거래대금 계층별로 cap 을 차등:
@@ -251,6 +267,7 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 - Step 0 에서 수집한 halt 이벤트 구간 동안은 체결 불가
 - 재개 후 첫 프린트 가격으로 체결하되 추가 슬리피지 **스프레드 × 2** 적용
 - halt 시작 시점에 걸려있던 stop order 는 재개가 기준으로 재평가
+- historical halt event 가 없으면 minute gap 또는 zero volume stretch fallback 을 사용하되 `inferred=true` 를 남긴다.
 
 ### 거래 비용
 
@@ -299,6 +316,18 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 | Predictor Hit Rate | 후보 중 실제 트리거된 거래의 수익 비율 (분모·분자 정의 문서화) |
 | Predictor edge decay | hold day 1 → 2 → 3 로 갈수록 평균 R 이 어떻게 변하는지 |
 | Candidate survival rate | 후보가 실제 진입까지 이어진 비율 |
+
+Intraday 전용으로는 `0-5분`, `5-15분`, `15-30분`, `30-60분`, `1-2시간`, `2시간+` bucket 별 `trade_count`, `win_rate`, `avg_r_multiple`, `total_net_pnl` 을 `predictor_weighted`, `momentum_only`, `watchlist_blind_momentum` 별로 비교한다.
+
+### Catalyst KPI split
+
+- trade log 또는 별도 CSV 에 `catalyst_type` 을 남긴다.
+- 최소 태그는 `offering_or_dilution`, `reverse_split`, `warrant`, `fda_or_clinical`, `contract_or_business_news`, `sympathy_or_theme`, `social_hype_or_paid_promo`, `no_clear_catalyst` 이다.
+- catalyst 별 `closed_trade_count`, `win_rate`, `expectancy_r`, `total_net_pnl`, `avg_hold_minutes` 를 출력한다.
+
+### Tail-risk KPI
+
+- `paper_backtest_kpis.csv` 또는 별도 tail-risk CSV 에 Sortino, Calmar, max consecutive losses, worst trade R, p5/CVaR trade R, median/p90 hold minutes, winner/loser avg hold minutes 를 포함한다.
 
 ### Regime / 분포 분석
 

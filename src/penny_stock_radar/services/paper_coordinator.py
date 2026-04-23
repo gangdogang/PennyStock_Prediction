@@ -171,10 +171,13 @@ class PaperTradingCoordinator:
         self.export_bucket_pair_diff()
         self.export_cohort_summary()
         self.export_execution_quality()
+        self.export_capacity_report()
         self.export_trade_log()
         self.export_backtest_kpis()
         self.export_regime_split()
         self.export_predictor_kpis()
+        self.export_intraday_edge_decay()
+        self.export_catalyst_kpis()
         self.export_run_manifest()
         self.export_performance_review_gate()
         primary_result.comparison_path = comparison_path
@@ -198,6 +201,9 @@ class PaperTradingCoordinator:
     def export_execution_quality(self) -> Path:
         return self.reporting.export_execution_quality()
 
+    def export_capacity_report(self) -> Path:
+        return self.reporting.export_capacity_report()
+
     def export_trade_log(self) -> Path:
         return self.reporting.export_trade_log()
 
@@ -209,6 +215,12 @@ class PaperTradingCoordinator:
 
     def export_predictor_kpis(self) -> Path:
         return self.reporting.export_predictor_kpis()
+
+    def export_intraday_edge_decay(self) -> Path:
+        return self.reporting.export_intraday_edge_decay()
+
+    def export_catalyst_kpis(self) -> Path:
+        return self.reporting.export_catalyst_kpis()
 
     def export_run_manifest(self) -> Path:
         return self.reporting.export_run_manifest()

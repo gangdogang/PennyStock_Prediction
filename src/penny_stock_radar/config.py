@@ -120,6 +120,14 @@ class AppSettings(BaseSettings):
     paper_volume_cap_small_pct: float = 2.0
     paper_volume_cap_small_market_cap_threshold: int = 500_000_000
     paper_volume_cap_small_market_cap_scale: float = 0.5
+    paper_capacity_limited_pct: float = 2.0
+    paper_participation_slippage_enabled: bool = True
+    paper_participation_slippage_soft_pct: float = 1.0
+    paper_participation_slippage_mid_pct: float = 2.0
+    paper_participation_slippage_hard_pct: float = 5.0
+    paper_participation_slippage_mid_penalty_pct: float = 0.10
+    paper_participation_slippage_hard_penalty_pct: float = 0.75
+    paper_participation_slippage_extreme_penalty_pct: float = 2.75
     paper_ai_consensus_enabled: bool = True
     paper_ai_consensus_limit: int = 3
     paper_ai_refresh_seconds: int = 180

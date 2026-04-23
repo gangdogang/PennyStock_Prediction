@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-04-22
+최종 정리일: 2026-04-23
 
 ## 현재 capabilities
 
@@ -14,7 +14,7 @@
 - KIS live quote timestamp 는 shared helper 기준으로 ET/KST fallback 정규화가 적용되고 `live_market.py` 와 `kis_historical.py` 가 같은 해석 경로를 사용한다.
 - live scan/provider 경로는 `automation/logs/live_metrics.jsonl` 기준 JSONL sidecar 로 `quote_age`, `spread`, provider request reject 신호, scan summary 를 남긴다.
 - `report-backtest-coverage` 는 coverage report latest JSON 을 `automation/state/backtest_coverage/` 기준으로 정기 산출할 수 있다.
-- `capture-kis-l1-window` 는 같은 심볼 집합으로 반복 L1 snapshot 적재를 수행해 session interval coverage archive 를 누적할 수 있다.
+- `capture-kis-l1-window` 는 같은 심볼 집합으로 반복 L1 snapshot 적재를 수행한 뒤 latest L1 coverage report/gate 상태를 갱신할 수 있다.
 - Step 0 L1 coverage gate 상태는 `automation/state/backtest_coverage_gate_status.json` latest snapshot 으로 저장되고, 상태 파일의 pass/fail 규칙은 고정되며 CI hard fail 은 Step 0 60% 도달 후 켠다.
 - 골든 회귀 기준은 intraday `stop_loss`/`time_stop`, multiday `day2_exit`/`overnight_hold_rejected`/`loser_replacement`, fill-model stop gap 경로까지 고정돼 있다.
 - 로컬 품질 게이트는 `scripts/check_quality.sh`, `scripts/check_quality.ps1` 기준으로 골든 회귀 + 전체 `pytest` + coverage gate 상태 요약을 같은 진입점에서 실행할 수 있다.
@@ -24,9 +24,13 @@
 - DB 계층은 `db/connection.py`, `schema.py`, `paper.py`, `execution.py`, `historical.py`, `premkt.py` 중심 패키지로 분할됐고 기존 `from ..db import ...` import 경로는 유지된다.
 - CLI 는 `cli/__init__.py` 루트 앱 아래 `premkt.py`, `backtest.py`, `automation.py`, `paper.py`, `broker.py`와 보조 서브앱으로 분할됐고 기존 `psradar <cmd>` 명령 표면은 유지된다.
 - `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
+- Windows paper drive 런처는 평가용 기본값으로 `predictor_effect.enabled=true` (`k1=1.0`, `k2=1.0`) 를 프로세스 환경에 명시하고, `launcher_manifest.json` 과 `run_manifest.json` 에 predictor effect/bucket policy 를 남긴다.
 - paper trading 결과는 snapshots, orders, positions, KPI CSV, execution quality CSV, `run_manifest.json`, `paper_performance_gate.json` 으로 남길 수 있다.
 - paper trade log 는 predictor score/weight fallback 과 prediction source lineage 를 포함하고, performance gate 는 predictor lineage 공백, KPI 분모 불일치, bucket diff 부재를 검사할 수 있다.
-- Windows paper 실행 런처는 run별 export/log/archive/manifest 를 OneDrive 경로에 남기며, 기본 실행은 사용자가 끌 때까지 계속 돈다. 중간 검토는 snapshot archive 로 만들고, 종료 시 final archive 와 DB 사본을 남긴다.
+- `review-paper-performance` 는 predictor effect disabled, k1/k2 0, enabled-but-identical bucket 결과를 구분해 fail/warning 을 기록한다.
+- paper performance 보강 범위는 predictor 수익 판단이 아니라 검증 가능성 강화로 한정한다. 신규 기준 산출물은 보수적 1-2% participation capacity, intraday edge decay, catalyst KPI split, tail-risk KPI, nonlinear L1/minute-volume slippage proxy 이다.
+- Windows paper 실행 런처는 run별 export/log/archive/manifest 를 OneDrive 경로에 남기며, 기본 실행은 사용자가 끌 때까지 계속 돈다. 중간 검토는 snapshot archive 로 만들고, 종료 시 final archive 와 DB/WAL 사본을 남긴다.
+- snapshot archive manifest 는 실제 DB 파일이 포함된 경우에만 database included 로 기록하고, 빈 database 폴더나 copy 실패는 warning 으로 남긴다.
 - KIS historical minute backfill, L1 snapshot archive, coverage report CLI 가 연결돼 있다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
@@ -48,12 +52,14 @@
 - 기존 `momentum_only` 버킷은 pure momentum 이 아니라 watchlist universe 와 watchlist metadata 를 유지한 watchlist-aware momentum 이었다. 현재 scanner input universe 자체가 watchlist/live pipeline 에 묶여 있으므로 이 이름만으로 predictor/watchlist/momentum alpha 를 분리했다고 해석하면 안 된다.
 - 현재 단계에서 가능한 비교는 동일 scanned activity universe 안에서 metadata 를 제거하는 `watchlist_blind_momentum` 방식의 within-scan ablation 이며, 진짜 `pure_momentum` 은 independent universe/replay provider 가 분리된 뒤에만 도입한다.
 - Step 4/5 리포트는 존재하지만 Step 0 coverage 와 shadow/out-of-sample 검증 전에는 live 판단 근거가 될 수 없다.
+- predictor effect disabled 또는 Step 0 coverage 60% 미만 run 은 predictor edge 판단 근거로 쓰지 않는다.
+- L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - Step 0 coverage 장기 루프로 돌아가기 전에 얇은 bucket taxonomy v2 의 v1 범위를 고정했다. 범위는 `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 3개 버킷과 pairwise within-scan ablation 리포트다.
-- 다음 우선순위는 `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 `backfill-kis-minute`, `capture-kis-l1`, `capture-kis-l1-window`, `report-backtest-coverage` 경로로 coverage 를 계속 채우고 gate 통과 여부를 추적하는 것이다.
+- 다음 우선순위는 Windows 에서 새 paper run 을 실행해 `run_manifest.json` 의 `predictor_effect.enabled=true` 와 세 bucket diff 해석 가능 여부를 확인한 뒤, `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 coverage 를 계속 채우는 것이다.
 - 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.
 - 현재 저장소 정리 작업의 Step 1~10과 Step -1은 완료됐고, 다음 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 그 다음에는 shadow 모드와 out-of-sample 검증으로 넘어간다.

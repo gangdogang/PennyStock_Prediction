@@ -101,6 +101,34 @@ def _paper_order_from_row(row: sqlite3.Row) -> PaperOrder:
         planned_risk_pct=float(row["planned_risk_pct"]) if row["planned_risk_pct"] is not None else None,
         fill_reference_price=float(row["fill_reference_price"]) if row["fill_reference_price"] is not None else None,
         fill_slippage_pct=float(row["fill_slippage_pct"]) if row["fill_slippage_pct"] is not None else None,
+        bar_volume=float(row["bar_volume"]) if row["bar_volume"] is not None else None,
+        bar_dollar_volume=float(row["bar_dollar_volume"]) if row["bar_dollar_volume"] is not None else None,
+        shares_pct_of_bar_volume=(
+            float(row["shares_pct_of_bar_volume"])
+            if row["shares_pct_of_bar_volume"] is not None
+            else None
+        ),
+        notional_pct_of_bar_dollar_volume=(
+            float(row["notional_pct_of_bar_dollar_volume"])
+            if row["notional_pct_of_bar_dollar_volume"] is not None
+            else None
+        ),
+        estimated_capacity_at_1pct_volume=(
+            float(row["estimated_capacity_at_1pct_volume"])
+            if row["estimated_capacity_at_1pct_volume"] is not None
+            else None
+        ),
+        estimated_capacity_at_2pct_volume=(
+            float(row["estimated_capacity_at_2pct_volume"])
+            if row["estimated_capacity_at_2pct_volume"] is not None
+            else None
+        ),
+        capacity_limited=bool(row["capacity_limited"]),
+        participation_slippage_pct=(
+            float(row["participation_slippage_pct"])
+            if row["participation_slippage_pct"] is not None
+            else 0.0
+        ),
         day_regime=row["day_regime"],
         watchlist_rank_at_entry=int(row["watchlist_rank_at_entry"]) if row["watchlist_rank_at_entry"] is not None else None,
         reasons=_safe_json_list(row["reasons"]),

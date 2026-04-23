@@ -187,6 +187,14 @@ def insert_paper_orders(
             row.planned_risk_pct,
             row.fill_reference_price,
             row.fill_slippage_pct,
+            row.bar_volume,
+            row.bar_dollar_volume,
+            row.shares_pct_of_bar_volume,
+            row.notional_pct_of_bar_dollar_volume,
+            row.estimated_capacity_at_1pct_volume,
+            row.estimated_capacity_at_2pct_volume,
+            int(row.capacity_limited),
+            row.participation_slippage_pct,
             row.day_regime,
             row.watchlist_rank_at_entry,
             json.dumps(row.reasons),
@@ -223,6 +231,14 @@ def insert_paper_orders(
                 planned_risk_pct,
                 fill_reference_price,
                 fill_slippage_pct,
+                bar_volume,
+                bar_dollar_volume,
+                shares_pct_of_bar_volume,
+                notional_pct_of_bar_dollar_volume,
+                estimated_capacity_at_1pct_volume,
+                estimated_capacity_at_2pct_volume,
+                capacity_limited,
+                participation_slippage_pct,
                 day_regime,
                 watchlist_rank_at_entry,
                 reasons,
@@ -230,7 +246,7 @@ def insert_paper_orders(
                 realized_pnl,
                 realized_pnl_pct
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )

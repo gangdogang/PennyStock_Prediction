@@ -488,6 +488,10 @@ class PaperTradingEngine:
             row = activity_by_symbol.get(position.symbol)
             if row is None or row.last_price is None or row.last_price <= 0:
                 continue
+            if market_status_blocks_trading(row.market_status):
+                self._store_position_market_status(position, row.market_status)
+                position.updated_at = now
+                continue
             position.last_price = row.last_price
             position.highest_price = max(position.highest_price or row.last_price, row.last_price)
             position.market_value = row.last_price * position.quantity

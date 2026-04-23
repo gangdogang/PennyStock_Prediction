@@ -198,6 +198,39 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 "fill_slippage_pct",
                 "REAL",
             )
+            _ensure_column(connection, "paper_orders", "bar_volume", "REAL")
+            _ensure_column(connection, "paper_orders", "bar_dollar_volume", "REAL")
+            _ensure_column(connection, "paper_orders", "shares_pct_of_bar_volume", "REAL")
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "notional_pct_of_bar_dollar_volume",
+                "REAL",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "estimated_capacity_at_1pct_volume",
+                "REAL",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "estimated_capacity_at_2pct_volume",
+                "REAL",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "capacity_limited",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "participation_slippage_pct",
+                "REAL NOT NULL DEFAULT 0",
+            )
             _ensure_column(
                 connection,
                 "paper_orders",

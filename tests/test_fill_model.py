@@ -144,3 +144,48 @@ def test_fill_model_halt_resume_penalty_decays_after_five_minutes() -> None:
     assert late_fill.fill_price == pytest.approx(1.00 - expected_late_penalty)
     assert early_fill.fill_price < late_fill.fill_price
     assert early_fill.fill_slippage_pct > late_fill.fill_slippage_pct
+
+
+def test_fill_model_high_participation_has_nonlinear_slippage_and_capacity_flag() -> None:
+    settings = AppSettings(
+        live_market_provider="disabled",
+        paper_volume_cap_large_dollar_volume=10_000_000.0,
+        paper_volume_cap_mid_dollar_volume=2_000_000.0,
+        paper_volume_cap_large_pct=10.0,
+        paper_volume_cap_mid_pct=5.0,
+        paper_volume_cap_small_pct=2.0,
+        paper_capacity_limited_pct=2.0,
+    )
+    fill_model = FillModel(settings)
+    row = _activity(
+        market_cap=600_000_000,
+        volume=10_000.0,
+        dollar_volume=10_000_000.0,
+        bid_price=0.99,
+        ask_price=1.00,
+        last_price=0.995,
+    )
+
+    low_participation = fill_model.buy(
+        row,
+        market_phase="regular",
+        requested_quantity=100,
+    )
+    high_participation = fill_model.buy(
+        row,
+        market_phase="regular",
+        requested_quantity=1_000,
+    )
+
+    assert low_participation.shares_pct_of_bar_volume == pytest.approx(1.0)
+    assert high_participation.shares_pct_of_bar_volume == pytest.approx(10.0)
+    assert high_participation.participation_slippage_pct > low_participation.participation_slippage_pct
+    assert high_participation.fill_slippage_pct > low_participation.fill_slippage_pct
+    assert high_participation.fill_price > low_participation.fill_price
+    assert high_participation.estimated_capacity_at_1pct_volume == pytest.approx(
+        high_participation.fill_price * 100.0
+    )
+    assert high_participation.estimated_capacity_at_2pct_volume == pytest.approx(
+        high_participation.fill_price * 200.0
+    )
+    assert high_participation.capacity_limited is True

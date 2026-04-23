@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
@@ -54,6 +54,7 @@ def _activity(
     bid_price: float | None = None,
     ask_price: float | None = None,
     data_age_seconds: float | None = 0.0,
+    resume_elapsed_seconds: float | None = None,
     has_live_trade: bool = True,
     has_live_quote: bool = True,
     market_status: str = "open",
@@ -74,6 +75,7 @@ def _activity(
         market_status=market_status,
         market_data_at=datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
         data_age_seconds=data_age_seconds,
+        resume_elapsed_seconds=resume_elapsed_seconds,
         has_live_trade=has_live_trade,
         has_live_quote=has_live_quote,
         pct_rank=pct_rank,
@@ -661,6 +663,87 @@ def test_paper_trading_does_not_sell_halted_open_position(tmp_path: Path) -> Non
     aaa = next(row for row in positions if row.symbol == "AAA")
     assert result.exited_count == 0
     assert aaa.status == "OPEN"
+    assert aaa.last_price == pytest.approx(0.94)
+
+
+def test_paper_trading_freezes_halt_then_applies_reopen_penalty(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    current_time = datetime(2026, 3, 26, 11, 5, tzinfo=timezone.utc)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=tmp_path / "paper_exports",
+        live_market_provider="disabled",
+        paper_halt_resume_spread_slippage_multiplier=2.0,
+    )
+    run = create_paper_trading_run(db_path, "auto_paper_v1", settings.paper_initial_capital)
+    upsert_paper_positions(
+        db_path,
+        [
+            _open_position(
+                run_id=run.run_id,
+                symbol="AAA",
+                now=current_time,
+                quantity=500,
+                average_entry_price=1.00,
+                last_price=0.94,
+                stop_price=0.95,
+            )
+        ],
+    )
+    engine = PaperTradingEngine(settings, now_fn=lambda: current_time)
+
+    halted_result = engine.process_market_activity(
+        market_phase="regular",
+        activity=[
+            _activity(
+                "AAA",
+                phase="regular",
+                price=0.82,
+                bid_price=0.80,
+                ask_price=0.84,
+                label="NO_CHASE",
+                score=1.0,
+                pct_change=-18.0,
+                market_status="LULD Pause",
+            )
+        ],
+        export_csv=False,
+    )
+    halted_position = fetch_paper_positions(db_path, run.run_id)[0]
+    assert halted_result.exited_count == 0
+    assert halted_position.status == "OPEN"
+    assert halted_position.last_price == pytest.approx(0.94)
+
+    current_time = datetime(2026, 3, 26, 11, 12, tzinfo=timezone.utc)
+    resumed_result = engine.process_market_activity(
+        market_phase="regular",
+        activity=[
+            _activity(
+                "AAA",
+                phase="regular",
+                price=0.83,
+                bid_price=0.82,
+                ask_price=0.86,
+                label="NO_CHASE",
+                score=1.0,
+                pct_change=-17.0,
+                market_status="resumed",
+                resume_elapsed_seconds=0.0,
+                reasons=["resume"],
+            )
+        ],
+        export_csv=False,
+    )
+
+    positions = fetch_paper_positions(db_path, run.run_id)
+    orders = fetch_paper_orders(db_path, run.run_id)
+    exit_order = next(row for row in orders if row.action == "SELL")
+    assert resumed_result.exited_count == 1
+    assert positions[0].status == "CLOSED"
+    assert exit_order.price == pytest.approx(0.82 - ((0.86 - 0.82) * 2.0))
+    assert exit_order.fill_slippage_pct == pytest.approx(((0.82 - exit_order.price) / 0.82) * 100.0)
+    assert exit_order.reasons[0] == "stop_loss"
 
 
 def test_paper_trading_does_not_force_close_halted_position_after_session(tmp_path: Path) -> None:
@@ -1852,12 +1935,28 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     db_path = tmp_path / "radar.sqlite3"
     export_dir = tmp_path / "paper_exports"
     init_database(db_path)
+    _seed_predictions(
+        db_path,
+        [
+            PremktPrediction(
+                symbol="PRED",
+                score=90.0,
+                max_hold_days=3,
+                entry_rationale="strong catalyst",
+                themes=["biotech"],
+                filing_summary="8-K",
+            )
+        ],
+    )
     current_time = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
     settings = AppSettings(
         db_path=db_path,
         paper_trade_dir=export_dir,
         live_market_provider="disabled",
         premarket_min_dollar_volume=50.0,
+        trade_plan_max_concurrent_open_risk_pct=5.0,
+        paper_predictor_weight_k1=1.0,
+        paper_predictor_weight_k2=1.0,
     )
     coordinator = PaperTradingCoordinator(settings, now_fn=lambda: current_time)
 
@@ -1865,13 +1964,32 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
         market_phase="premarket",
         activity=[
             _activity(
-                "AAA",
+                "PRED",
                 phase="premarket",
                 price=1.00,
+                label="WAIT_PULLBACK",
+                score=2.10,
+                pct_rank=8,
+                volume_rank=8,
+                predicted=True,
+                watchlist_rank=1,
+                reasons=["watchlist_predicted", "leader_reclaim", "reclaim_entry_ready"],
+                leader_persistence_score=67.0,
+                pullback_absorption_score=63.0,
+                trap_score=18.0,
+                behavioral_score=70.0,
+            ),
+            _activity(
+                "LIVE",
+                phase="premarket",
+                price=1.20,
                 label="OPENING_RANGE_CANDIDATE",
-                score=4.4,
-                pct_rank=2,
-                volume_rank=3,
+                score=4.00,
+                pct_rank=1,
+                volume_rank=1,
+                predicted=False,
+                watchlist_rank=None,
+                reasons=["pct_leader", "live_dollar_volume_strong"],
                 leader_persistence_score=67.0,
                 pullback_absorption_score=63.0,
                 trap_score=18.0,
@@ -1887,10 +2005,13 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     pair_diff_csv = export_dir / "paper_bucket_pair_diff.csv"
     cohort_csv = export_dir / "paper_cohort_summary.csv"
     execution_csv = export_dir / "paper_execution_quality.csv"
+    capacity_csv = export_dir / "paper_capacity_report.csv"
     trade_log_csv = export_dir / "paper_trade_log.csv"
     backtest_csv = export_dir / "paper_backtest_kpis.csv"
     regime_csv = export_dir / "paper_regime_split.csv"
     predictor_csv = export_dir / "paper_predictor_kpis.csv"
+    intraday_decay_csv = export_dir / "paper_intraday_edge_decay.csv"
+    catalyst_csv = export_dir / "paper_catalyst_kpis.csv"
     manifest_json = export_dir / "run_manifest.json"
     gate_json = export_dir / "paper_performance_gate.json"
     strategy_runs = fetch_latest_paper_strategy_runs(db_path, limit=10)
@@ -1901,10 +2022,13 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert pair_diff_csv.exists()
     assert cohort_csv.exists()
     assert execution_csv.exists()
+    assert capacity_csv.exists()
     assert trade_log_csv.exists()
     assert backtest_csv.exists()
     assert regime_csv.exists()
     assert predictor_csv.exists()
+    assert intraday_decay_csv.exists()
+    assert catalyst_csv.exists()
     assert manifest_json.exists()
     assert gate_json.exists()
     assert len(strategy_runs) >= 5
@@ -1914,6 +2038,7 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     pair_diff_rows = _csv_rows(pair_diff_csv)
     cohort_text = cohort_csv.read_text(encoding="utf-8")
     execution_text = execution_csv.read_text(encoding="utf-8")
+    capacity_text = capacity_csv.read_text(encoding="utf-8")
     backtest_text = backtest_csv.read_text(encoding="utf-8")
     regime_text = regime_csv.read_text(encoding="utf-8")
     predictor_text = predictor_csv.read_text(encoding="utf-8")
@@ -1936,18 +2061,38 @@ def test_paper_trading_coordinator_exports_strategy_comparison(tmp_path: Path) -
     assert "strategy_bucket" in cohort_text
     assert "predicted_starter" in cohort_text
     assert "avg_buy_slippage_pct" in execution_text
+    assert "shares_pct_of_bar_volume" in capacity_text
     assert "expectancy_r" in backtest_text
+    assert "sortino_ratio" in backtest_text
+    assert "max_consecutive_losses" in backtest_text
     assert "regime_bucket" in regime_text
     assert "predictor_hit_rate_pct" in predictor_text
     manifest = json.loads(manifest_json.read_text(encoding="utf-8"))
     gate = json.loads(gate_json.read_text(encoding="utf-8"))
     assert manifest["artifacts"]["paper_trade_log"] == "paper_trade_log.csv"
-    assert manifest["predictor_effect"]["enabled"] is False
+    assert manifest["predictor_effect"]["enabled"] is True
+    assert manifest["predictor_effect"]["k1"] == pytest.approx(1.0)
+    assert manifest["predictor_effect"]["k2"] == pytest.approx(1.0)
+    assert manifest["slippage_model"]["name"] == "l1_minute_volume_nonlinear_proxy"
+    assert manifest["capacity_model"]["conservative_participation_scenarios_pct"] == [1.0, 2.0]
+    assert manifest["artifacts"]["paper_capacity_report"] == "paper_capacity_report.csv"
+    assert manifest["artifacts"]["paper_intraday_edge_decay"] == "paper_intraday_edge_decay.csv"
+    assert manifest["artifacts"]["paper_catalyst_kpis"] == "paper_catalyst_kpis.csv"
+    assert manifest["bucket_policies"][PREDICTOR_WEIGHTED_BUCKET]["uses_predictor_weight"] is True
+    assert manifest["bucket_policies"][MOMENTUM_ONLY_BUCKET]["uses_predictor_weight"] is False
+    assert (
+        manifest["bucket_policies"][WATCHLIST_BLIND_MOMENTUM_BUCKET]["uses_watchlist_metadata"]
+        is False
+    )
     trade_header = trade_log_csv.read_text(encoding="utf-8").splitlines()[0].split(",")
     assert "prediction_generated_at" in trade_header
     assert "prediction_cutoff_at" in trade_header
     assert "prediction_source" in trade_header
+    assert "catalyst_type" in trade_header
+    assert "capacity_limited" in trade_header
     assert gate["status"] == "pass"
+    assert gate["edge_judgment_allowed"] is False
+    assert any("Step 0 L1 coverage" in item for item in gate["edge_judgment_blockers"])
 
 
 def test_paper_trading_partial_fill_is_logged_and_exported(tmp_path: Path) -> None:
@@ -2001,6 +2146,16 @@ def test_paper_trading_partial_fill_is_logged_and_exported(tmp_path: Path) -> No
     ]
     assert predictor_rows
     assert int(float(predictor_rows[0]["partial_fill_count"])) >= 1
+    capacity_rows = _csv_rows(export_dir / "paper_capacity_report.csv")
+    thin_capacity = next(
+        row
+        for row in capacity_rows
+        if row["strategy_name"] == PRIMARY_PAPER_STRATEGY
+        and row["bucket"] == PREDICTOR_WEIGHTED_BUCKET
+        and row["symbol"] == "THIN"
+    )
+    assert float(thin_capacity["shares_pct_of_bar_volume"]) > 0
+    assert thin_capacity["capacity_limited"] == "True"
 
 
 def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path: Path) -> None:
@@ -2214,6 +2369,8 @@ def test_paper_trading_coordinator_keeps_bucket_portfolios_independent(tmp_path:
     )
     assert int(primary_kpi["candidate_count"]) == 2
     assert int(primary_kpi["triggered_candidate_count"]) == 2
+    assert int(primary_kpi["predicted_trade_count"]) == 2
+    assert int(primary_kpi["closed_predicted_trade_count"]) == 1
 
 
 def test_three_adaptive_buckets_diverge_on_synthetic_metadata_ablation(tmp_path: Path) -> None:
@@ -2529,6 +2686,72 @@ def test_paper_performance_gate_fails_on_candidate_denominator_mismatch(tmp_path
     assert any("candidate_count is 0" in failure for failure in payload["failures"])
 
 
+def test_paper_performance_gate_fails_when_predictor_effect_disabled(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    export_dir.mkdir(parents=True)
+    (export_dir / "paper_trade_log.csv").write_text(
+        "run_id,strategy_name,bucket,symbol,status,predicted,predictor_score,predictor_weight,"
+        "prediction_generated_at,prediction_cutoff_at,prediction_source\n"
+        "run-1,auto_paper_v1,predictor_weighted,AAA,CLOSED,False,0.0,0.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,disabled\n"
+        "run-2,auto_paper_v1,momentum_only,AAA,CLOSED,False,0.0,0.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,disabled\n"
+        "run-3,auto_paper_v1,watchlist_blind_momentum,BBB,CLOSED,False,0.0,0.0,"
+        "2026-03-26T10:00:00+00:00,2026-03-26T10:00:00+00:00,disabled\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_predictor_kpis.csv").write_text(
+        "strategy_name,bucket,candidate_count,triggered_candidate_count,predicted_trade_count,closed_predicted_trade_count\n"
+        "auto_paper_v1,predictor_weighted,0,0,0,0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_comparison.csv").write_text(
+        "strategy_name,bucket\n"
+        "auto_paper_v1,predictor_weighted\n"
+        "auto_paper_v1,momentum_only\n"
+        "auto_paper_v1,watchlist_blind_momentum\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_trade_diff.csv").write_text(
+        "symbol,predictor_status,momentum_status,pnl_diff\nAAA,CLOSED,CLOSED,0.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_bucket_pair_diff.csv").write_text(
+        "left_bucket,right_bucket,left_status,right_status,pnl_diff\n"
+        "predictor_weighted,momentum_only,CLOSED,CLOSED,0.0\n"
+        "momentum_only,watchlist_blind_momentum,CLOSED,OPEN,1.0\n"
+        "predictor_weighted,watchlist_blind_momentum,CLOSED,OPEN,1.0\n",
+        encoding="utf-8",
+    )
+    (export_dir / "paper_backtest_kpis.csv").write_text("strategy_name,bucket\n", encoding="utf-8")
+    (export_dir / "paper_execution_quality.csv").write_text("strategy_name,bucket\n", encoding="utf-8")
+    (export_dir / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "predictor_effect": {
+                    "enabled": False,
+                    "k1": 0.0,
+                    "k2": 0.0,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc))
+    payload = coordinator.reporting.evaluate_performance_review_gate()
+
+    assert payload["status"] == "fail"
+    assert any("predictor_effect disabled" in failure for failure in payload["failures"])
+
+
 def test_paper_performance_gate_fails_on_missing_third_bucket_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "radar.sqlite3"
     export_dir = tmp_path / "paper_exports"
@@ -2626,7 +2849,7 @@ def test_paper_performance_gate_fails_on_identical_buckets_with_predictor_eviden
     payload = coordinator.reporting.evaluate_performance_review_gate()
 
     assert payload["status"] == "fail"
-    assert any("predictor candidates exist" in failure for failure in payload["failures"])
+    assert any("predictor_effect enabled" in failure for failure in payload["failures"])
 
 
 def test_paper_trading_cohort_summary_keeps_day_regime_separate(tmp_path: Path) -> None:
@@ -2684,3 +2907,138 @@ def test_paper_trading_regime_split_maps_to_trend_and_chop(tmp_path: Path) -> No
 
     assert "trend" in text
     assert "chop" in text
+
+
+def test_paper_intraday_edge_decay_buckets_closed_trades(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    now = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    run = create_paper_trading_run(db_path, "auto_paper_v1", 10_000.0)
+    upsert_paper_positions(
+        db_path,
+        [
+            _paper_position(run_id=run.run_id, symbol="FAST", total_pnl=10.0, day_regime="hot", now=now).model_copy(
+                update={"closed_at": now + timedelta(minutes=4), "updated_at": now + timedelta(minutes=4)}
+            ),
+            _paper_position(run_id=run.run_id, symbol="MID", total_pnl=-5.0, day_regime="hot", now=now).model_copy(
+                update={"closed_at": now + timedelta(minutes=45), "updated_at": now + timedelta(minutes=45)}
+            ),
+            _paper_position(run_id=run.run_id, symbol="LONG", total_pnl=15.0, day_regime="hot", now=now).model_copy(
+                update={"closed_at": now + timedelta(minutes=130), "updated_at": now + timedelta(minutes=130)}
+            ),
+        ],
+    )
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: now)
+    coordinator.export_trade_log()
+    decay_csv = coordinator.export_intraday_edge_decay()
+    rows = _csv_rows(decay_csv)
+    by_bucket = {row["decay_bucket"]: row for row in rows}
+
+    assert {"0-5m", "30-60m", "2h+"} <= set(by_bucket)
+    assert int(by_bucket["0-5m"]["trade_count"]) == 1
+    assert float(by_bucket["30-60m"]["total_net_pnl"]) == pytest.approx(-5.0)
+    assert float(by_bucket["2h+"]["win_rate"]) == pytest.approx(100.0)
+
+
+def test_paper_catalyst_kpis_split_by_catalyst_type(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    now = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
+    _seed_predictions(
+        db_path,
+        [
+            PremktPrediction(
+                symbol="OFFER",
+                score=85.0,
+                max_hold_days=1,
+                entry_rationale="public offering and dilution risk",
+                themes=[],
+                filing_summary="S-1 registered direct offering",
+            ),
+            PremktPrediction(
+                symbol="FDA",
+                score=88.0,
+                max_hold_days=1,
+                entry_rationale="FDA clinical trial update",
+                themes=["biotech"],
+                filing_summary="clinical phase 2 topline data",
+            ),
+        ],
+    )
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    run = create_paper_trading_run(db_path, "auto_paper_v1", 10_000.0)
+    upsert_paper_positions(
+        db_path,
+        [
+            _paper_position(run_id=run.run_id, symbol="OFFER", total_pnl=-20.0, day_regime="hot", now=now),
+            _paper_position(run_id=run.run_id, symbol="FDA", total_pnl=40.0, day_regime="hot", now=now),
+        ],
+    )
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: now)
+    coordinator.export_trade_log()
+    catalyst_csv = coordinator.export_catalyst_kpis()
+    rows = _csv_rows(catalyst_csv)
+    by_type = {row["catalyst_type"]: row for row in rows}
+
+    assert "offering_or_dilution" in by_type
+    assert "fda_or_clinical" in by_type
+    assert float(by_type["offering_or_dilution"]["total_net_pnl"]) == pytest.approx(-20.0)
+    assert float(by_type["fda_or_clinical"]["win_rate"]) == pytest.approx(100.0)
+
+
+def test_paper_backtest_kpis_include_tail_risk_metrics(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    now = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    run = create_paper_trading_run(db_path, "auto_paper_v1", 10_000.0)
+    run.max_drawdown_pct = 4.0
+    run.total_return_pct = 2.0
+    upsert_paper_trading_run(db_path, run)
+    pnls = [30.0, -10.0, -20.0, 15.0]
+    positions = []
+    for index, pnl in enumerate(pnls):
+        opened_at = now + timedelta(minutes=index * 10)
+        closed_at = opened_at + timedelta(minutes=5 + index * 5)
+        positions.append(
+            _paper_position(
+                run_id=run.run_id,
+                symbol=f"R{index}",
+                total_pnl=pnl,
+                day_regime="hot",
+                now=opened_at,
+            ).model_copy(update={"closed_at": closed_at, "updated_at": closed_at})
+        )
+    upsert_paper_positions(db_path, positions)
+
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: now)
+    coordinator.export_trade_log()
+    kpis_csv = coordinator.export_backtest_kpis()
+    rows = _csv_rows(kpis_csv)
+    row = next(item for item in rows if item["strategy_name"] == "auto_paper_v1")
+
+    assert int(row["max_consecutive_losses"]) == 2
+    assert float(row["worst_trade_r"]) == pytest.approx(-4.0)
+    assert float(row["p5_trade_r"]) < 0
+    assert float(row["cvar_5pct_trade_r"]) <= float(row["p5_trade_r"])
+    assert float(row["median_hold_minutes"]) == pytest.approx(12.5)
+    assert float(row["p90_hold_minutes"]) > float(row["median_hold_minutes"])
+    assert float(row["calmar_ratio"]) == pytest.approx(0.5)
