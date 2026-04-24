@@ -25,6 +25,7 @@ from ..db import (
 )
 from ..models import PaperOrder, PaperPosition, PaperTradingRun
 from .paper_bucket_policy import bucket_uses_predictor_weight, paper_bucket_policy
+from .paper_runtime import paper_market_date
 from .trading_support import predicted_rank_band
 
 
@@ -435,7 +436,7 @@ class PaperReportingService:
 
     def export_trade_log(self) -> Path:
         rows: list[dict[str, object]] = []
-        prediction_lookup = self._prediction_lookup()
+        prediction_cache = self._prediction_lookup_cache()
         for run in self._latest_runs():
             positions = fetch_paper_positions(self.settings.database_path, run.run_id)
             orders = fetch_paper_orders(self.settings.database_path, run.run_id)
@@ -450,19 +451,20 @@ class PaperReportingService:
                 buy_orders = [row for row in position_orders if row.action == "BUY"]
                 sell_orders = [row for row in position_orders if row.action == "SELL"]
                 entry_order = buy_orders[0] if buy_orders else None
-                prediction = prediction_lookup.get(position.symbol.upper(), {})
+                position_market_date = paper_market_date(position.opened_at)
+                prediction = prediction_cache.get(position_market_date, {}).get(position.symbol.upper(), {})
                 uses_predictor = bucket_uses_predictor_weight(run.bucket)
                 if uses_predictor:
                     predictor_score = self._reason_value(position.entry_reasons, "predictor_score")
                     predictor_weight = self._reason_value(position.entry_reasons, "predictor_weight")
                     if predictor_score is None:
-                        predictor_score = float(prediction.get("score", 0.0) or 0.0)
+                        predictor_score = 0.0
                     if predictor_weight is None:
                         predictor_weight = self._predictor_weight_from_score(
                             predictor_score if predictor_score > 0.0 else None
                         )
-                    prediction_source = str(prediction.get("source", "none"))
-                    predicted = prediction_source == "premkt_prediction"
+                    predicted = predictor_score > 0.0
+                    prediction_source = "premkt_prediction" if predicted else "none"
                 else:
                     predictor_score = 0.0
                     predictor_weight = 0.0
@@ -519,6 +521,7 @@ class PaperReportingService:
                         "entry_label": position.entry_label or "",
                         "strategy_bucket": position.strategy_bucket,
                         "day_regime": position.day_regime or "unknown",
+                        "market_date": position_market_date,
                         "opened_at": position.opened_at.isoformat(),
                         "closed_at": position.closed_at.isoformat() if position.closed_at else "",
                         "hold_minutes": hold_minutes,
@@ -699,12 +702,19 @@ class PaperReportingService:
 
     def export_predictor_kpis(self) -> Path:
         trade_rows = self._load_trade_log_rows()
-        prediction_lookup = self._prediction_lookup()
-        candidate_count = len(prediction_lookup)
+        prediction_cache = self._prediction_lookup_cache()
         rows: list[dict[str, object]] = []
         grouped = self._group_trade_rows(trade_rows)
         for run in self._latest_runs():
             run_rows = grouped.get(run.run_id, [])
+            run_market_dates = {
+                str(row.get("market_date", ""))
+                for row in run_rows
+                if row.get("market_date")
+            }
+            candidate_count = sum(
+                len(prediction_cache.get(md, {})) for md in run_market_dates
+            )
             predicted_rows = [row for row in run_rows if self._csv_bool(row.get("predicted"))]
             closed_predicted = [row for row in predicted_rows if row["status"] == "CLOSED"]
             triggered_symbols = {str(row["symbol"]) for row in predicted_rows}
@@ -1269,11 +1279,11 @@ class PaperReportingService:
             grouped.setdefault(str(row["run_id"]), []).append(row)
         return grouped
 
-    def _prediction_lookup(self) -> dict[str, dict[str, object]]:
+    def _prediction_lookup(self, market_date: str | None = None) -> dict[str, dict[str, object]]:
         rows = fetch_latest_premkt_predictions(
             self.settings.database_path,
             limit=1000,
-            prefer_reportable=False,
+            market_date=market_date,
         )
         lookup: dict[str, dict[str, object]] = {}
         for row in rows:
@@ -1300,6 +1310,41 @@ class PaperReportingService:
                 ),
             }
         return lookup
+
+    def _prediction_lookup_cache(self) -> dict[str, dict[str, dict[str, object]]]:
+        """Returns {market_date: {symbol: prediction_dict}} for all dates that have predictions."""
+        cache: dict[str, dict[str, dict[str, object]]] = {}
+        all_rows = fetch_latest_premkt_predictions(
+            self.settings.database_path,
+            limit=10000,
+        )
+        for row in all_rows:
+            md = str(row["market_date"]) if "market_date" in row.keys() and row["market_date"] else ""
+            if not md:
+                continue
+            raw_themes = row["themes"] if "themes" in row.keys() else "[]"
+            try:
+                themes = json.loads(raw_themes) if raw_themes else []
+            except Exception:
+                themes = []
+            cache.setdefault(md, {})[str(row["symbol"]).upper()] = {
+                "score": float(row["score"]),
+                "themes": themes,
+                "entry_rationale": str(row["entry_rationale"]) if "entry_rationale" in row.keys() else "",
+                "filing_summary": str(row["filing_summary"]) if "filing_summary" in row.keys() else "",
+                "generated_at": str(row["generated_at"]) if "generated_at" in row.keys() else "",
+                "cutoff_at": (
+                    str(row["cutoff_at"])
+                    if "cutoff_at" in row.keys() and row["cutoff_at"]
+                    else str(row["generated_at"]) if "generated_at" in row.keys() else ""
+                ),
+                "source": (
+                    str(row["source"])
+                    if "source" in row.keys() and row["source"]
+                    else "premkt_prediction"
+                ),
+            }
+        return cache
 
     def _max_capacity_order(self, orders: list[PaperOrder]) -> PaperOrder | None:
         if not orders:

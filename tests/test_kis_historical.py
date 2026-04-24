@@ -375,14 +375,16 @@ def test_kis_historical_service_warns_on_l1_timestamp_drift_but_still_saves_row(
         base_url="https://openapi.koreainvestment.com:9443",
     )
     service = KISHistoricalDataService(settings, client=client)
+    service._now_eastern = lambda: datetime(2026, 4, 11, 9, 35, tzinfo=timezone.utc)
     service._utc_now = lambda: datetime(2026, 4, 10, 16, 0, tzinfo=timezone.utc)
 
     with caplog.at_level(logging.WARNING, logger="penny_stock_radar.services.kis_historical"):
         summary = service.capture_l1_quotes(symbols=["AAA"])
 
-    rows = fetch_historical_l1_quotes(db_path, market_date="2026-04-10", symbol="AAA")
+    rows = fetch_historical_l1_quotes(db_path, market_date=summary.market_date, symbol="AAA")
 
     assert summary.inserted_rows == 1
+    assert summary.snapshot_mismatch_count == 1
     assert len(rows) == 1
     assert "kis_l1 timestamp drift detected" in caplog.text
 

@@ -136,8 +136,8 @@ class AppSettings(BaseSettings):
     paper_ai_escalation_limit: int = 1
     paper_ai_escalation_min_confidence: float = 45.0
     paper_ai_escalation_max_confidence: float = 75.0
-    paper_predictor_weight_k1: float = 0.0
-    paper_predictor_weight_k2: float = 0.0
+    paper_predictor_weight_k1: float = 1.0
+    paper_predictor_weight_k2: float = 1.0
     predictor_weight_total_score: float = 11.0
     predictor_weight_catalyst: float = 8.0
     predictor_weight_technical: float = 4.0

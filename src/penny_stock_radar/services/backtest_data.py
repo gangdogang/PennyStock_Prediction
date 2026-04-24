@@ -129,6 +129,7 @@ class BacktestDataManager:
         covered_symbols = [symbol for symbol in expected_symbols if covered_by_symbol.get(symbol)]
         covered_intervals = sum(len(covered_by_symbol.get(symbol, set())) for symbol in expected_symbols)
         expected_intervals = len(expected_symbols) * expected_minutes
+        quality_notes = self._l1_quality_notes(quotes, market_date_str)
         report = HistoricalCoverageReport(
             market_date=market_date_str,
             dataset_kind=f"l1_quote_{session}",
@@ -142,6 +143,7 @@ class BacktestDataManager:
             notes=[
                 f"session={session}",
                 f"window={start_at.isoformat()}->{end_at.isoformat()}",
+                *quality_notes,
             ],
         )
         insert_historical_coverage_report(self.settings.database_path, report)
@@ -173,9 +175,15 @@ class BacktestDataManager:
         session = report.dataset_kind.removeprefix("l1_quote_")
         symbol_gate_passed = report.symbol_coverage_pct >= threshold
         interval_gate_passed = report.interval_coverage_pct >= threshold
+        quality_failures = self._coverage_quality_failures(report.notes)
+        quality_gate_passed = not quality_failures
         threshold_label = f"{threshold:.1f}".rstrip("0").rstrip(".").replace(".", "_")
         return CoverageGateStatus(
-            status="passed" if symbol_gate_passed and interval_gate_passed else "failed",
+            status=(
+                "passed"
+                if symbol_gate_passed and interval_gate_passed and quality_gate_passed
+                else "failed"
+            ),
             gate_name=f"step0_l1_coverage_{threshold_label}",
             market_date=report.market_date,
             session=session,
@@ -183,7 +191,8 @@ class BacktestDataManager:
             source=report.source,
             threshold_pct=threshold,
             decision_basis=(
-                f"symbol_coverage_pct>={threshold:.1f} and interval_coverage_pct>={threshold:.1f}"
+                f"symbol_coverage_pct>={threshold:.1f} and interval_coverage_pct>={threshold:.1f} "
+                "and no_l1_timestamp_quality_failures"
             ),
             expected_symbol_count=report.expected_symbol_count,
             covered_symbol_count=report.covered_symbol_count,
@@ -197,6 +206,7 @@ class BacktestDataManager:
             report_created_at=report.created_at,
             report_path=str(report_path) if report_path is not None else None,
             notes=report.notes,
+            last_error="; ".join(quality_failures) if quality_failures else None,
         )
 
     def export_coverage_report_json(
@@ -346,6 +356,52 @@ class BacktestDataManager:
         if value in {None, ""}:
             return None
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+    def _l1_quality_notes(self, rows: list[object], market_date: str) -> list[str]:
+        snapshot_mismatch_count = 0
+        timestamp_drift_count = 0
+        for row in rows:
+            quote_at = self._parse_timestamp(self._row_value(row, "quote_at"))
+            if quote_at is None:
+                continue
+            quote_date = quote_at.astimezone(EASTERN).date().isoformat()
+            if quote_date != market_date:
+                snapshot_mismatch_count += 1
+            source = str(self._row_value(row, "source") or "")
+            if source != "kis_l1_snapshot":
+                continue
+            created_at = self._parse_timestamp(self._row_value(row, "created_at"))
+            if created_at is None:
+                continue
+            drift_minutes = abs(
+                (
+                    created_at.astimezone(timezone.utc)
+                    - quote_at.astimezone(timezone.utc)
+                ).total_seconds()
+            ) / 60.0
+            if drift_minutes > 120.0:
+                timestamp_drift_count += 1
+        notes: list[str] = []
+        if snapshot_mismatch_count:
+            notes.append(f"snapshot_date_mismatch_count={snapshot_mismatch_count}")
+        if timestamp_drift_count:
+            notes.append(f"timestamp_drift_gt_120m_count={timestamp_drift_count}")
+        return notes
+
+    def _coverage_quality_failures(self, notes: list[str]) -> list[str]:
+        failures: list[str] = []
+        for note in notes:
+            if note.startswith("snapshot_date_mismatch_count=") and not note.endswith("=0"):
+                failures.append(note)
+            if note.startswith("timestamp_drift_gt_120m_count=") and not note.endswith("=0"):
+                failures.append(note)
+        return failures
+
+    def _row_value(self, row: object, key: str) -> object:
+        try:
+            return row[key]  # type: ignore[index]
+        except Exception:
+            return None
 
     def _coverage_minute_key(self, timestamp: datetime) -> str:
         return timestamp.astimezone(timezone.utc).replace(second=0, microsecond=0).strftime(

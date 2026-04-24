@@ -131,7 +131,7 @@ cd C:\Dev\Penny_Stock
 .\launchers\windows\archive_paper_run_snapshot.ps1 -DriveRoot "$env:OneDrive\Penny_Stock_Runs"
 ```
 
-이 명령은 가장 최근 `paper_runs\<run_id>\` 또는 legacy `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다.
+이 명령은 가장 최근 `paper_runs\<run_id>\` 또는 legacy `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다. `snapshot_manifest.json` 의 `database.included=true` 는 실제 zip 안에 DB 파일이 있을 때만 기록된다.
 
 ## Windows paper 실행과 중간 archive
 
@@ -146,8 +146,9 @@ Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample
 - Drive/OneDrive 후보 경로 아래 `paper_runs\<run_id>\` 를 만든다. 기존 `paper_24h_runs\` 는 legacy run 폴더로만 유지한다.
 - paper CSV 는 `paper_trading\`, 초기 파이프라인 샘플 산출물은 `pipeline_outputs\`, 로그는 `logs\`, zip 은 `archives\<run_id>-paper-performance.zip` 에 남긴다.
 - 실행 중 SQLite DB 는 기본적으로 `data\paper_runs\<run_id>\penny_stock_radar.sqlite3` 로 분리한다. dashboard 와 같은 원본 DB 를 보려면 `-UseDefaultDatabase` 를 붙여 `data\penny_stock_radar.sqlite3` 를 쓴다.
+- 평가용 기본 실행은 `PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K1=1.0`, `PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K2=1.0` 을 런처가 프로세스 환경에 명시해 `predictor_effect.enabled=true` 로 남긴다. predictor effect 를 일부러 끄는 smoke 가 아니면 이 값을 0으로 override 하지 않는다.
 - 종료 또는 실패 시에도 `archive-paper-performance --allow-fail` 로 전송용 zip 을 만든다.
-- `launcher_manifest.json` 에 run id, 경로, exit code 를 기록한다.
+- `launcher_manifest.json` 에 run id, 경로, exit code, predictor effect, DB copy 상태를 기록한다.
 
 기본 실행은 사용자가 끌 때까지 계속 돈다. 실행 시간을 제한하고 싶을 때만 `-MaxRuntimeSeconds` 를 준다.
 
@@ -329,6 +330,7 @@ Step 0 L1 archive 적재:
 
 `capture-kis-l1-window` 는 iteration 마다 stderr 로 `iteration=<i> symbols=<N> new_rows=<N> distinct_minutes=<N>` 진단 라인을 남긴다.
 `snapshot_date mismatch`, `duplicate minute bucket`, `stale timestamp fallback` 은 0건이 아닐 때만 별도 한 줄로 출력된다.
+반복 capture 가 끝나면 기본적으로 `automation/state/backtest_coverage/` 와 `automation/state/backtest_coverage_gate_status.json` 을 갱신한다. L1 `snapshot_date` mismatch 또는 120분 초과 timestamp drift 는 coverage gate failure 로 남긴다.
 
 수동 주문/정정/취소:
 

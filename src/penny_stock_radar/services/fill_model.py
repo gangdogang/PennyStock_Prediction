@@ -62,7 +62,6 @@ class FillModel:
             quantity=quantity,
         )
         participation_slippage_pct = self._participation_slippage_pct(participation_pct)
-        fill_price = reference * (1.0 + participation_slippage_pct / 100.0)
         spread_abs = self._spread_abs(row, reference=reference)
         spread_slippage_pct = (
             (spread_abs / reference)
@@ -73,6 +72,7 @@ class FillModel:
         )
         base_slippage_pct = self._base_slippage_pct(spread_abs=spread_abs)
         slippage_pct = spread_slippage_pct + base_slippage_pct + participation_slippage_pct
+        fill_price = reference * (1.0 + slippage_pct / 100.0)
         notional = fill_price * quantity
         capacity = self._capacity_metrics(
             row=row,

@@ -224,7 +224,7 @@ def test_multiday_overnight_hold_rejection_closes_position(tmp_path: Path) -> No
             _activity(
                 "AAA",
                 phase="regular",
-                price=0.97,
+                price=0.99,
                 label="NO_CHASE",
                 score=1.8,
                 predicted=False,

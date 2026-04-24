@@ -70,6 +70,8 @@ def test_capture_kis_l1_window_repeats_capture_and_reports_summary(
         db_path=db_path,
         kis_app_key="kis-app",
         kis_app_secret="kis-secret",
+        backtest_coverage_report_dir=tmp_path / "automation" / "state" / "backtest_coverage",
+        backtest_coverage_gate_path=tmp_path / "automation" / "state" / "backtest_coverage_gate_status.json",
     )
     snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
     insert_watchlist(
@@ -153,3 +155,5 @@ def test_capture_kis_l1_window_repeats_capture_and_reports_summary(
     assert "L1 capture pass 2/2" in result.stdout
     assert "KIS L1 archive window stored 3 quotes across 2 passes" in result.stdout
     assert "No L1 quote returned: AAA" in result.stdout
+    assert "L1 coverage gate failed" in result.stdout
+    assert settings.backtest_coverage_gate_path.exists()

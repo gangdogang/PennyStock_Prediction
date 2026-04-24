@@ -4,6 +4,8 @@ param(
     [int]$MaxRuntimeSeconds = 0,
     [int]$CheckIntervalSeconds = 0,
     [string]$Phase = "",
+    [string]$PredictorWeightK1 = "",
+    [string]$PredictorWeightK2 = "",
     [switch]$SkipInitialPipeline,
     [switch]$SkipPremktPredictor,
     [switch]$UseDefaultDatabase
@@ -101,6 +103,71 @@ function Resolve-PaperRunIntSetting {
     return $DefaultValue
 }
 
+function Resolve-PaperRunDoubleSetting {
+    param(
+        [string]$Value,
+        [string]$EnvName,
+        [double]$DefaultValue
+    )
+
+    $candidate = $Value
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        $candidate = [Environment]::GetEnvironmentVariable($EnvName)
+    }
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        return $DefaultValue.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    $parsed = 0.0
+    if (-not [double]::TryParse(
+        $candidate,
+        [System.Globalization.NumberStyles]::Float,
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [ref]$parsed
+    )) {
+        throw "Invalid numeric value for ${EnvName}: $candidate"
+    }
+    return $parsed.ToString([System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Copy-DatabaseBundle {
+    param(
+        [string]$SourcePath,
+        [string]$DestinationDir
+    )
+
+    $result = [ordered]@{
+        status = "missing"
+        error = $null
+        files = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($SourcePath) -or -not (Test-Path $SourcePath)) {
+        return $result
+    }
+
+    try {
+        if (-not (Test-Path $DestinationDir)) {
+            New-Item -ItemType Directory -Path $DestinationDir -Force | Out-Null
+        }
+        foreach ($source in @($SourcePath, "$SourcePath-wal", "$SourcePath-shm")) {
+            if (Test-Path $source) {
+                $destination = Join-Path $DestinationDir (Split-Path -Leaf $source)
+                Copy-Item -Path $source -Destination $destination -Force
+                $result.files += $destination
+            }
+        }
+        if ($result.files.Count -gt 0) {
+            $result.status = "copied"
+        }
+        return $result
+    }
+    catch {
+        $result.status = "failed"
+        $result.error = $_.Exception.Message
+        throw
+    }
+}
+
 function Invoke-LoggedNative {
     param(
         [string]$StepName,
@@ -135,7 +202,16 @@ function Write-LauncherManifest {
         archive_path = $ArchivePath
         database_path = $DatabasePath
         database_copy_path = $DatabaseCopyPath
+        database_copy_status = $script:DatabaseCopyStatus
+        database_copy_error = $script:DatabaseCopyError
+        database_copy_files = $script:DatabaseCopyFiles
         use_default_database = [bool]$UseDefaultDatabase
+        predictor_effect = [ordered]@{
+            enabled = $PredictorEffectEnabled
+            k1 = $PredictorWeightK1
+            k2 = $PredictorWeightK2
+            policy = "predictor_weighted uses predictor score/weight for threshold and sizing; comparison buckets force predictor weight to zero"
+        }
         max_runtime_seconds = $MaxRuntimeSeconds
         check_interval_seconds = $CheckIntervalSeconds
         phase = $Phase
@@ -175,6 +251,18 @@ $Phase = Resolve-PaperRunSetting `
     -EnvName "PENNY_STOCK_PAPER_PHASE" `
     -LegacyEnvName "PENNY_STOCK_PAPER_24H_PHASE" `
     -DefaultValue "auto"
+$PredictorWeightK1 = Resolve-PaperRunDoubleSetting `
+    -Value $PredictorWeightK1 `
+    -EnvName "PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K1" `
+    -DefaultValue 1.0
+$PredictorWeightK2 = Resolve-PaperRunDoubleSetting `
+    -Value $PredictorWeightK2 `
+    -EnvName "PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K2" `
+    -DefaultValue 1.0
+$PredictorEffectEnabled = (
+    ([double]::Parse($PredictorWeightK1, [System.Globalization.CultureInfo]::InvariantCulture) -ne 0.0) -or
+    ([double]::Parse($PredictorWeightK2, [System.Globalization.CultureInfo]::InvariantCulture) -ne 0.0)
+)
 
 $RunRoot = Join-Path (Join-Path $DriveRoot "paper_runs") $RunId
 $ExportDir = Join-Path $RunRoot "paper_trading"
@@ -206,6 +294,9 @@ $script:TraderExitCode = $null
 $script:ArchiveExitCode = $null
 $script:RunError = $null
 $script:ArchiveError = $null
+$script:DatabaseCopyStatus = "not_started"
+$script:DatabaseCopyError = $null
+$script:DatabaseCopyFiles = @()
 $script:EndedAt = $null
 $script:RunStatus = "running"
 $StartedAt = (Get-Date).ToString("o")
@@ -215,6 +306,8 @@ $env:PENNY_STOCK_PAPER_TRADE_DIR = $ExportDir
 $env:PENNY_STOCK_LIVE_OBSERVABILITY_PATH = Join-Path $LogDir "live_metrics.jsonl"
 $env:PENNY_STOCK_PAPER_RUN_ID = $RunId
 $env:PENNY_STOCK_PAPER_24H_RUN_ID = $RunId
+$env:PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K1 = $PredictorWeightK1
+$env:PENNY_STOCK_PAPER_PREDICTOR_WEIGHT_K2 = $PredictorWeightK2
 $env:PENNY_STOCK_RESET_DB = "0"
 
 Write-LauncherManifest
@@ -237,6 +330,8 @@ Write-Host "Archive:"
 Write-Host "  $ArchivePath"
 Write-Host "Database:"
 Write-Host "  $DatabasePath"
+Write-Host "Predictor effect:"
+Write-Host "  enabled=$PredictorEffectEnabled k1=$PredictorWeightK1 k2=$PredictorWeightK2"
 Write-Host ""
 
 $runtime = $null
@@ -347,9 +442,10 @@ catch {
 finally {
     $script:EndedAt = (Get-Date).ToString("o")
     try {
-        if (Test-Path $DatabasePath) {
-            Copy-Item -Path $DatabasePath -Destination $DatabaseCopyPath -Force
-        }
+        $dbCopy = Copy-DatabaseBundle -SourcePath $DatabasePath -DestinationDir $DatabaseCopyDir
+        $script:DatabaseCopyStatus = [string]$dbCopy.status
+        $script:DatabaseCopyError = $dbCopy.error
+        $script:DatabaseCopyFiles = @($dbCopy.files)
         if ($null -ne $runtime) {
             Write-Host "Archiving paper performance artifacts..."
             & $runtime.VenvPython -m penny_stock_radar archive-paper-performance `

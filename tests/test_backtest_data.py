@@ -177,7 +177,7 @@ def test_backtest_data_manager_builds_l1_coverage_report(tmp_path: Path) -> None
     assert gate_status.threshold_pct == pytest.approx(60.0)
     assert (
         gate_status.decision_basis
-        == "symbol_coverage_pct>=60.0 and interval_coverage_pct>=60.0"
+        == "symbol_coverage_pct>=60.0 and interval_coverage_pct>=60.0 and no_l1_timestamp_quality_failures"
     )
     assert gate_status.symbol_gate_passed is False
     assert gate_status.interval_gate_passed is False
@@ -233,6 +233,40 @@ def test_backtest_data_manager_normalizes_tz_variant_coverage_buckets(tmp_path: 
     assert report.covered_symbol_count == 1
     assert report.covered_interval_count == 1
     assert report.interval_coverage_pct == pytest.approx((1 / 330) * 100.0)
+
+
+def test_backtest_data_manager_marks_l1_timestamp_quality_failures(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    insert_historical_l1_quotes(
+        db_path,
+        [
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-10",
+                timestamp=datetime(2026, 4, 9, 9, 0, tzinfo=EASTERN),
+                bid_price=0.99,
+                ask_price=1.01,
+                last_price=1.0,
+                source="kis_l1_snapshot",
+                created_at=datetime(2026, 4, 10, 14, 0, tzinfo=timezone.utc),
+            ),
+        ],
+    )
+
+    manager = BacktestDataManager(AppSettings(db_path=db_path))
+    report = manager.build_l1_coverage_report(
+        "2026-04-10",
+        symbols=["AAA"],
+        session="premarket",
+        source="kis_l1_snapshot",
+    )
+    gate_status = manager.build_coverage_gate_status(report)
+
+    assert "snapshot_date_mismatch_count=1" in report.notes
+    assert "timestamp_drift_gt_120m_count=1" in report.notes
+    assert gate_status.status == "failed"
+    assert gate_status.last_error == "snapshot_date_mismatch_count=1; timestamp_drift_gt_120m_count=1"
 
 
 def test_backtest_data_manager_applies_gate_threshold_override(tmp_path: Path) -> None:

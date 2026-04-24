@@ -232,6 +232,19 @@ def capture_kis_l1_window(
         min=1e-9,
         help="How long to wait between capture passes.",
     ),
+    coverage_session: str = typer.Option(
+        "premarket",
+        help="Session window to report into the Step 0 coverage gate after capture.",
+    ),
+    update_coverage_gate: bool = typer.Option(
+        True,
+        "--update-coverage-gate/--no-update-coverage-gate",
+        help="Refresh the latest Step 0 L1 coverage report and gate status after capture.",
+    ),
+    gate_status_path: Path | None = typer.Option(
+        None,
+        help="Optional JSON path for the latest coverage gate snapshot.",
+    ),
 ) -> None:
     """Capture KIS L1 quotes repeatedly to build interval coverage for the current session."""
     import penny_stock_radar.cli as root_cli
@@ -303,6 +316,39 @@ def capture_kis_l1_window(
         console.print(f"Unresolved exchange symbols: {', '.join(sorted(unresolved))}")
     if skipped:
         console.print(f"No L1 quote returned: {', '.join(sorted(skipped))}")
+    if update_coverage_gate and market_date is not None:
+        try:
+            manager = BacktestDataManager(settings)
+            report = manager.build_l1_coverage_report(
+                market_date,
+                symbols=symbols[:limit],
+                session=coverage_session,
+                source="kis_l1_snapshot",
+            )
+            report_path = manager.export_coverage_report_json(report)
+            gate_status = manager.build_coverage_gate_status(
+                report,
+                report_path=report_path,
+            )
+            gate_path = manager.export_coverage_gate_status(
+                gate_status,
+                output_path=gate_status_path,
+            )
+        except ValueError as exc:
+            console.print(str(exc))
+            raise typer.Exit(code=1) from exc
+        except OSError as exc:
+            console.print(f"Failed to write coverage outputs: {exc}")
+            raise typer.Exit(code=1) from exc
+        console.print(
+            f"L1 coverage gate {gate_status.status}: "
+            f"symbols={gate_status.covered_symbol_count}/{gate_status.expected_symbol_count} "
+            f"({gate_status.symbol_coverage_pct:.1f}%), "
+            f"intervals={gate_status.covered_interval_count}/{gate_status.expected_interval_count} "
+            f"({gate_status.interval_coverage_pct:.1f}%)."
+        )
+        console.print(f"Coverage report JSON: {report_path}")
+        console.print(f"Coverage gate status JSON: {gate_path}")
 
 
 @app.command("report-backtest-coverage")

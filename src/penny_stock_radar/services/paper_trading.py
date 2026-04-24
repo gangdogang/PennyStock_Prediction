@@ -128,7 +128,7 @@ class PaperTradingEngine:
         )
 
     def _prepare_step(self, context: StepContext) -> StepHookResult:
-        self._refresh_predictor_scores()
+        self._refresh_predictor_scores(context.market_date)
         return StepHookResult()
 
     def _run_exit_rules(self, context: StepContext) -> StepHookResult:
@@ -857,13 +857,13 @@ class PaperTradingEngine:
             entry_tag=entry_tag,
         )
 
-    def _refresh_predictor_scores(self) -> None:
+    def _refresh_predictor_scores(self, market_date: str) -> None:
         if self.strategy_mode != "adaptive" or not bucket_uses_predictor_weight(self.bucket):
             self._predictor_score_by_symbol = {}
             return
         rows = fetch_latest_premkt_predictions(
             self.settings.database_path,
-            prefer_reportable=False,
+            market_date=market_date,
         )
         self._predictor_score_by_symbol = {
             str(row["symbol"]).upper(): float(row["score"])

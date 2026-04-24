@@ -98,9 +98,14 @@ def _golden_path(name: str) -> Path:
     return Path(__file__).parent / "golden" / name
 
 
-def _seed_predictions(db_path: Path, predictions: list[PremktPrediction]) -> None:
-    snapshot = create_snapshot_run(db_path, source="test", symbol_count=len(predictions))
-    insert_premkt_predictions(db_path, snapshot.snapshot_id, predictions)
+def _seed_predictions(
+    db_path: Path,
+    predictions: list[PremktPrediction],
+    market_date: str = "2026-03-26",
+) -> None:
+    dated = [p.model_copy(update={"market_date": market_date}) for p in predictions]
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=len(dated), market_date=market_date)
+    insert_premkt_predictions(db_path, snapshot.snapshot_id, dated)
 
 
 def _sanitize_orders(
@@ -569,7 +574,12 @@ def _run_multiday_loser_replacement_scenario(tmp_path: Path) -> list[dict[str, o
 
 
 def _assert_matches_golden(name: str, actual: list[dict[str, object]]) -> None:
-    expected = json.loads(_golden_path(name).read_text(encoding="utf-8"))
+    import os
+    path = _golden_path(name)
+    if os.getenv("UPDATE_GOLDEN"):
+        path.write_text(json.dumps(actual, indent=2), encoding="utf-8")
+        return
+    expected = json.loads(path.read_text(encoding="utf-8"))
     assert actual == expected
 
 

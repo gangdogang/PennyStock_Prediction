@@ -118,6 +118,7 @@ def test_kis_mock_broker_submits_replaces_cancels_and_reuses_cached_token(tmp_pa
         base_url=settings.kis_mock_base_url,
     )
     adapter = KISMockBrokerAdapter(settings, client=client)
+    adapter._current_market_session = lambda now=None: "premarket"  # type: ignore[method-assign]
 
     submitted = adapter.submit_order(
         BrokerOrderRequest(

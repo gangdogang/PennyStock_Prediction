@@ -59,9 +59,21 @@ def fetch_latest_premkt_predictions(
     limit: int = 20,
     *,
     scan_id: str | None = None,
+    market_date: str | None = None,
     prefer_reportable: bool = False,
 ) -> list[sqlite3.Row]:
     with get_connection(database_path) as connection:
+        if market_date is not None:
+            return connection.execute(
+                """
+                SELECT *
+                FROM premkt_predictions
+                WHERE market_date = ?
+                ORDER BY score DESC, symbol ASC
+                LIMIT ?
+                """,
+                (market_date, limit),
+            ).fetchall()
         target_scan_id = _resolve_scan_id(
             database_path,
             scan_id=scan_id,

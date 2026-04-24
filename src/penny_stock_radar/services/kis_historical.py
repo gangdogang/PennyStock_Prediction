@@ -195,6 +195,7 @@ class KISHistoricalDataService:
                 stale_timestamp_fallback_count += 1
             if quote.market_date != snapshot_date:
                 snapshot_mismatch_count += 1
+                quote = quote.model_copy(update={"market_date": snapshot_date})
             quote_at_utc = quote.timestamp.astimezone(ZoneInfo("UTC"))
             now_utc = self._utc_now()
             delta_minutes = abs((now_utc - quote_at_utc).total_seconds()) / 60.0

@@ -240,9 +240,11 @@ def _open_position(
 def _seed_predictions(
     db_path: Path,
     predictions: list[PremktPrediction],
+    market_date: str = "2026-03-26",
 ) -> str:
-    snapshot = create_snapshot_run(db_path, source="test", symbol_count=len(predictions))
-    insert_premkt_predictions(db_path, snapshot.snapshot_id, predictions)
+    dated = [p.model_copy(update={"market_date": market_date}) for p in predictions]
+    snapshot = create_snapshot_run(db_path, source="test", symbol_count=len(dated), market_date=market_date)
+    insert_premkt_predictions(db_path, snapshot.snapshot_id, dated)
     return snapshot.snapshot_id
 
 
@@ -1634,9 +1636,10 @@ def test_paper_trading_fill_model_uses_quote_reference_and_gap_through_stop(tmp_
     entry_order, exit_order = orders
 
     assert result.exited_count == 1
-    assert entry_order.price == pytest.approx(1.02)
+    spread_slippage_pct = ((1.02 - 0.99) / 1.02) * 1.5 * 100.0
+    assert entry_order.price == pytest.approx(1.02 * (1.0 + spread_slippage_pct / 100.0))
     assert entry_order.fill_reference_price == pytest.approx(1.02)
-    assert entry_order.fill_slippage_pct == pytest.approx(((1.02 - 0.99) / 1.02) * 1.5 * 100.0)
+    assert entry_order.fill_slippage_pct == pytest.approx(spread_slippage_pct)
     assert entry_order.strategy_bucket == "predicted_starter"
     assert entry_order.planned_risk_pct == pytest.approx(5.0)
     assert entry_order.watchlist_rank_at_entry == 1
@@ -1881,6 +1884,7 @@ def test_baseline_pct_strategy_keeps_momentum_cooldown_exit(tmp_path: Path) -> N
         db_path=db_path,
         paper_trade_dir=tmp_path / "paper_exports",
         live_market_provider="disabled",
+        trade_plan_max_concurrent_open_risk_pct=2.0,
     )
     engine = PaperTradingEngine(
         settings,
