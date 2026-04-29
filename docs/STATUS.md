@@ -1,13 +1,13 @@
 # Status
 
-최종 정리일: 2026-04-23
+최종 정리일: 2026-04-29
 
 ## 현재 capabilities
 
 - `universe -> watchlist -> premarket 분석 -> regular-session 판단` 기본 흐름이 로컬 DB 기준으로 동작한다.
 - SEC filing 기반 watchlist 빌드와 `filed_at <= D 08:00 ET` cutoff 적용이 가능하다.
 - point-in-time universe snapshot 태깅과 `market_date` 기준 재현 경로가 있다.
-- `PremktPredictor` 가 후보 점수, 추천 보유일, 진입 근거를 DB/JSON 으로 저장할 수 있다.
+- `PremktPredictor` 가 후보 점수, 추천 보유일, 진입 근거를 DB/JSON 으로 저장할 수 있고, 옵션 지정 시 학습된 `train-premkt-model` artifact 점수를 `rule`/`ml`/`blend` 모드로 JSON lineage 와 함께 연결할 수 있다.
 - intraday paper engine 이 stale/halt/daily-loss/open-risk 가드레일과 함께 replay/mock-first 실행을 수행한다.
 - multiday engine 이 starter, overnight hold, winner add, loser replacement, day2/day3 exit 1차 규칙을 수행한다.
 - multiday engine 의 starter/add/hold/replacement 파라미터가 `AppSettings` 와 `.env` override 로 제어되며 기본값 기준 골든 스냅샷이 유지된다.
@@ -32,6 +32,10 @@
 - Windows paper 실행 런처는 run별 export/log/archive/manifest 를 OneDrive 경로에 남기며, 기본 실행은 사용자가 끌 때까지 계속 돈다. 중간 검토는 snapshot archive 로 만들고, 종료 시 final archive 와 DB/WAL 사본을 남긴다.
 - snapshot archive manifest 는 실제 DB 파일이 포함된 경우에만 database included 로 기록하고, 빈 database 폴더나 copy 실패는 warning 으로 남긴다.
 - KIS historical minute backfill, L1 snapshot archive, coverage report CLI 가 연결돼 있다.
+- `build-premkt-training-dataset` CLI 는 `data/backtest_lab/` DB 사본의 `historical_minute_bars` 로 D 08:00 ET 이전 premarket feature 와 cutoff 이후 label 을 분리한 학습용 CSV 를 만들 수 있다.
+- `train-premkt-model` CLI 는 1단계 CSV 를 읽어 `label_winner` baseline classifier 를 학습하고, `market_date` 시간순 split 기준 model artifact 와 metrics JSON 을 저장할 수 있다.
+- `run-premkt-model-replay` CLI 는 `data/backtest_lab/` DB 사본을 기본 입력으로, point-in-time universe/watchlist 와 cutoff 이전 model feature 만 사용해 과거 날짜 범위를 local-only 로 재생하고 replay 산출물을 `data/backtest_lab/replays/<run_id>/` 아래에 남길 수 있다.
+- Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
 - Streamlit 대시보드는 v1 cleanup 기준으로 `ui/app.py` 를 bootstrap/sidebar/data load/tab routing 중심으로 줄이고, 공통 layout helper, `ui/pages/` 탭 렌더러, 첫 화면 view model 로 분리한다.
@@ -53,11 +57,16 @@
 - 현재 단계에서 가능한 비교는 동일 scanned activity universe 안에서 metadata 를 제거하는 `watchlist_blind_momentum` 방식의 within-scan ablation 이며, 진짜 `pure_momentum` 은 independent universe/replay provider 가 분리된 뒤에만 도입한다.
 - Step 4/5 리포트는 존재하지만 Step 0 coverage 와 shadow/out-of-sample 검증 전에는 live 판단 근거가 될 수 없다.
 - predictor effect disabled 또는 Step 0 coverage 60% 미만 run 은 predictor edge 판단 근거로 쓰지 않는다.
+- PremktPredictor 학습 준비 1일차 산출물은 성능 판별이 아니라 누수 없는 학습 데이터셋 생성 기반이다. cutoff 이후 minute bar 가 없으면 row 는 유지하고 label 컬럼은 비워 둔다.
+- PremktPredictor 학습 준비 3단계는 모델 점수 연결이며, trading 성능 판단은 아직 아님. 모델 점수에 필요한 historical minute feature 가 부족하면 rule score 로 fallback 하고 JSON lineage 에 이유를 남긴다.
+- historical replay smoke 또는 calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
+- PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
+- 다음 우선순위는 Step 5 historical replay 검증 프로토콜에 맞춰 1개월 calibration 과 3개월 이상 out-of-sample 을 실제 로컬 historical DB 사본으로 실행한 뒤, shadow/live paper 검증으로 넘어가는 것이다.
 - Step 0 coverage 장기 루프로 돌아가기 전에 얇은 bucket taxonomy v2 의 v1 범위를 고정했다. 범위는 `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 3개 버킷과 pairwise within-scan ablation 리포트다.
 - 다음 우선순위는 Windows 에서 새 paper run 을 실행해 `run_manifest.json` 의 `predictor_effect.enabled=true` 와 세 bucket diff 해석 가능 여부를 확인한 뒤, `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 coverage 를 계속 채우는 것이다.
 - 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.

@@ -119,6 +119,16 @@ class PremktPrediction(BaseModel):
     cutoff_at: datetime | None = None
     source: str = "premkt_prediction"
     market_date: str | None = None
+    rule_score: float | None = None
+    ml_score: float | None = None
+    final_score: float | None = None
+    score_mode: str = "rule"
+    model_path: str | None = None
+    model_id: str | None = None
+    model_feature_version: str | None = None
+    model_missing_feature_count: int = 0
+    model_missing_features: list[str] = Field(default_factory=list)
+    scoring_notes: list[str] = Field(default_factory=list)
 
 
 class MarketTick(BaseModel):

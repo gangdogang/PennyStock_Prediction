@@ -15,9 +15,11 @@ from ..db import (
     insert_premkt_predictions,
 )
 from ..models import FilingMatch, PremktPrediction, WatchlistEntry
+from .premkt_model_scoring import PremktModelScorer
 from .watchlist_builder import WatchlistBuilder
 
 EASTERN = ZoneInfo("America/New_York")
+SCORE_MODES = {"rule", "ml", "blend"}
 
 
 class PremktPredictor:
@@ -41,7 +43,15 @@ class PremktPredictor:
         filing_cutoff: datetime | None = None,
         output_path: Path | None = None,
         persist: bool = True,
+        model_path: Path | None = None,
+        score_mode: str = "rule",
+        ml_weight: float = 0.5,
     ) -> list[PremktPrediction]:
+        score_mode = score_mode.lower()
+        if score_mode not in SCORE_MODES:
+            raise ValueError(f"score_mode must be one of: {', '.join(sorted(SCORE_MODES))}")
+        if not 0.0 <= ml_weight <= 1.0:
+            raise ValueError("ml_weight must be between 0.0 and 1.0")
         init_database(self.settings.database_path)
         entries, filings, _ = self.watchlist_builder.build(
             limit=limit,
@@ -52,6 +62,11 @@ class PremktPredictor:
         if not entries:
             return []
 
+        scorer, scoring_notes = self._build_model_scorer(
+            model_path=model_path if score_mode != "rule" else None
+        )
+        effective_score_mode = score_mode if scorer is not None and model_path is not None else "rule"
+        lineage_model_path = model_path if score_mode != "rule" else None
         generated_at = self.now_fn()
         cutoff_at = self._prediction_cutoff_at(
             generated_at=generated_at,
@@ -64,6 +79,12 @@ class PremktPredictor:
             generated_at=generated_at,
             cutoff_at=cutoff_at,
             market_date=str(market_date) if market_date is not None else None,
+            scorer=scorer,
+            score_mode=effective_score_mode,
+            requested_score_mode=score_mode,
+            ml_weight=ml_weight,
+            model_path=lineage_model_path,
+            scoring_notes=scoring_notes,
         )
         if output_path is not None:
             self.export_json(predictions, output_path)
@@ -98,6 +119,12 @@ class PremktPredictor:
         generated_at: datetime,
         cutoff_at: datetime,
         market_date: str | None,
+        scorer: PremktModelScorer | None,
+        score_mode: str,
+        requested_score_mode: str,
+        ml_weight: float,
+        model_path: Path | None,
+        scoring_notes: list[str],
     ) -> list[PremktPrediction]:
         filings_by_symbol: dict[str, list[FilingMatch]] = defaultdict(list)
         for filing in filings:
@@ -108,9 +135,36 @@ class PremktPredictor:
             symbol = entry.symbol.upper()
             symbol_filings = filings_by_symbol.get(symbol, [])
             filing_summary = "; ".join(filing.summary for filing in symbol_filings[:2])
+            rule_score = self._score_entry(entry, filing_summary=filing_summary)
+            final_score = rule_score
+            ml_score: float | None = None
+            model_feature_version: str | None = None
+            model_missing_features: list[str] = []
+            notes = list(scoring_notes)
+            row_score_mode = score_mode
+            if scorer is not None:
+                model_result = scorer.score_symbol(
+                    symbol=symbol,
+                    market_date=market_date,
+                    cutoff_at=cutoff_at,
+                )
+                ml_score = model_result.ml_score
+                model_feature_version = model_result.model_feature_version
+                model_missing_features = model_result.missing_feature_names
+                notes.extend(model_result.scoring_notes)
+                if ml_score is None:
+                    row_score_mode = "rule"
+                    notes.append(
+                        f"requested_score_mode={requested_score_mode}; fell back to rule score."
+                    )
+                elif score_mode == "ml":
+                    final_score = ml_score
+                elif score_mode == "blend":
+                    final_score = ((1.0 - ml_weight) * rule_score) + (ml_weight * ml_score)
+
             prediction = PremktPrediction(
                 symbol=symbol,
-                score=self._score_entry(entry, filing_summary=filing_summary),
+                score=round(final_score, 2),
                 max_hold_days=self._max_hold_days(entry),
                 entry_rationale=self._entry_rationale(entry, filing_summary=filing_summary),
                 themes=sorted(dict.fromkeys(entry.themes)),
@@ -119,10 +173,37 @@ class PremktPredictor:
                 cutoff_at=cutoff_at,
                 source="premkt_prediction",
                 market_date=market_date,
+                rule_score=rule_score,
+                ml_score=ml_score,
+                final_score=round(final_score, 2),
+                score_mode=row_score_mode,
+                model_path=str(model_path) if model_path is not None else None,
+                model_feature_version=model_feature_version,
+                model_missing_feature_count=len(model_missing_features),
+                model_missing_features=model_missing_features,
+                scoring_notes=notes,
             )
             predictions.append(prediction)
 
         return sorted(predictions, key=lambda row: (-row.score, row.symbol))
+
+    def _build_model_scorer(
+        self,
+        *,
+        model_path: Path | None,
+    ) -> tuple[PremktModelScorer | None, list[str]]:
+        if model_path is None:
+            return None, []
+        try:
+            return (
+                PremktModelScorer(
+                    model_path=model_path,
+                    database_path=self.settings.database_path,
+                ),
+                [],
+            )
+        except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
+            return None, [f"model_scoring_unavailable: {type(exc).__name__}: {exc}"]
 
     def _prediction_cutoff_at(
         self,

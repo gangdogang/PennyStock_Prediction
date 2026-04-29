@@ -63,8 +63,16 @@ def test_run_premkt_predictor_command_shows_latest_predictions(
         def __init__(self, incoming_settings) -> None:
             assert incoming_settings.database_path == db_path
 
-        def run(self, limit=None, lookback_hours=None, output_path=None):
-            del limit, lookback_hours, output_path
+        def run(
+            self,
+            limit=None,
+            lookback_hours=None,
+            output_path=None,
+            model_path=None,
+            score_mode="rule",
+            ml_weight=0.5,
+        ):
+            del limit, lookback_hours, output_path, model_path, score_mode, ml_weight
             snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
             insert_premkt_predictions(
                 db_path,
@@ -100,6 +108,84 @@ def test_run_premkt_predictor_command_shows_latest_predictions(
     assert result.exit_code == 0
     assert "Stored 1 premarket predictions." in result.stdout
     assert "AAA" in result.stdout
+
+
+def test_run_premkt_predictor_command_passes_model_scoring_options(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    model_path = tmp_path / "premkt_model.joblib"
+    export_path = tmp_path / "premkt_predictions_ml.json"
+    init_database(db_path)
+    settings = AppSettings(db_path=db_path)
+    calls = {}
+
+    class FakePredictor:
+        def __init__(self, incoming_settings) -> None:
+            assert incoming_settings.database_path == db_path
+
+        def run(
+            self,
+            limit=None,
+            lookback_hours=None,
+            output_path=None,
+            model_path=None,
+            score_mode="rule",
+            ml_weight=0.5,
+        ):
+            calls.update(
+                {
+                    "limit": limit,
+                    "lookback_hours": lookback_hours,
+                    "output_path": output_path,
+                    "model_path": model_path,
+                    "score_mode": score_mode,
+                    "ml_weight": ml_weight,
+                }
+            )
+            snapshot = create_snapshot_run(db_path, source="test", symbol_count=1)
+            prediction = PremktPrediction(
+                symbol="AAA",
+                score=60.0,
+                max_hold_days=2,
+                entry_rationale="blend-score",
+            )
+            insert_premkt_predictions(db_path, snapshot.snapshot_id, [prediction])
+            return [prediction]
+
+    monkeypatch.setattr("penny_stock_radar.cli.get_settings", lambda: settings)
+    monkeypatch.setattr("penny_stock_radar.cli.PremktPredictor", FakePredictor)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run-premkt-predictor",
+            "--limit",
+            "3",
+            "--lookback-hours",
+            "48",
+            "--model-path",
+            str(model_path),
+            "--score-mode",
+            "blend",
+            "--ml-weight",
+            "0.25",
+            "--export-json",
+            str(export_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls == {
+        "limit": 3,
+        "lookback_hours": 48,
+        "output_path": export_path,
+        "model_path": model_path,
+        "score_mode": "blend",
+        "ml_weight": 0.25,
+    }
 
 
 def test_show_live_market_command_reports_missing_kis_credentials(

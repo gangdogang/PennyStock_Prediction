@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import time
 
@@ -14,6 +15,15 @@ from ..db import (
 from ..services.backtest_data import BacktestDataManager
 from ..services.kis_historical import KISHistoricalDataService
 from ..services.market_activity import MarketActivityScanner
+from ..services.premkt_historical_replay import (
+    DEFAULT_REPLAY_DB,
+    PremktHistoricalReplayRunner,
+    ReplayOptions,
+    ReplaySafetyError,
+)
+from ..services.premkt_replay_validation import PremktReplayValidationEvaluator
+from ..services.premkt_model_training import PremktModelTrainer
+from ..services.premkt_training_dataset import PremktTrainingDatasetBuilder
 from .common import console, format_optional_number, format_optional_percent, trade_call_label
 
 app = typer.Typer()
@@ -51,6 +61,23 @@ def run_premkt_predictor(
         None,
         help="Optional JSON path for premarket prediction output.",
     ),
+    model_path: Path | None = typer.Option(
+        None,
+        "--model-path",
+        help="Optional trained model artifact for ML scoring.",
+    ),
+    score_mode: str = typer.Option(
+        "rule",
+        "--score-mode",
+        help="Scoring mode: rule, ml, or blend. Defaults to existing rule score.",
+    ),
+    ml_weight: float = typer.Option(
+        0.5,
+        "--ml-weight",
+        min=0.0,
+        max=1.0,
+        help="ML score weight for score-mode=blend.",
+    ),
 ) -> None:
     """Build and persist premarket predictions without placing any orders."""
     import penny_stock_radar.cli as root_cli
@@ -58,11 +85,18 @@ def run_premkt_predictor(
     settings = root_cli.get_settings()
     root_cli.init_database(settings.database_path)
     predictor = root_cli.PremktPredictor(settings)
-    predictions = predictor.run(
-        limit=limit,
-        lookback_hours=lookback_hours,
-        output_path=export_json,
-    )
+    try:
+        predictions = predictor.run(
+            limit=limit,
+            lookback_hours=lookback_hours,
+            output_path=export_json,
+            model_path=model_path,
+            score_mode=score_mode,
+            ml_weight=ml_weight,
+        )
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
     if not predictions:
         console.print("No premarket predictions were produced. Build a universe first.")
         raise typer.Exit(code=1)
@@ -102,6 +136,319 @@ def show_premkt_predictions(limit: int = typer.Option(20, help="Rows to display.
             str(row["entry_rationale"]),
         )
     console.print(table)
+
+
+@app.command("build-premkt-training-dataset")
+def build_premkt_training_dataset(
+    start_date: str = typer.Option(..., help="Inclusive start date in YYYY-MM-DD."),
+    end_date: str = typer.Option(..., help="Inclusive end date in YYYY-MM-DD."),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        help="CSV output path for point-in-time premarket feature/label rows.",
+    ),
+    db_path: Path = typer.Option(
+        Path("data/backtest_lab/penny_stock_radar.sqlite3"),
+        help="Historical minute-bar DB copy to read. Defaults to data/backtest_lab/.",
+    ),
+    cutoff_time: str = typer.Option(
+        "08:00",
+        help="Feature cutoff time in ET, HH:MM. Bars at or after this time are labels only.",
+    ),
+    label_risk_pct: float = typer.Option(
+        5.0,
+        min=1e-9,
+        help="Fixed percent risk denominator for label_net_r.",
+    ),
+) -> None:
+    """Build leakage-free premarket training rows from historical minute bars."""
+    try:
+        cutoff = datetime.strptime(cutoff_time, "%H:%M").time()
+        builder = PremktTrainingDatasetBuilder(
+            db_path,
+            cutoff_time=cutoff,
+            label_risk_pct=label_risk_pct,
+        )
+        summary = builder.build_csv(
+            start_date=start_date,
+            end_date=end_date,
+            output_path=output,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Failed to write training dataset: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"Premarket training dataset wrote [bold]{summary.row_count}[/bold] rows "
+        f"to [bold]{summary.output_path}[/bold]."
+    )
+    if summary.unlabeled_row_count:
+        console.print(
+            f"Rows without post-cutoff bars keep blank labels: {summary.unlabeled_row_count}."
+        )
+
+
+@app.command("train-premkt-model")
+def train_premkt_model(
+    dataset: Path = typer.Option(
+        Path("data/ml/premkt_training.csv"),
+        "--dataset",
+        help="Premarket training CSV produced by build-premkt-training-dataset.",
+    ),
+    model_out: Path = typer.Option(
+        Path("data/ml/premkt_model.joblib"),
+        "--model-out",
+        help="Path where the trained baseline model artifact is written.",
+    ),
+    metrics_out: Path = typer.Option(
+        Path("data/ml/premkt_model_metrics.json"),
+        "--metrics-out",
+        help="Path where validation metrics JSON is written.",
+    ),
+    validation_start_date: str | None = typer.Option(
+        None,
+        "--validation-start-date",
+        help="Optional YYYY-MM-DD first validation market_date. Defaults to last 20% of dates.",
+    ),
+) -> None:
+    """Train a baseline premarket winner classifier from the training CSV."""
+    try:
+        result = PremktModelTrainer().train(
+            dataset_path=dataset,
+            model_out=model_out,
+            metrics_out=metrics_out,
+            validation_start_date=validation_start_date,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Failed to write model training outputs: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    metrics = result.metrics
+    console.print(
+        f"Trained [bold]{metrics['model_type']}[/bold] on "
+        f"[bold]{metrics['train_row_count']}[/bold] rows; validated on "
+        f"[bold]{metrics['validation_row_count']}[/bold] rows."
+    )
+    console.print(f"Model: [bold]{result.model_path}[/bold]")
+    console.print(f"Metrics: [bold]{result.metrics_path}[/bold]")
+
+
+@app.command("run-premkt-model-replay")
+def run_premkt_model_replay(
+    start_date: str = typer.Option(..., help="Inclusive replay start date in YYYY-MM-DD."),
+    end_date: str = typer.Option(..., help="Inclusive replay end date in YYYY-MM-DD."),
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical replay DB copy. Defaults to data/backtest_lab/.",
+    ),
+    model_path: Path | None = typer.Option(
+        Path("data/ml/premkt_model.joblib"),
+        "--model-path",
+        help="Optional trained model artifact for replay scoring.",
+    ),
+    score_mode: str = typer.Option(
+        "blend",
+        "--score-mode",
+        help="Scoring mode: rule, ml, or blend.",
+    ),
+    ml_weight: float = typer.Option(
+        0.5,
+        "--ml-weight",
+        min=0.0,
+        max=1.0,
+        help="ML score weight for score-mode=blend.",
+    ),
+    export_dir: Path | None = typer.Option(
+        None,
+        "--export-dir",
+        help="Replay output directory. Defaults to data/backtest_lab/replays/<timestamp>.",
+    ),
+    cutoff_time: str = typer.Option(
+        "08:00",
+        "--cutoff-time",
+        help="Prediction cutoff time in ET, HH:MM.",
+    ),
+    max_runtime_seconds: float | None = typer.Option(
+        None,
+        "--max-runtime-seconds",
+        min=0.0,
+        help="Stop before starting another date after this many seconds.",
+    ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume an existing export directory and skip completed dates.",
+    ),
+    allow_live_db: bool = typer.Option(
+        False,
+        "--allow-live-db",
+        help="Explicitly allow data/penny_stock_radar.sqlite3. Off by default.",
+    ),
+) -> None:
+    """Run a local-only point-in-time historical premarket model replay."""
+    import penny_stock_radar.cli as root_cli
+
+    try:
+        cutoff = datetime.strptime(cutoff_time, "%H:%M").time()
+        settings = root_cli.get_settings()
+        runner = PremktHistoricalReplayRunner(
+            settings,
+            options=ReplayOptions(
+                start_date=start_date,
+                end_date=end_date,
+                db_path=db_path,
+                model_path=model_path,
+                score_mode=score_mode,
+                ml_weight=ml_weight,
+                export_dir=export_dir,
+                cutoff_time=cutoff,
+                max_runtime_seconds=max_runtime_seconds,
+                resume=resume,
+                allow_live_db=allow_live_db,
+            ),
+        )
+        result = runner.run()
+    except (FileNotFoundError, ReplaySafetyError, ValueError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"Premarket model replay wrote outputs to [bold]{result.export_dir}[/bold] "
+        f"with conclusion_status=[bold]{result.conclusion_status}[/bold]."
+    )
+    console.print(f"Manifest: [bold]{result.run_manifest_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+
+
+@app.command("evaluate-premkt-replay")
+def evaluate_premkt_replay(
+    calibration_dir: Path = typer.Option(
+        ...,
+        "--calibration-dir",
+        help="One-month calibration replay output directory.",
+    ),
+    out_of_sample_dir: Path = typer.Option(
+        ...,
+        "--out-of-sample-dir",
+        help="Three-month-or-longer fixed-parameter OOS replay output directory.",
+    ),
+    output: Path = typer.Option(
+        Path("data/backtest_lab/replays/evaluation_report.json"),
+        "--output",
+        help="evaluation_report.json output path.",
+    ),
+) -> None:
+    """Evaluate calibration/OOS premkt historical replay outputs for edge judgment."""
+    try:
+        result = PremktReplayValidationEvaluator().evaluate(
+            calibration_dir=calibration_dir,
+            out_of_sample_dir=out_of_sample_dir,
+            output_path=output,
+        )
+    except OSError as exc:
+        console.print(f"Failed to write evaluation report: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report["decision_gate"]
+    console.print(
+        f"Premarket replay evaluation wrote [bold]{output}[/bold] "
+        f"with decision_gate=[bold]{gate['status']}[/bold]."
+    )
+    for reason in gate.get("reasons", []):
+        console.print(f"- {reason}")
+
+
+@app.command("run-premkt-validation-plan")
+def run_premkt_validation_plan(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical replay DB copy under data/backtest_lab/.",
+    ),
+    model_path: Path | None = typer.Option(
+        Path("data/ml/premkt_model.joblib"),
+        "--model-path",
+        help="Fixed trained model artifact for calibration and OOS replay.",
+    ),
+    calibration_start: str = typer.Option(..., "--calibration-start", help="YYYY-MM-DD."),
+    calibration_end: str = typer.Option(..., "--calibration-end", help="YYYY-MM-DD."),
+    oos_start: str = typer.Option(..., "--oos-start", help="YYYY-MM-DD."),
+    oos_end: str = typer.Option(..., "--oos-end", help="YYYY-MM-DD."),
+    export_root: Path | None = typer.Option(
+        None,
+        "--export-root",
+        help="Validation output root. Defaults to data/backtest_lab/replays/validation_<timestamp>.",
+    ),
+    score_mode: str = typer.Option("blend", "--score-mode", help="Scoring mode: rule, ml, or blend."),
+    ml_weight: float = typer.Option(0.5, "--ml-weight", min=0.0, max=1.0),
+    cutoff_time: str = typer.Option("08:00", "--cutoff-time", help="Prediction cutoff time in ET, HH:MM."),
+    allow_live_db: bool = typer.Option(
+        False,
+        "--allow-live-db",
+        help="Explicitly allow data/penny_stock_radar.sqlite3. Off by default.",
+    ),
+) -> None:
+    """Run calibration and OOS replay, then write evaluation_report.json."""
+    import penny_stock_radar.cli as root_cli
+
+    try:
+        cutoff = datetime.strptime(cutoff_time, "%H:%M").time()
+        root = export_root or Path("data/backtest_lab/replays") / datetime.now().strftime(
+            "validation_%Y%m%d_%H%M%S"
+        )
+        settings = root_cli.get_settings()
+        calibration = PremktHistoricalReplayRunner(
+            settings,
+            options=ReplayOptions(
+                start_date=calibration_start,
+                end_date=calibration_end,
+                db_path=db_path,
+                model_path=model_path,
+                score_mode=score_mode,
+                ml_weight=ml_weight,
+                export_dir=root / "calibration",
+                cutoff_time=cutoff,
+                allow_live_db=allow_live_db,
+            ),
+        ).run()
+        out_of_sample = PremktHistoricalReplayRunner(
+            settings,
+            options=ReplayOptions(
+                start_date=oos_start,
+                end_date=oos_end,
+                db_path=db_path,
+                model_path=model_path,
+                score_mode=score_mode,
+                ml_weight=ml_weight,
+                export_dir=root / "out_of_sample",
+                cutoff_time=cutoff,
+                allow_live_db=allow_live_db,
+            ),
+        ).run()
+        evaluation = PremktReplayValidationEvaluator().evaluate(
+            calibration_dir=calibration.export_dir,
+            out_of_sample_dir=out_of_sample.export_dir,
+            output_path=root / "evaluation_report.json",
+        )
+    except (FileNotFoundError, ReplaySafetyError, ValueError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Validation root: [bold]{root}[/bold]")
+    console.print(f"Calibration summary: [bold]{calibration.summary_path}[/bold]")
+    console.print(f"OOS summary: [bold]{out_of_sample.summary_path}[/bold]")
+    console.print(
+        "Evaluation report: "
+        f"[bold]{evaluation.output_path}[/bold] "
+        f"decision_gate=[bold]{evaluation.report['decision_gate']['status']}[/bold]"
+    )
 
 
 @app.command("backfill-kis-minute")

@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-04-23
+최종 갱신일: 2026-04-29
 
 ## 운영 원칙
 
@@ -40,6 +40,14 @@
 - 2026-04-23 보강으로 Windows paper drive 런처의 평가 run 은 predictor effect 를 기본 활성화하고, disabled/identical bucket 결과는 review gate 에서 구분한다.
 - `capture-kis-l1-window` 는 반복 적재 후 coverage report/gate 를 갱신하며, L1 timestamp drift/snapshot_date mismatch 는 gate failure 로 남긴다.
 - 현재 작업 범위는 Step 4/5 의 측정/현실화 보강이다. capacity, intraday decay, catalyst split, nonlinear slippage proxy, halt freeze/resume penalty, tail-risk KPI 를 추가하되 live 전환과 predictor 파라미터 튜닝은 하지 않는다.
+- PremktPredictor 학습 준비 1일차는 성능 판별이 아니라 학습 데이터셋 생성 기반이다. `build-premkt-training-dataset` 은 cutoff 이전 minute bar 만 feature 로 쓰고, cutoff 이후 bar 로 label 을 만들며, cutoff 이후 bar 가 없으면 label 을 빈 값으로 남긴다.
+- PremktPredictor 학습 준비 2단계는 baseline model training / validation signal 확인으로 완료했다. trading 성능 판단이 아니다.
+- PremktPredictor 학습 준비 3단계는 모델 점수 연결로 완료했다. `run-premkt-predictor --model-path ... --score-mode rule|ml|blend --ml-weight ...` 가 optional scoring 을 수행하고, 기본값은 기존 rule-based 점수와 동일하다. 이 단계는 trading 성능 판단은 아직 아님.
+- PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현이다. `run-premkt-model-replay` 는 실시간 하루하루를 기다리지 않고 과거 DB 사본으로 `predictor_weighted`, `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 을 같은 기간에서 smoke 비교하는 경로다.
+- replay 의 핵심 원칙은 미래 데이터 누수 금지다. D일 predictor score 는 D cutoff 이전 feature 만 쓰고, intraday decision 은 simulated time 이전/현재 bar 만 본다.
+- Step 5 historical replay 검증은 구현된 replay 산출물을 대상으로만 적용한다. `evaluate-premkt-replay` 는 1개월 calibration 과 3개월 이상 out-of-sample 산출물의 `replay_summary.json`, `run_manifest.json`, KPI/거래 CSV 를 읽어 `evaluation_report.json` 을 만든다.
+- 현재 smoke/sanity/calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
+- 다음 우선순위는 fixed parameter OOS 결과를 바탕으로 shadow/live paper 검증을 진행하는 것이다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.
