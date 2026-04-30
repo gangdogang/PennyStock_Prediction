@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-04-29
+최종 갱신일: 2026-04-30
 
 ## 운영 원칙
 
@@ -47,6 +47,9 @@
 - replay 의 핵심 원칙은 미래 데이터 누수 금지다. D일 predictor score 는 D cutoff 이전 feature 만 쓰고, intraday decision 은 simulated time 이전/현재 bar 만 본다.
 - Step 5 historical replay 검증은 구현된 replay 산출물을 대상으로만 적용한다. `evaluate-premkt-replay` 는 1개월 calibration 과 3개월 이상 out-of-sample 산출물의 `replay_summary.json`, `run_manifest.json`, KPI/거래 CSV 를 읽어 `evaluation_report.json` 을 만든다.
 - 현재 smoke/sanity/calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
+- 2026-04-30: historical replay 의 EXIT row `analysis_label` 을 entry-time label 로 고정하고 `exit_analysis_label` 을 별도 기록하게 했다. 기존 OneDrive run 의 label별 손실 attribution, 특히 `WAIT_PULLBACK` 손실은 청산 시점 label 이 섞였을 수 있으므로 새 코드로 다시 산출해야 한다.
+- 2026-04-30: `run-premkt-model-replay` 에 entry label include/exclude, replay 전용 `--predictor-k1/--predictor-k2`, `--require-l1-quotes-for-entries` 옵션과 `paper_entry_label_kpis.csv` 를 추가했다.
+- 2026-04-30: `OneDrive/Penny_Stock_Runs` 기존 산출물 인벤토리를 `docs/STATUS.md` 에 기록했다. 확인된 1개월 replay 는 2025년 6월 20거래일이며 2개월 historical replay 는 발견하지 못했다.
 - 다음 우선순위는 fixed parameter OOS 결과를 바탕으로 shadow/live paper 검증을 진행하는 것이다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.

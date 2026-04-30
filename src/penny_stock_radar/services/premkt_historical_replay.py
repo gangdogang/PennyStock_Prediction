@@ -38,6 +38,11 @@ REPLAY_BUCKETS = (
     MOMENTUM_ONLY_BUCKET,
     WATCHLIST_BLIND_MOMENTUM_BUCKET,
 )
+DEFAULT_ENTRY_LABELS = (
+    "OPENING_RANGE_CANDIDATE",
+    "CONDITIONAL_ENTRY",
+    "NEWS_CHECK_FIRST",
+)
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,9 @@ class ReplayOptions:
     max_runtime_seconds: float | None = None
     resume: bool = False
     allow_live_db: bool = False
+    entry_labels: tuple[str, ...] = DEFAULT_ENTRY_LABELS
+    exclude_entry_labels: tuple[str, ...] = ()
+    require_l1_quotes_for_entries: bool = False
 
 
 @dataclass
@@ -64,6 +72,7 @@ class _Position:
     stop_price: float
     opened_at: datetime
     entry_score: float
+    entry_label: str
     predictor_score: float | None
     predictor_weight: float
     entry_reasons: list[str]
@@ -122,6 +131,10 @@ class PremktHistoricalReplayRunner:
             raise ValueError("score_mode must be one of: blend, ml, rule")
         if not 0.0 <= self.options.ml_weight <= 1.0:
             raise ValueError("ml_weight must be between 0.0 and 1.0")
+        if not self.options.entry_labels:
+            raise ValueError("At least one entry label must be enabled.")
+        if not (set(self.options.entry_labels) - set(self.options.exclude_entry_labels)):
+            raise ValueError("Entry label policy excludes all enabled labels.")
         validate_replay_paths(
             db_path=self.db_path,
             export_dir=self.export_dir,
@@ -516,6 +529,7 @@ class PremktHistoricalReplayRunner:
         predictions_by_symbol: dict[str, PremktPrediction],
     ) -> list[dict[str, object]]:
         trades: list[dict[str, object]] = []
+        allowed_entry_labels = set(self.options.entry_labels) - set(self.options.exclude_entry_labels)
         for row in activity:
             position = state.positions.get(row.symbol)
             if position is not None and row.last_price is not None and row.last_price <= position.stop_price:
@@ -544,7 +558,9 @@ class PremktHistoricalReplayRunner:
             )
             if row.analysis_score < threshold:
                 continue
-            if row.analysis_label not in {"OPENING_RANGE_CANDIDATE", "CONDITIONAL_ENTRY", "NEWS_CHECK_FIRST"}:
+            if self.options.require_l1_quotes_for_entries and not row.has_live_quote:
+                continue
+            if row.analysis_label not in allowed_entry_labels:
                 continue
             entry = self._open_position(
                 state,
@@ -598,6 +614,7 @@ class PremktHistoricalReplayRunner:
             stop_price=stop_price,
             opened_at=simulated_time,
             entry_score=row.analysis_score,
+            entry_label=row.analysis_label,
             predictor_score=predictor_score,
             predictor_weight=predictor_weight,
             entry_reasons=[*row.reasons, f"predictor_score:{predictor_score:.1f}" if predictor_score is not None else ""],
@@ -624,12 +641,14 @@ class PremktHistoricalReplayRunner:
             "predictor_weight": round(predictor_weight, 6),
             "analysis_score": row.analysis_score,
             "analysis_label": row.analysis_label,
+            "entry_analysis_label": row.analysis_label,
+            "exit_analysis_label": "",
             "entry_reasons": ", ".join(reason for reason in position.entry_reasons if reason),
             "exit_reason": "",
+            "holding_minutes": "",
+            "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
-            "shares_pct_of_bar_volume": fill.shares_pct_of_bar_volume,
-            "notional_pct_of_bar_dollar_volume": fill.notional_pct_of_bar_dollar_volume,
-            "capacity_limited": int(fill.capacity_limited),
+            **_fill_metrics(fill),
         }
 
     def _close_position(
@@ -667,6 +686,7 @@ class PremktHistoricalReplayRunner:
         net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost
         state.cash += (exit_price * fill.quantity) - fill.transaction_cost
         state.positions.pop(position.symbol, None)
+        holding_minutes = (simulated_time - position.opened_at).total_seconds() / 60.0
         row_payload = {
             "run_id": self.run_id,
             "market_date": market_date,
@@ -686,13 +706,15 @@ class PremktHistoricalReplayRunner:
             "predictor_score": position.predictor_score,
             "predictor_weight": round(position.predictor_weight, 6),
             "analysis_score": position.entry_score,
-            "analysis_label": row.analysis_label,
+            "analysis_label": position.entry_label,
+            "entry_analysis_label": position.entry_label,
+            "exit_analysis_label": row.analysis_label,
             "entry_reasons": ", ".join(reason for reason in position.entry_reasons if reason),
             "exit_reason": reason,
+            "holding_minutes": round(holding_minutes, 6),
+            "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
-            "shares_pct_of_bar_volume": fill.shares_pct_of_bar_volume,
-            "notional_pct_of_bar_dollar_volume": fill.notional_pct_of_bar_dollar_volume,
-            "capacity_limited": int(fill.capacity_limited),
+            **_fill_metrics(fill),
         }
         state.trades.append(row_payload)
         return row_payload
@@ -712,6 +734,9 @@ class PremktHistoricalReplayRunner:
                 "cutoff_time": self.options.cutoff_time.strftime("%H:%M"),
                 "max_runtime_seconds": self.options.max_runtime_seconds,
                 "resume": self.options.resume,
+                "entry_labels": list(self.options.entry_labels),
+                "exclude_entry_labels": list(self.options.exclude_entry_labels),
+                "require_l1_quotes_for_entries": self.options.require_l1_quotes_for_entries,
             },
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
@@ -746,6 +771,12 @@ class PremktHistoricalReplayRunner:
                 MOMENTUM_ONLY_BUCKET: "watchlist metadata + momentum; predictor score/weight ignored",
                 WATCHLIST_BLIND_MOMENTUM_BUCKET: "same scanned symbols; watchlist/predictor metadata removed before decision",
             },
+            "entry_label_policy": {
+                "include": list(self.options.entry_labels),
+                "exclude": list(self.options.exclude_entry_labels),
+                "require_l1_quotes_for_entries": self.options.require_l1_quotes_for_entries,
+                "analysis_label_semantics": "paper_trade_log.analysis_label is the entry-time label; exit_analysis_label stores the label observed at exit.",
+            },
         }
 
     def _build_summary(self, progress: dict[str, Any]) -> dict[str, object]:
@@ -762,6 +793,7 @@ class PremktHistoricalReplayRunner:
             if row.get("status") == "failed"
         ]
         bucket_results = self._bucket_results()
+        entry_label_results = self._entry_label_results()
         conclusion = self._conclusion_status(completed=completed, skipped=skipped, failed=failed)
         return {
             "start_date": self.options.start_date,
@@ -776,6 +808,7 @@ class PremktHistoricalReplayRunner:
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
             "bucket_results": bucket_results,
+            "entry_label_results": entry_label_results,
             "predictor_weighted_vs_watchlist_momentum": _pair_diff(
                 bucket_results,
                 PREDICTOR_WEIGHTED_BUCKET,
@@ -810,6 +843,40 @@ class PremktHistoricalReplayRunner:
             }
         return results
 
+    def _entry_label_results(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            bucket = str(row.get("bucket") or "")
+            label = str(row.get("analysis_label") or "")
+            grouped.setdefault((bucket, label), []).append(row)
+
+        results: list[dict[str, object]] = []
+        for (bucket, label), rows in sorted(grouped.items()):
+            pnl_values = [float(row.get("net_pnl") or 0.0) for row in rows]
+            wins = [value for value in pnl_values if value > 0]
+            losses = [value for value in pnl_values if value < 0]
+            stop_rows = [row for row in rows if row.get("exit_reason") == "stop_loss"]
+            quick_stop_rows = [
+                row
+                for row in stop_rows
+                if float(row.get("holding_minutes") or 0.0) <= 3.0
+            ]
+            results.append(
+                {
+                    "bucket": bucket,
+                    "analysis_label": label,
+                    "trade_count": len(rows),
+                    "stop_loss_count": len(stop_rows),
+                    "quick_stop_3m_count": len(quick_stop_rows),
+                    "session_end_count": sum(1 for row in rows if row.get("exit_reason") == "session_end"),
+                    "total_net_pnl": round(sum(pnl_values), 6),
+                    "win_rate": round((len(wins) / len(rows)) if rows else 0.0, 6),
+                    "profit_factor": round((sum(wins) / abs(sum(losses))) if losses else 0.0, 6),
+                }
+            )
+        return results
+
     def _conclusion_status(
         self,
         *,
@@ -835,6 +902,10 @@ class PremktHistoricalReplayRunner:
             for bucket, values in dict(summary["bucket_results"]).items()
         ]
         _write_csv(self.export_dir / "paper_backtest_kpis.csv", bucket_rows)
+        _write_csv(
+            self.export_dir / "paper_entry_label_kpis.csv",
+            list(summary.get("entry_label_results", [])),
+        )
         pair_rows = [
             {"left_bucket": left, "right_bucket": right, **_pair_diff(dict(summary["bucket_results"]), left, right)}
             for left, right in (
@@ -1042,6 +1113,27 @@ def _pair_diff(
         "trade_count_diff": int(left_row.get("trade_count", 0) or 0) - int(right_row.get("trade_count", 0) or 0),
         "net_pnl_diff": round(float(left_row.get("total_net_pnl", 0.0) or 0.0) - float(right_row.get("total_net_pnl", 0.0) or 0.0), 6),
     }
+
+
+def _fill_metrics(fill: Any) -> dict[str, object]:
+    return {
+        "fill_reference_price": _round_optional(fill.fill_reference_price),
+        "fill_slippage_pct": _round_optional(fill.fill_slippage_pct),
+        "participation_slippage_pct": _round_optional(fill.participation_slippage_pct),
+        "bar_volume": _round_optional(fill.bar_volume),
+        "bar_dollar_volume": _round_optional(fill.bar_dollar_volume),
+        "shares_pct_of_bar_volume": _round_optional(fill.shares_pct_of_bar_volume),
+        "notional_pct_of_bar_dollar_volume": _round_optional(fill.notional_pct_of_bar_dollar_volume),
+        "estimated_capacity_at_1pct_volume": _round_optional(fill.estimated_capacity_at_1pct_volume),
+        "estimated_capacity_at_2pct_volume": _round_optional(fill.estimated_capacity_at_2pct_volume),
+        "capacity_limited": int(fill.capacity_limited),
+    }
+
+
+def _round_optional(value: object, digits: int = 6) -> object:
+    if value is None:
+        return ""
+    return round(float(value), digits)
 
 
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:

@@ -16,6 +16,7 @@ from ..services.backtest_data import BacktestDataManager
 from ..services.kis_historical import KISHistoricalDataService
 from ..services.market_activity import MarketActivityScanner
 from ..services.premkt_historical_replay import (
+    DEFAULT_ENTRY_LABELS,
     DEFAULT_REPLAY_DB,
     PremktHistoricalReplayRunner,
     ReplayOptions,
@@ -27,6 +28,22 @@ from ..services.premkt_training_dataset import PremktTrainingDatasetBuilder
 from .common import console, format_optional_number, format_optional_percent, trade_call_label
 
 app = typer.Typer()
+
+
+def _normalize_label_options(
+    values: list[str] | None,
+    *,
+    default: tuple[str, ...] = DEFAULT_ENTRY_LABELS,
+) -> tuple[str, ...]:
+    if values is None:
+        return default
+    labels: list[str] = []
+    for value in values:
+        for part in str(value).split(","):
+            normalized = part.strip().upper()
+            if normalized and normalized not in labels:
+                labels.append(normalized)
+    return tuple(labels)
 
 
 def _resolve_l1_capture_symbols(
@@ -291,6 +308,33 @@ def run_premkt_model_replay(
         "--allow-live-db",
         help="Explicitly allow data/penny_stock_radar.sqlite3. Off by default.",
     ),
+    entry_label: list[str] | None = typer.Option(
+        None,
+        "--entry-label",
+        help="Entry label to allow. Repeat for label ablation. Defaults to the replay baseline labels.",
+    ),
+    exclude_entry_label: list[str] | None = typer.Option(
+        None,
+        "--exclude-entry-label",
+        help="Entry label to disable. Repeat to run label ablations.",
+    ),
+    require_l1_quotes_for_entries: bool = typer.Option(
+        False,
+        "--require-l1-quotes-for-entries",
+        help="Skip replay entries when the bar lacks bid/ask quote data.",
+    ),
+    predictor_k1: float | None = typer.Option(
+        None,
+        "--predictor-k1",
+        min=0.0,
+        help="Override paper_predictor_weight_k1 for this replay.",
+    ),
+    predictor_k2: float | None = typer.Option(
+        None,
+        "--predictor-k2",
+        min=0.0,
+        help="Override paper_predictor_weight_k2 for this replay.",
+    ),
 ) -> None:
     """Run a local-only point-in-time historical premarket model replay."""
     import penny_stock_radar.cli as root_cli
@@ -298,6 +342,13 @@ def run_premkt_model_replay(
     try:
         cutoff = datetime.strptime(cutoff_time, "%H:%M").time()
         settings = root_cli.get_settings()
+        settings_overrides = {}
+        if predictor_k1 is not None:
+            settings_overrides["paper_predictor_weight_k1"] = predictor_k1
+        if predictor_k2 is not None:
+            settings_overrides["paper_predictor_weight_k2"] = predictor_k2
+        if settings_overrides:
+            settings = settings.model_copy(update=settings_overrides)
         runner = PremktHistoricalReplayRunner(
             settings,
             options=ReplayOptions(
@@ -312,6 +363,9 @@ def run_premkt_model_replay(
                 max_runtime_seconds=max_runtime_seconds,
                 resume=resume,
                 allow_live_db=allow_live_db,
+                entry_labels=_normalize_label_options(entry_label),
+                exclude_entry_labels=_normalize_label_options(exclude_entry_label, default=()),
+                require_l1_quotes_for_entries=require_l1_quotes_for_entries,
             ),
         )
         result = runner.run()

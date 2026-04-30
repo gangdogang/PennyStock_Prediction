@@ -207,7 +207,107 @@ def test_replay_resume_skips_completed_dates(monkeypatch, tmp_path: Path) -> Non
     assert len(trade_rows) == len({(row["bucket"], row["symbol"], row["event"]) for row in trade_rows})
 
 
-def _build_replay_fixture_db(tmp_path: Path) -> Path:
+def test_replay_trade_log_uses_entry_label_for_exit_attribution(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_replay_fixture_db(tmp_path, exit_close=1.0)
+    export_dir = tmp_path / "replays" / "run_entry_label"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    exit_row = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+    label_kpis = list(csv.DictReader((export_dir / "paper_entry_label_kpis.csv").open(encoding="utf-8")))
+
+    assert exit_row["exit_reason"] == "stop_loss"
+    assert exit_row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert exit_row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert exit_row["exit_analysis_label"] == "WAIT_PULLBACK"
+    assert float(exit_row["holding_minutes"]) == pytest.approx(1.0)
+    assert exit_row["fill_reference_price"]
+    assert exit_row["fill_slippage_pct"]
+    assert exit_row["estimated_capacity_at_1pct_volume"]
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
+        and row["stop_loss_count"] == "1"
+        and row["quick_stop_3m_count"] == "1"
+        for row in label_kpis
+    )
+
+
+def test_replay_cli_supports_label_and_predictor_effect_overrides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_replay_fixture_db(tmp_path)
+    export_dir = tmp_path / "replays" / "run_overrides"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+            "--entry-label",
+            "CONDITIONAL_ENTRY",
+            "--predictor-k1",
+            "0",
+            "--predictor-k2",
+            "0",
+            "--require-l1-quotes-for-entries",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    manifest = json.loads((export_dir / "run_manifest.json").read_text(encoding="utf-8"))
+    trade_log = export_dir / "paper_trade_log.csv"
+
+    assert manifest["settings_snapshot"]["paper_predictor_weight_k1"] == 0
+    assert manifest["settings_snapshot"]["paper_predictor_weight_k2"] == 0
+    assert manifest["entry_label_policy"]["include"] == ["CONDITIONAL_ENTRY"]
+    assert manifest["entry_label_policy"]["require_l1_quotes_for_entries"] is True
+    assert trade_log.read_text(encoding="utf-8") == ""
+
+
+def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Path:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     snapshot = create_snapshot_run(
@@ -273,7 +373,7 @@ def _build_replay_fixture_db(tmp_path: Path) -> Path:
             _bar("AAA", "2026-04-10T07:58:00-04:00", 1.00, 1.08, 0.99, 1.05, 100),
             _bar("AAA", "2026-04-10T07:59:00-04:00", 1.05, 1.12, 1.04, 1.10, 200),
             _bar("AAA", "2026-04-10T08:00:00-04:00", 1.10, 2.00, 1.09, 1.90, 100_000),
-            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.10, 1.80, 2.00, 50_000),
+            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.10, min(exit_close, 1.80), exit_close, 50_000),
             _bar("FUTR", "2026-04-11T07:59:00-04:00", 1.00, 4.00, 1.00, 4.00, 900_000),
         ],
     )

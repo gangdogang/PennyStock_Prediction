@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-04-29
+최종 정리일: 2026-04-30
 
 ## 현재 capabilities
 
@@ -35,6 +35,7 @@
 - `build-premkt-training-dataset` CLI 는 `data/backtest_lab/` DB 사본의 `historical_minute_bars` 로 D 08:00 ET 이전 premarket feature 와 cutoff 이후 label 을 분리한 학습용 CSV 를 만들 수 있다.
 - `train-premkt-model` CLI 는 1단계 CSV 를 읽어 `label_winner` baseline classifier 를 학습하고, `market_date` 시간순 split 기준 model artifact 와 metrics JSON 을 저장할 수 있다.
 - `run-premkt-model-replay` CLI 는 `data/backtest_lab/` DB 사본을 기본 입력으로, point-in-time universe/watchlist 와 cutoff 이전 model feature 만 사용해 과거 날짜 범위를 local-only 로 재생하고 replay 산출물을 `data/backtest_lab/replays/<run_id>/` 아래에 남길 수 있다.
+- `run-premkt-model-replay` 는 entry label include/exclude, replay 전용 `k1/k2` override, L1 quote 필수 entry 옵션을 지원하며, trade log 에 entry-time label, exit-time label, fill/slippage/capacity metric, label별 stop-out attribution CSV 를 남긴다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
@@ -60,13 +61,36 @@
 - PremktPredictor 학습 준비 1일차 산출물은 성능 판별이 아니라 누수 없는 학습 데이터셋 생성 기반이다. cutoff 이후 minute bar 가 없으면 row 는 유지하고 label 컬럼은 비워 둔다.
 - PremktPredictor 학습 준비 3단계는 모델 점수 연결이며, trading 성능 판단은 아직 아님. 모델 점수에 필요한 historical minute feature 가 부족하면 rule score 로 fallback 하고 JSON lineage 에 이유를 남긴다.
 - historical replay smoke 또는 calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
+- 2026-04-30 이전 historical replay CSV 의 `analysis_label` 은 EXIT row 에서 청산 시점 label 로 기록됐을 수 있다. `WAIT_PULLBACK` 등 entry label attribution 은 새 replay 산출물의 `entry_analysis_label` / `exit_analysis_label` 기준으로 다시 봐야 한다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
+
+## OneDrive 기존 run 인벤토리
+
+2026-04-30 확인 기준 `OneDrive/Penny_Stock_Runs` 에는 Windows 에서 생성된 2025년 6월 historical replay 와 2026년 4월 paper run 이 있다. 이 산출물은 구버전 코드 결과이므로 실성능 평가가 아니라 참고/경고 신호로만 본다.
+
+1개월 historical replay:
+
+| 폴더 | 기간 | 완료 거래일 | k1/k2 | 해석 |
+| --- | --- | ---: | --- | --- |
+| `calibration_2025_06_rule_k0` | 2025-06-02~2025-06-30 | 20 | 0/0 | predictor 와 momentum 동일, 약 -$4,856 |
+| `june_2025_momentum_conservative` | 2025-06-02~2025-06-30 | 20 | 0/0 | `calibration_2025_06_rule_k0` 와 동일 계열 |
+| `june_2025_sec_universe` | 2025-06-02~2025-06-30 | 20 | 1/1 | predictor -$1,217, momentum -$1,787 |
+| `june_2025_sec_strict_dv100k_top30` | 2025-06-02~2025-06-30 | 20 | 1/1 | predictor -$7,811, momentum -$6,800 |
+| `june_2025_sec_strict_conservative` | 2025-06-02~2025-06-30 | 20 | 1/1 | predictor -$3,446, momentum -$3,039 |
+
+미완성/보조 산출물:
+
+- `calibration_2025_06_rule_k025` 는 2025-06-24 에서 `running`, 이후 날짜가 `pending` 으로 남아 summary/CSV 가 없어 완료 run 으로 보지 않는다.
+- `coverage_checks/2025-06-02_gate.json` 기준 L1 premarket coverage 는 0% 로 gate failed 다.
+- 2개월 historical replay 산출물은 `OneDrive/Penny_Stock_Runs` 안에서 확인되지 않았다.
+- `paper_runs/`, `paper_24h_runs/` 는 2026년 4월 live/paper 산출물이며 closed trade 수가 작고 `paper_performance_gate.json` 이 `edge_judgment_allowed=false` 를 기록하므로 predictor edge 판단에 쓰지 않는다.
 
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
 - 다음 우선순위는 Step 5 historical replay 검증 프로토콜에 맞춰 1개월 calibration 과 3개월 이상 out-of-sample 을 실제 로컬 historical DB 사본으로 실행한 뒤, shadow/live paper 검증으로 넘어가는 것이다.
+- Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-04-30 이후 코드로 다시 생성한다.
 - Step 0 coverage 장기 루프로 돌아가기 전에 얇은 bucket taxonomy v2 의 v1 범위를 고정했다. 범위는 `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 3개 버킷과 pairwise within-scan ablation 리포트다.
 - 다음 우선순위는 Windows 에서 새 paper run 을 실행해 `run_manifest.json` 의 `predictor_effect.enabled=true` 와 세 bucket diff 해석 가능 여부를 확인한 뒤, `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 coverage 를 계속 채우는 것이다.
 - 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.
