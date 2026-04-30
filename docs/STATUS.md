@@ -85,17 +85,35 @@
 - 2개월 historical replay 산출물은 `OneDrive/Penny_Stock_Runs` 안에서 확인되지 않았다.
 - `paper_runs/`, `paper_24h_runs/` 는 2026년 4월 live/paper 산출물이며 closed trade 수가 작고 `paper_performance_gate.json` 이 `edge_judgment_allowed=false` 를 기록하므로 predictor edge 판단에 쓰지 않는다.
 
+2026-05-01 추가 확인 기준 `replay_after_809a57c_2025_06/` 에는 `4ff3214` 코드로 다시 생성한 2025년 6월 replay 가 있다. 이 산출물은 `entry_analysis_label` / `exit_analysis_label` 이 분리된 새 schema 이지만, 여전히 L1 bid/ask coverage warning 이 있어 minute-only sanity 결과로만 본다.
+
+| 폴더 | 기간 | k1/k2 | 핵심 결과 |
+| --- | --- | --- | --- |
+| `baseline_k0` | 2025-06-02~2025-06-30 | 0/0 | predictor=momentum -$6,946, blind -$5,179 |
+| `k025_size0` | 2025-06-02~2025-06-30 | 0.25/0 | `baseline_k0` 와 동일, threshold 완화 효과 없음 |
+| `k025_size025` | 2025-06-02~2025-06-30 | 0.25/0.25 | predictor -$7,864, sizing 증폭이 손실 확대 |
+| `conditional_only` | 2025-06-02~2025-06-30 | 0/0 | predictor=momentum -$5,426 |
+| `no_opening_range` | 2025-06-02~2025-06-30 | 0/0 | predictor=momentum -$5,426, blind -$5,179 |
+| `require_l1_smoke` | 2025-06-02~2025-06-03 | 0/0 | L1 필수 진입 시 거래 0건 |
+
+새 run 기준 손실 가설:
+
+- `OPENING_RANGE_CANDIDATE` 제거는 baseline 대비 손실을 줄였지만 전체 결과는 여전히 음수다.
+- `k1=0.25` 는 진입 수/손익을 바꾸지 않아 현재 후보 대부분이 이미 threshold 위에 있었던 것으로 본다.
+- `k2=0.25` 는 거래 수와 승률 변화 없이 predictor bucket 손실만 키웠으므로 edge 검증 전 size amplification 은 계속 보류한다.
+- baseline predictor/momentum 에서 stop loss 는 482/569건이고, `OPENING_RANGE_CANDIDATE` entry stop 비율은 93.8%, `CONDITIONAL_ENTRY` entry stop 비율은 77.9% 다.
+- exit 시점 label 은 `WAIT_PULLBACK` 과 `OPENING_RANGE_CANDIDATE` 에 손실이 집중되고, `CONDITIONAL_ENTRY` exit label 은 상대적으로 양호하다. 다만 minute-only stop/exit 구조라 매매 품질 결론은 금지한다.
+- 새 replay 산출물은 label 전이, quick stop, 심볼 손실 집중도, 보유시간 bucket 을 보기 위해 `paper_entry_exit_label_matrix.csv`, `paper_stop_out_diagnostics.csv`, `paper_symbol_loss_concentration.csv`, `paper_hold_bucket_kpis.csv` 를 추가로 저장한다. 이 네 파일은 성능 판정용이 아니라 다음 ablation 우선순위 결정용이다.
+
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
-- 다음 우선순위는 Step 5 historical replay 검증 프로토콜에 맞춰 1개월 calibration 과 3개월 이상 out-of-sample 을 실제 로컬 historical DB 사본으로 실행한 뒤, shadow/live paper 검증으로 넘어가는 것이다.
-- Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-04-30 이후 코드로 다시 생성한다.
-- Step 0 coverage 장기 루프로 돌아가기 전에 얇은 bucket taxonomy v2 의 v1 범위를 고정했다. 범위는 `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 3개 버킷과 pairwise within-scan ablation 리포트다.
-- 다음 우선순위는 Windows 에서 새 paper run 을 실행해 `run_manifest.json` 의 `predictor_effect.enabled=true` 와 세 bucket diff 해석 가능 여부를 확인한 뒤, `BACKTEST_ROADMAP_KO.md` Step 0 으로 돌아가 coverage 를 계속 채우는 것이다.
+- 즉시 순서는 `진단 CSV가 포함된 1개월 baseline 재생성 -> label/quick-stop 손실 원인 분해 -> entry filter ablation -> stop/exit 구조 ablation -> 고정 파라미터 3개월 이상 OOS` 다.
+- Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
+- `k2` size amplification 과 winner add/scaling-in 은 entry/stop 구조가 음수 expectancy 를 벗어난 뒤에만 켠다. 현재는 손실을 키우는지 줄이는지 평가할 KPI 배선부터 먼저 만든다.
 - 3개월 기준은 실제 시간을 기다리는 운영이 아니라 과거 데이터 재생 기준이며, 개발 루프는 2일 smoke -> 5-10일 sanity -> 1개월 calibration -> 3개월 이상 out-of-sample 순서로 진행한다.
-- 현재 저장소 정리 작업의 Step 1~10과 Step -1은 완료됐고, 다음 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
-- 그 다음에는 shadow 모드와 out-of-sample 검증으로 넘어간다.
+- Step 0 coverage 60% gate 와 L1 archive 적재는 병행 과제다. L1 없는 replay 는 계속 smoke/sanity 판정으로만 유지한다.
 - Step 6은 완료됐고 multiday 설정은 `AppSettings` 와 `.env.example` 로 승격됐으며 env override 회귀 테스트와 골든 검증을 통과했다.
 - Step 7은 완료됐고 KIS live timestamp 정규화와 live JSONL observability 추가 후 전체 `173 passed` 를 확인했다.
 - Step 8은 완료됐고 coverage report latest JSON 과 gate 상태 파일이 기준 경로에 고정됐으며 전체 `176 passed` 를 확인했다.

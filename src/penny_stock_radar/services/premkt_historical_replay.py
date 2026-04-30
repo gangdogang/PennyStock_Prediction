@@ -809,6 +809,12 @@ class PremktHistoricalReplayRunner:
             "export_dir": str(self.export_dir),
             "bucket_results": bucket_results,
             "entry_label_results": entry_label_results,
+            "diagnostic_artifacts": {
+                "entry_exit_label_matrix": "paper_entry_exit_label_matrix.csv",
+                "stop_out_diagnostics": "paper_stop_out_diagnostics.csv",
+                "symbol_loss_concentration": "paper_symbol_loss_concentration.csv",
+                "hold_bucket_kpis": "paper_hold_bucket_kpis.csv",
+            },
             "predictor_weighted_vs_watchlist_momentum": _pair_diff(
                 bucket_results,
                 PREDICTOR_WEIGHTED_BUCKET,
@@ -848,7 +854,7 @@ class PremktHistoricalReplayRunner:
         grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
         for row in exits:
             bucket = str(row.get("bucket") or "")
-            label = str(row.get("analysis_label") or "")
+            label = _entry_label(row)
             grouped.setdefault((bucket, label), []).append(row)
 
         results: list[dict[str, object]] = []
@@ -876,6 +882,151 @@ class PremktHistoricalReplayRunner:
                 }
             )
         return results
+
+    def _entry_exit_label_matrix(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            key = (
+                str(row.get("bucket") or ""),
+                _entry_label(row),
+                _exit_label(row),
+                str(row.get("exit_reason") or ""),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, entry_label, exit_label, exit_reason), group in sorted(grouped.items()):
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "entry_analysis_label": entry_label,
+                    "exit_analysis_label": exit_label,
+                    "exit_reason": exit_reason,
+                    **_closed_trade_stats(group),
+                }
+            )
+        return rows
+
+    def _stop_out_diagnostics(self) -> list[dict[str, object]]:
+        exits = [
+            row
+            for row in self._trade_rows
+            if row.get("event") == "EXIT" and row.get("exit_reason") == "stop_loss"
+        ]
+        grouped: dict[tuple[str, str, str, str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            key = (
+                str(row.get("bucket") or ""),
+                _entry_label(row),
+                _exit_label(row),
+                _hold_bucket(_number(row.get("holding_minutes"))),
+                _score_bucket(_number(row.get("analysis_score"))),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, entry_label, exit_label, hold_bucket, score_bucket), group in sorted(
+            grouped.items()
+        ):
+            stats = _closed_trade_stats(group)
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "entry_analysis_label": entry_label,
+                    "exit_analysis_label": exit_label,
+                    "hold_bucket": hold_bucket,
+                    "entry_score_bucket": score_bucket,
+                    "stop_loss_count": len(group),
+                    "quick_stop_3m_count": sum(
+                        1 for row in group if _number(row.get("holding_minutes")) <= 3.0
+                    ),
+                    "capacity_limited_count": sum(1 for row in group if _truthy(row.get("capacity_limited"))),
+                    "avg_fill_slippage_pct": _avg(
+                        _number(row.get("fill_slippage_pct"))
+                        for row in group
+                        if row.get("fill_slippage_pct") not in (None, "")
+                    ),
+                    "avg_participation_slippage_pct": _avg(
+                        _number(row.get("participation_slippage_pct"))
+                        for row in group
+                        if row.get("participation_slippage_pct") not in (None, "")
+                    ),
+                    **stats,
+                }
+            )
+        return rows
+
+    def _symbol_loss_concentration(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+        bucket_loss_totals: dict[str, float] = {}
+        for row in exits:
+            bucket = str(row.get("bucket") or "")
+            grouped.setdefault((bucket, str(row.get("symbol") or "")), []).append(row)
+            net_pnl = _number(row.get("net_pnl"))
+            if net_pnl < 0:
+                bucket_loss_totals[bucket] = bucket_loss_totals.get(bucket, 0.0) + abs(net_pnl)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, symbol), group in grouped.items():
+            pnl_values = [_number(row.get("net_pnl")) for row in group]
+            loss_abs_pnl = abs(sum(value for value in pnl_values if value < 0))
+            bucket_loss_abs_pnl = bucket_loss_totals.get(bucket, 0.0)
+            entry_labels = [_entry_label(row) for row in group]
+            exit_labels = [_exit_label(row) for row in group]
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "symbol": symbol,
+                    **_closed_trade_stats(group),
+                    "stop_loss_count": sum(1 for row in group if row.get("exit_reason") == "stop_loss"),
+                    "quick_stop_3m_count": sum(
+                        1
+                        for row in group
+                        if row.get("exit_reason") == "stop_loss"
+                        and _number(row.get("holding_minutes")) <= 3.0
+                    ),
+                    "worst_trade_net_pnl": round(min(pnl_values), 6) if pnl_values else 0.0,
+                    "best_trade_net_pnl": round(max(pnl_values), 6) if pnl_values else 0.0,
+                    "dominant_entry_analysis_label": _mode(entry_labels),
+                    "dominant_exit_analysis_label": _mode(exit_labels),
+                    "loss_abs_pnl": round(loss_abs_pnl, 6),
+                    "loss_share_of_bucket_losses": round(
+                        loss_abs_pnl / bucket_loss_abs_pnl if bucket_loss_abs_pnl else 0.0,
+                        6,
+                    ),
+                }
+            )
+        rows.sort(
+            key=lambda row: (
+                str(row["bucket"]),
+                _number(row["total_net_pnl"]),
+                str(row["symbol"]),
+            )
+        )
+        return rows
+
+    def _hold_bucket_kpis(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            hold_bucket = _hold_bucket(_number(row.get("holding_minutes")))
+            grouped.setdefault((str(row.get("bucket") or ""), hold_bucket), []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, hold_bucket), group in sorted(grouped.items()):
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "hold_bucket": hold_bucket,
+                    **_closed_trade_stats(group),
+                    "stop_loss_count": sum(1 for row in group if row.get("exit_reason") == "stop_loss"),
+                    "session_end_count": sum(1 for row in group if row.get("exit_reason") == "session_end"),
+                    "capacity_limited_count": sum(1 for row in group if _truthy(row.get("capacity_limited"))),
+                }
+            )
+        return rows
 
     def _conclusion_status(
         self,
@@ -905,6 +1056,22 @@ class PremktHistoricalReplayRunner:
         _write_csv(
             self.export_dir / "paper_entry_label_kpis.csv",
             list(summary.get("entry_label_results", [])),
+        )
+        _write_csv(
+            self.export_dir / "paper_entry_exit_label_matrix.csv",
+            self._entry_exit_label_matrix(),
+        )
+        _write_csv(
+            self.export_dir / "paper_stop_out_diagnostics.csv",
+            self._stop_out_diagnostics(),
+        )
+        _write_csv(
+            self.export_dir / "paper_symbol_loss_concentration.csv",
+            self._symbol_loss_concentration(),
+        )
+        _write_csv(
+            self.export_dir / "paper_hold_bucket_kpis.csv",
+            self._hold_bucket_kpis(),
         )
         pair_rows = [
             {"left_bucket": left, "right_bucket": right, **_pair_diff(dict(summary["bucket_results"]), left, right)}
@@ -1113,6 +1280,98 @@ def _pair_diff(
         "trade_count_diff": int(left_row.get("trade_count", 0) or 0) - int(right_row.get("trade_count", 0) or 0),
         "net_pnl_diff": round(float(left_row.get("total_net_pnl", 0.0) or 0.0) - float(right_row.get("total_net_pnl", 0.0) or 0.0), 6),
     }
+
+
+def _closed_trade_stats(rows: list[dict[str, object]]) -> dict[str, object]:
+    pnl_values = [_number(row.get("net_pnl")) for row in rows]
+    pct_values = [
+        _number(row.get("realized_pnl_pct"))
+        for row in rows
+        if row.get("realized_pnl_pct") not in (None, "")
+    ]
+    hold_values = [
+        _number(row.get("holding_minutes"))
+        for row in rows
+        if row.get("holding_minutes") not in (None, "")
+    ]
+    wins = [value for value in pnl_values if value > 0]
+    losses = [value for value in pnl_values if value < 0]
+    return {
+        "trade_count": len(rows),
+        "total_net_pnl": round(sum(pnl_values), 6),
+        "gross_profit": round(sum(wins), 6),
+        "gross_loss": round(sum(losses), 6),
+        "win_rate": round((len(wins) / len(rows)) if rows else 0.0, 6),
+        "profit_factor": round((sum(wins) / abs(sum(losses))) if losses else 0.0, 6),
+        "avg_net_pnl": round((sum(pnl_values) / len(rows)) if rows else 0.0, 6),
+        "avg_realized_pnl_pct": _avg(pct_values),
+        "avg_holding_minutes": _avg(hold_values),
+    }
+
+
+def _entry_label(row: dict[str, object]) -> str:
+    return str(row.get("entry_analysis_label") or row.get("analysis_label") or "")
+
+
+def _exit_label(row: dict[str, object]) -> str:
+    return str(row.get("exit_analysis_label") or "")
+
+
+def _hold_bucket(holding_minutes: float) -> str:
+    if holding_minutes <= 3.0:
+        return "00_0_3m"
+    if holding_minutes <= 10.0:
+        return "01_3_10m"
+    if holding_minutes <= 30.0:
+        return "02_10_30m"
+    if holding_minutes <= 120.0:
+        return "03_30_120m"
+    return "04_2h_plus"
+
+
+def _score_bucket(score: float) -> str:
+    if score <= 0.0:
+        return "00_missing_or_zero"
+    if score < 2.75:
+        return "01_lt_2_75"
+    if score < 3.5:
+        return "02_2_75_3_5"
+    if score < 4.5:
+        return "03_3_5_4_5"
+    return "04_4_5_plus"
+
+
+def _avg(values: Iterable[float]) -> float:
+    items = list(values)
+    return round(sum(items) / len(items), 6) if items else 0.0
+
+
+def _mode(values: Iterable[str]) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return ""
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _number(value: object) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
 def _fill_metrics(fill: Any) -> dict[str, object]:

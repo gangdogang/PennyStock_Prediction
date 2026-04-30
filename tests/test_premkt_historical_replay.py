@@ -243,6 +243,10 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
         if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
     )
     label_kpis = list(csv.DictReader((export_dir / "paper_entry_label_kpis.csv").open(encoding="utf-8")))
+    label_matrix = list(csv.DictReader((export_dir / "paper_entry_exit_label_matrix.csv").open(encoding="utf-8")))
+    stop_diagnostics = list(csv.DictReader((export_dir / "paper_stop_out_diagnostics.csv").open(encoding="utf-8")))
+    symbol_losses = list(csv.DictReader((export_dir / "paper_symbol_loss_concentration.csv").open(encoding="utf-8")))
+    hold_buckets = list(csv.DictReader((export_dir / "paper_hold_bucket_kpis.csv").open(encoding="utf-8")))
 
     assert exit_row["exit_reason"] == "stop_loss"
     assert exit_row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
@@ -258,6 +262,38 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
         and row["stop_loss_count"] == "1"
         and row["quick_stop_3m_count"] == "1"
         for row in label_kpis
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+        and row["exit_analysis_label"] == "WAIT_PULLBACK"
+        and row["exit_reason"] == "stop_loss"
+        and row["trade_count"] == "1"
+        for row in label_matrix
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+        and row["exit_analysis_label"] == "WAIT_PULLBACK"
+        and row["hold_bucket"] == "00_0_3m"
+        and row["entry_score_bucket"] == "04_4_5_plus"
+        and row["stop_loss_count"] == "1"
+        and row["quick_stop_3m_count"] == "1"
+        for row in stop_diagnostics
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["symbol"] == "AAA"
+        and row["stop_loss_count"] == "1"
+        and row["dominant_entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+        and row["dominant_exit_analysis_label"] == "WAIT_PULLBACK"
+        for row in symbol_losses
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["hold_bucket"] == "00_0_3m"
+        and row["stop_loss_count"] == "1"
+        for row in hold_buckets
     )
 
 
