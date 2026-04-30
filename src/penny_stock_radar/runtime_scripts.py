@@ -17,9 +17,9 @@ def full_refresh_command(project_root: Path) -> list[str]:
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(scripts_dir / "run_full_pipeline.ps1"),
+            (scripts_dir / "run_full_pipeline.ps1").as_posix(),
         ]
-    return [str(scripts_dir / "run_full_pipeline.sh")]
+    return [(scripts_dir / "run_full_pipeline.sh").as_posix()]
 
 
 def full_refresh_command_label() -> str:
