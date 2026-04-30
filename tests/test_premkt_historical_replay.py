@@ -329,6 +329,12 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
             "--predictor-k2",
             "0",
             "--require-l1-quotes-for-entries",
+            "--entry-score-upper-bound",
+            "4.5",
+            "--min-entry-time",
+            "08:02",
+            "--exit-label",
+            "WAIT_PULLBACK",
         ],
     )
 
@@ -340,7 +346,57 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
     assert manifest["settings_snapshot"]["paper_predictor_weight_k2"] == 0
     assert manifest["entry_label_policy"]["include"] == ["CONDITIONAL_ENTRY"]
     assert manifest["entry_label_policy"]["require_l1_quotes_for_entries"] is True
+    assert manifest["replay_ablation_policy"]["entry_score_upper_bound"] == 4.5
+    assert manifest["replay_ablation_policy"]["min_entry_time"] == "08:02"
+    assert manifest["replay_ablation_policy"]["exit_labels"] == ["WAIT_PULLBACK"]
     assert trade_log.read_text(encoding="utf-8") == ""
+
+
+def test_replay_exit_label_ablation_closes_on_label_transition(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_replay_fixture_db(tmp_path, exit_close=1.05)
+    export_dir = tmp_path / "replays" / "run_label_exit"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: AppSettings(
+            db_path=tmp_path / "unused.sqlite3",
+            live_market_provider="disabled",
+            paper_stop_loss_pct=60.0,
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+            "--exit-label",
+            "WAIT_PULLBACK",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    exit_row = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+
+    assert exit_row["exit_reason"] == "label_exit"
+    assert exit_row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert exit_row["exit_analysis_label"] == "WAIT_PULLBACK"
 
 
 def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Path:

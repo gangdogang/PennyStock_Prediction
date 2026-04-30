@@ -46,6 +46,15 @@ def _normalize_label_options(
     return tuple(labels)
 
 
+def _parse_optional_time(value: str | None, option_name: str):
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError as exc:
+        raise ValueError(f"{option_name} must be in HH:MM format.") from exc
+
+
 def _resolve_l1_capture_symbols(
     settings,
     *,
@@ -323,6 +332,22 @@ def run_premkt_model_replay(
         "--require-l1-quotes-for-entries",
         help="Skip replay entries when the bar lacks bid/ask quote data.",
     ),
+    entry_score_upper_bound: float | None = typer.Option(
+        None,
+        "--entry-score-upper-bound",
+        min=0.0,
+        help="Replay-only ablation: skip entries with analysis_score at or above this value.",
+    ),
+    min_entry_time: str | None = typer.Option(
+        None,
+        "--min-entry-time",
+        help="Replay-only ablation: skip entries before this ET time, HH:MM.",
+    ),
+    exit_label: list[str] | None = typer.Option(
+        None,
+        "--exit-label",
+        help="Replay-only ablation: close open positions when this analysis label appears. Repeatable.",
+    ),
     predictor_k1: float | None = typer.Option(
         None,
         "--predictor-k1",
@@ -341,6 +366,7 @@ def run_premkt_model_replay(
 
     try:
         cutoff = datetime.strptime(cutoff_time, "%H:%M").time()
+        min_entry = _parse_optional_time(min_entry_time, "--min-entry-time")
         settings = root_cli.get_settings()
         settings_overrides = {}
         if predictor_k1 is not None:
@@ -366,6 +392,9 @@ def run_premkt_model_replay(
                 entry_labels=_normalize_label_options(entry_label),
                 exclude_entry_labels=_normalize_label_options(exclude_entry_label, default=()),
                 require_l1_quotes_for_entries=require_l1_quotes_for_entries,
+                entry_score_upper_bound=entry_score_upper_bound,
+                min_entry_time=min_entry,
+                exit_labels=_normalize_label_options(exit_label, default=()),
             ),
         )
         result = runner.run()

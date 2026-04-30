@@ -104,6 +104,7 @@
 - baseline predictor/momentum 에서 stop loss 는 482/569건이고, `OPENING_RANGE_CANDIDATE` entry stop 비율은 93.8%, `CONDITIONAL_ENTRY` entry stop 비율은 77.9% 다.
 - exit 시점 label 은 `WAIT_PULLBACK` 과 `OPENING_RANGE_CANDIDATE` 에 손실이 집중되고, `CONDITIONAL_ENTRY` exit label 은 상대적으로 양호하다. 다만 minute-only stop/exit 구조라 매매 품질 결론은 금지한다.
 - 새 replay 산출물은 label 전이, quick stop, 심볼 손실 집중도, 보유시간 bucket 을 보기 위해 `paper_entry_exit_label_matrix.csv`, `paper_stop_out_diagnostics.csv`, `paper_symbol_loss_concentration.csv`, `paper_hold_bucket_kpis.csv` 를 추가로 저장한다. 이 네 파일은 성능 판정용이 아니라 다음 ablation 우선순위 결정용이다.
+- 다음 손실 감소 실험을 위해 `run-premkt-model-replay` 는 replay-only 옵션 `--entry-score-upper-bound`, `--min-entry-time`, `--exit-label` 을 지원한다. 현재 6월 sanity 결과의 우선 가설은 `OPENING_RANGE_CANDIDATE` 제외 후에도 남는 `CONDITIONAL_ENTRY` early stop, `analysis_score >= 4.5` 과열 진입, `WAIT_PULLBACK` 전환 방치다.
 
 ## 다음 우선순위
 

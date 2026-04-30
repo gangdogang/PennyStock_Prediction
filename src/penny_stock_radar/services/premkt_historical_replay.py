@@ -61,6 +61,9 @@ class ReplayOptions:
     entry_labels: tuple[str, ...] = DEFAULT_ENTRY_LABELS
     exclude_entry_labels: tuple[str, ...] = ()
     require_l1_quotes_for_entries: bool = False
+    entry_score_upper_bound: float | None = None
+    min_entry_time: time | None = None
+    exit_labels: tuple[str, ...] = ()
 
 
 @dataclass
@@ -530,6 +533,7 @@ class PremktHistoricalReplayRunner:
     ) -> list[dict[str, object]]:
         trades: list[dict[str, object]] = []
         allowed_entry_labels = set(self.options.entry_labels) - set(self.options.exclude_entry_labels)
+        exit_labels = set(self.options.exit_labels)
         for row in activity:
             position = state.positions.get(row.symbol)
             if position is not None and row.last_price is not None and row.last_price <= position.stop_price:
@@ -541,6 +545,19 @@ class PremktHistoricalReplayRunner:
                         market_date=market_date,
                         simulated_time=simulated_time,
                         reason="stop_loss",
+                    )
+                )
+        for row in activity:
+            position = state.positions.get(row.symbol)
+            if position is not None and row.analysis_label in exit_labels:
+                trades.append(
+                    self._close_position(
+                        state,
+                        position,
+                        row=row,
+                        market_date=market_date,
+                        simulated_time=simulated_time,
+                        reason="label_exit",
                     )
                 )
         for row in sorted(activity, key=lambda item: (-item.analysis_score, item.pct_rank or 9999, item.symbol)):
@@ -557,6 +574,13 @@ class PremktHistoricalReplayRunner:
                 0.0,
             )
             if row.analysis_score < threshold:
+                continue
+            if (
+                self.options.entry_score_upper_bound is not None
+                and row.analysis_score >= self.options.entry_score_upper_bound
+            ):
+                continue
+            if self.options.min_entry_time is not None and simulated_time.time() < self.options.min_entry_time:
                 continue
             if self.options.require_l1_quotes_for_entries and not row.has_live_quote:
                 continue
@@ -737,6 +761,11 @@ class PremktHistoricalReplayRunner:
                 "entry_labels": list(self.options.entry_labels),
                 "exclude_entry_labels": list(self.options.exclude_entry_labels),
                 "require_l1_quotes_for_entries": self.options.require_l1_quotes_for_entries,
+                "entry_score_upper_bound": self.options.entry_score_upper_bound,
+                "min_entry_time": self.options.min_entry_time.strftime("%H:%M")
+                if self.options.min_entry_time
+                else None,
+                "exit_labels": list(self.options.exit_labels),
             },
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
@@ -776,6 +805,13 @@ class PremktHistoricalReplayRunner:
                 "exclude": list(self.options.exclude_entry_labels),
                 "require_l1_quotes_for_entries": self.options.require_l1_quotes_for_entries,
                 "analysis_label_semantics": "paper_trade_log.analysis_label is the entry-time label; exit_analysis_label stores the label observed at exit.",
+            },
+            "replay_ablation_policy": {
+                "entry_score_upper_bound": self.options.entry_score_upper_bound,
+                "min_entry_time": self.options.min_entry_time.strftime("%H:%M")
+                if self.options.min_entry_time
+                else None,
+                "exit_labels": list(self.options.exit_labels),
             },
         }
 
