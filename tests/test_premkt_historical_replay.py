@@ -108,6 +108,14 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     kpis = list(csv.DictReader((export_dir / "paper_backtest_kpis.csv").open(encoding="utf-8")))
     pair_diff = list(csv.DictReader((export_dir / "paper_bucket_pair_diff.csv").open(encoding="utf-8")))
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    setup_features = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
+    setup_kpis = list(csv.DictReader((export_dir / "paper_setup_state_kpis.csv").open(encoding="utf-8")))
+    setup_transitions = list(
+        csv.DictReader((export_dir / "paper_setup_transition_matrix.csv").open(encoding="utf-8"))
+    )
+    add_trim_runner = list(
+        csv.DictReader((export_dir / "paper_add_trim_runner_diagnostics.csv").open(encoding="utf-8"))
+    )
 
     assert manifest["local_only"] is True
     assert manifest["db_path"] == str(db_path)
@@ -132,6 +140,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert summary["bucket_results"]["watchlist_blind_momentum"]["trade_count"] == 1
     assert summary["bucket_results"]["watchlist_blind_momentum"]["total_net_pnl"] == pytest.approx(18.4015)
     assert summary["diagnostic_artifacts"]["exit_path_diagnostics"] == "paper_exit_path_diagnostics.csv"
+    assert summary["diagnostic_artifacts"]["setup_features"] == "paper_setup_features.csv"
     assert {row["bucket"] for row in kpis} == {
         "predictor_weighted",
         "momentum_only",
@@ -153,9 +162,32 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert session_exit["exit_reason"] == "session_end"
     assert session_exit["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
     assert session_exit["exit_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert session_exit["entry_setup_state"]
+    assert session_exit["entry_action_bias"] in {"starter_ok", "watch", "no_trade"}
+    assert session_exit["exit_setup_state"]
     assert float(session_exit["net_pnl"]) == pytest.approx(32.68255)
     assert session_exit["intrabar_stop_touched"] == "1"
     assert session_exit["stop_trigger_basis"] == "intrabar_low_only"
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["symbol"] == "AAA"
+        and row["setup_state"]
+        and row["judge_json"]
+        for row in setup_features
+    )
+    assert any(row["bucket"] == "predictor_weighted" and row["entry_setup_state"] for row in setup_kpis)
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["entry_setup_state"]
+        and row["exit_setup_state"]
+        for row in setup_transitions
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["setup_state"]
+        and int(row["observation_count"]) >= 1
+        for row in add_trim_runner
+    )
 
 
 def test_replay_model_scoring_uses_only_pre_cutoff_and_not_future_dates(
@@ -226,9 +258,17 @@ def test_replay_resume_skips_completed_dates(monkeypatch, tmp_path: Path) -> Non
     assert second.exit_code == 0, second.stdout
     progress = json.loads((export_dir / "progress.json").read_text(encoding="utf-8"))
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    setup_rows = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
     assert progress["dates"]["2026-04-10"]["status"] == "completed"
     assert len(trade_rows) > 0
     assert len(trade_rows) == len({(row["bucket"], row["symbol"], row["event"]) for row in trade_rows})
+    assert len(setup_rows) > 0
+    assert len(setup_rows) == len(
+        {
+            (row["bucket"], row["symbol"], row["observed_at"], row["position_state"])
+            for row in setup_rows
+        }
+    )
 
 
 def test_replay_trade_log_uses_entry_label_for_exit_attribution(

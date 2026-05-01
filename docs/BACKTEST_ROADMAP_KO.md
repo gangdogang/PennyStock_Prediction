@@ -33,7 +33,7 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
    - 튜닝이 끝난 설정을 고정한 뒤 단 1회 실행한다.
    - 실매매 전환 판단에는 이 결과와 shadow 결과를 함께 사용한다.
 
-각 루프는 반드시 `run_manifest.json`, `paper_backtest_kpis.csv`, `paper_trade_log.csv`, `paper_bucket_trade_diff.csv`, `paper_bucket_pair_diff.csv`, `paper_predictor_kpis.csv`, `paper_execution_quality.csv` 를 남겨야 한다.
+각 루프는 반드시 `run_manifest.json`, `paper_backtest_kpis.csv`, `paper_trade_log.csv`, `paper_bucket_trade_diff.csv`, `paper_bucket_pair_diff.csv`, `paper_predictor_kpis.csv`, `paper_execution_quality.csv` 를 남겨야 한다. setup_state 검증 run 은 추가로 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 남긴다.
 
 ## Step -1 — 성능평가 배선 검증
 
@@ -288,6 +288,24 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 ## Step 5 — KPI / 리포트 강화
 
 **목표**: 결과를 "전략에 edge 가 있는가"로 판단 가능한 지표를 갖춘다. 페니스탁 특성상 기존 6개 지표만으로는 "한 번의 대박에 의존" 같은 함정을 놓친다.
+
+### Setup state 진단 레이어
+
+`score_lt45`, breakeven, cooldown 같은 threshold/parameter ablation 은 보조 진단으로만 유지한다. 다음 핵심 검증은 사람이 보는 setup 판단이 실제 손실/수익을 분리하는지 확인하는 것이다.
+
+- `setup_context` 는 minute bar 만으로 VWAP, distance_to_vwap, premarket high, HOD, opening range high/low, breakout/reclaim/failure, pullback depth, volume expansion/dry-up, higher low/lower high, minutes since HOD, rank persistence, spread/liquidity, dilution/catalyst risk hook 을 만든다.
+- `AISetupJudgeV1` 은 당장은 LLM 호출이 아니라 deterministic/rule-backed JSON judge 로 둔다.
+- judge 출력은 `setup_state`, `quality`, `risk`, `action_bias`, `confidence`, `invalidation`, `add_condition`, `trim_condition`, `reasons` 를 포함한다.
+- setup state taxonomy 는 `DEAD_PUMP`, `WATCH_LEADER`, `VWAP_RECLAIM`, `ORB_BREAKOUT`, `PULLBACK_HOLD`, `FAILED_BREAKOUT`, `STARTER_VALID`, `ADD_VALID`, `TRIM_EXTENSION`, `RUNNER_HOLD`, `EXIT_FAIL` 로 고정한다.
+- AI/setup judge 는 상황 해석만 한다. 실제 주문, size, stop, add/trim 실행은 risk/rule engine 이 통제한다.
+- L1 bid/ask coverage 가 없으면 실전 체결/stop/slippage 판단으로 해석하지 않는다. minute-only 결과는 setup_state 손익 분리력 sanity/calibration 으로만 본다.
+
+산출물:
+
+- `paper_setup_features.csv`: symbol-minute-bucket 단위 setup context 와 judge JSON
+- `paper_setup_state_kpis.csv`: entry setup_state/action_bias 별 closed trade KPI
+- `paper_setup_transition_matrix.csv`: entry setup_state -> exit setup_state 전이와 손익/stop-out
+- `paper_add_trim_runner_diagnostics.csv`: starter/add/trim/runner/exit bias 관측 빈도와 품질/위험 평균
 
 ### 기본 KPI
 

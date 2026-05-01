@@ -156,6 +156,7 @@ class ReplayBarCursor:
             for symbol, series in cache.series_by_symbol.items()
         }
         self._activity_cache: dict[tuple[str, int], MarketActivity] = {}
+        self._latest_snapshots: dict[str, PreparedBarSnapshot] = {}
 
     def activity_at(
         self,
@@ -171,6 +172,7 @@ class ReplayBarCursor:
             snapshot = cursor.advance_to(simulated_time)
             if snapshot is None:
                 continue
+            self._latest_snapshots[symbol] = snapshot
             cache_key = (symbol, snapshot.index)
             cached = self._activity_cache.get(cache_key)
             if cached is None:
@@ -187,6 +189,9 @@ class ReplayBarCursor:
                 cached = cached.model_copy(update={"created_at": simulated_time})
             rows.append(cached)
         return rows
+
+    def latest_snapshot(self, symbol: str) -> PreparedBarSnapshot | None:
+        return self._latest_snapshots.get(symbol.upper())
 
 
 class _SymbolCursor:

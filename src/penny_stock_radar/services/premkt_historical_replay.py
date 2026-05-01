@@ -28,7 +28,8 @@ from .paper_runtime import (
 )
 from .premkt_model_scoring import PremktModelScorer
 from .premkt_predictor import PremktPredictor
-from .replay_bar_cache import ReplayBarSeriesCache
+from .replay_bar_cache import ReplayBarCursor, ReplayBarSeriesCache
+from .setup_state import SETUP_STATES, AISetupJudgeV1, SetupContext, SetupContextBuilder, SetupJudgement
 
 EASTERN = ZoneInfo("America/New_York")
 DEFAULT_REPLAY_DB = Path("data/backtest_lab/penny_stock_radar.sqlite3")
@@ -96,6 +97,7 @@ class _Position:
     breakeven_stop_active: bool = False
     breakeven_stop_after_r: float | None = None
     breakeven_stop_activated_at: datetime | None = None
+    entry_setup_judgement: SetupJudgement | None = None
 
 
 @dataclass
@@ -133,11 +135,18 @@ class PremktHistoricalReplayRunner:
         self.scanner = MarketActivityScanner(self.settings)
         self.fill_model = FillModel(self.settings)
         self.predictor = PremktPredictor(self.settings)
+        self.setup_context_builder = SetupContextBuilder(
+            run_id=self.run_id,
+            min_dollar_volume=float(self.settings.premarket_min_dollar_volume),
+            max_spread_pct=float(self.settings.premarket_max_spread_pct),
+        )
+        self.setup_judge = AISetupJudgeV1()
         self._progress_path = self.export_dir / "progress.json"
         self._summary_path = self.export_dir / "replay_summary.json"
         self._manifest_path = self.export_dir / "run_manifest.json"
         self._prediction_rows: list[dict[str, object]] = []
         self._trade_rows: list[dict[str, object]] = []
+        self._setup_feature_rows: list[dict[str, object]] = []
         self._coverage_warnings: list[dict[str, object]] = []
         self._data_quality_notes: list[str] = []
         self._leakage_guard_notes: list[str] = [
@@ -514,6 +523,8 @@ class PremktHistoricalReplayRunner:
                         simulated_time=simulated_time,
                         activity=bucket_activity,
                         predictions_by_symbol=predictions_by_symbol,
+                        bar_cursor=bar_cursor,
+                        cutoff_at=cutoff_at,
                     )
                 )
 
@@ -521,14 +532,25 @@ class PremktHistoricalReplayRunner:
             for position in list(state.positions.values()):
                 row = latest_activity_by_symbol.get(position.symbol)
                 if row is not None:
+                    bucket_row = sanitize_activity_for_bucket(self.scanner, state.bucket, [row])[0]
+                    session_end_at = row.market_data_at or cutoff_at
+                    setup = self._setup_for_row(
+                        state=state,
+                        market_date=market_date,
+                        simulated_time=session_end_at,
+                        row=bucket_row,
+                        bar_cursor=bar_cursor,
+                        cutoff_at=cutoff_at,
+                    )
                     date_trade_rows.append(
                         self._close_position(
                             state,
                             position,
-                            row=row,
+                            row=bucket_row,
                             market_date=market_date,
-                            simulated_time=row.market_data_at or cutoff_at,
+                            simulated_time=session_end_at,
                             reason="session_end",
+                            setup_judgement=setup[1] if setup is not None else None,
                         )
                     )
         return date_trade_rows
@@ -541,10 +563,28 @@ class PremktHistoricalReplayRunner:
         simulated_time: datetime,
         activity: list[MarketActivity],
         predictions_by_symbol: dict[str, PremktPrediction],
+        bar_cursor: ReplayBarCursor,
+        cutoff_at: datetime,
     ) -> list[dict[str, object]]:
         trades: list[dict[str, object]] = []
         allowed_entry_labels = set(self.options.entry_labels) - set(self.options.exclude_entry_labels)
         exit_labels = set(self.options.exit_labels)
+        setup_by_symbol: dict[str, tuple[SetupContext, SetupJudgement]] = {}
+        for row in activity:
+            setup = self._setup_for_row(
+                state=state,
+                market_date=market_date,
+                simulated_time=simulated_time,
+                row=row,
+                bar_cursor=bar_cursor,
+                cutoff_at=cutoff_at,
+            )
+            if setup is None:
+                continue
+            setup_by_symbol[row.symbol] = setup
+            context, judgement = setup
+            self._setup_feature_rows.append(context.feature_row(judgement))
+
         for row in activity:
             position = state.positions.get(row.symbol)
             if position is None:
@@ -559,6 +599,7 @@ class PremktHistoricalReplayRunner:
                         market_date=market_date,
                         simulated_time=simulated_time,
                         reason="stop_loss",
+                        setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
                     )
                 )
         for row in activity:
@@ -572,6 +613,7 @@ class PremktHistoricalReplayRunner:
                         market_date=market_date,
                         simulated_time=simulated_time,
                         reason="label_exit",
+                        setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
                     )
                 )
         for row in sorted(activity, key=lambda item: (-item.analysis_score, item.pct_rank or 9999, item.symbol)):
@@ -606,6 +648,19 @@ class PremktHistoricalReplayRunner:
                 continue
             if row.analysis_label not in allowed_entry_labels:
                 continue
+            entry_setup = setup_by_symbol.get(row.symbol)
+            if entry_setup is not None and entry_setup[0].position_state != "flat":
+                entry_setup = self._setup_for_row(
+                    state=state,
+                    market_date=market_date,
+                    simulated_time=simulated_time,
+                    row=row,
+                    bar_cursor=bar_cursor,
+                    cutoff_at=cutoff_at,
+                )
+                if entry_setup is not None:
+                    context, judgement = entry_setup
+                    self._setup_feature_rows.append(context.feature_row(judgement))
             entry = self._open_position(
                 state,
                 row=row,
@@ -613,10 +668,37 @@ class PremktHistoricalReplayRunner:
                 simulated_time=simulated_time,
                 predictor_score=predictor_score,
                 predictor_weight=predictor_weight,
+                setup_judgement=entry_setup[1] if entry_setup is not None else None,
             )
             if entry is not None:
                 trades.append(entry)
         return trades
+
+    def _setup_for_row(
+        self,
+        *,
+        state: _BucketState,
+        market_date: str,
+        simulated_time: datetime,
+        row: MarketActivity,
+        bar_cursor: ReplayBarCursor,
+        cutoff_at: datetime,
+    ) -> tuple[SetupContext, SetupJudgement] | None:
+        snapshot = bar_cursor.latest_snapshot(row.symbol)
+        if snapshot is None:
+            return None
+        position = state.positions.get(row.symbol)
+        context = self.setup_context_builder.build(
+            market_date=market_date,
+            bucket=state.bucket,
+            row=row,
+            snapshot=snapshot,
+            observed_at=simulated_time,
+            cutoff_at=cutoff_at,
+            position_opened_at=position.opened_at if position is not None else None,
+            position_entry_price=position.entry_price if position is not None else None,
+        )
+        return context, self.setup_judge.judge(context)
 
     def _entry_reentry_policy_allows(
         self,
@@ -645,6 +727,7 @@ class PremktHistoricalReplayRunner:
         simulated_time: datetime,
         predictor_score: float | None,
         predictor_weight: float,
+        setup_judgement: SetupJudgement | None,
     ) -> dict[str, object] | None:
         reference = row.ask_price or row.last_price
         if reference is None or reference <= 0:
@@ -687,6 +770,7 @@ class PremktHistoricalReplayRunner:
             best_intrabar_price=fill.fill_price,
             worst_intrabar_price=fill.fill_price,
             breakeven_stop_after_r=self.options.breakeven_stop_after_r,
+            entry_setup_judgement=setup_judgement,
         )
         state.positions[row.symbol] = position
         state.entry_counts_by_symbol[row.symbol] = state.entry_counts_by_symbol.get(row.symbol, 0) + 1
@@ -717,6 +801,7 @@ class PremktHistoricalReplayRunner:
             "holding_minutes": "",
             "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
+            **_setup_prefixed_fields(setup_judgement, "entry"),
             **_fill_metrics(fill),
         }
 
@@ -729,6 +814,7 @@ class PremktHistoricalReplayRunner:
         market_date: str,
         simulated_time: datetime,
         reason: str,
+        setup_judgement: SetupJudgement | None,
     ) -> dict[str, object]:
         paper_position = PaperPosition(
             position_id=f"{self.run_id}-{state.bucket}-{position.symbol}",
@@ -785,6 +871,8 @@ class PremktHistoricalReplayRunner:
             "holding_minutes": round(holding_minutes, 6),
             "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
+            **_setup_prefixed_fields(position.entry_setup_judgement, "entry"),
+            **_setup_prefixed_fields(setup_judgement, "exit"),
             **_position_path_metrics(
                 position,
                 exit_price=exit_price,
@@ -915,6 +1003,17 @@ class PremktHistoricalReplayRunner:
                 "max_entries_per_symbol_per_day": self.options.max_entries_per_symbol_per_day,
                 "cooldown_after_stop_minutes": self.options.cooldown_after_stop_minutes,
             },
+            "setup_state_policy": {
+                "version": "deterministic_rule_backed_v1",
+                "order_control": "diagnostic_only_risk_rule_engine_still_controls_orders",
+                "states": list(SETUP_STATES),
+                "outputs": [
+                    "paper_setup_features.csv",
+                    "paper_setup_state_kpis.csv",
+                    "paper_setup_transition_matrix.csv",
+                    "paper_add_trim_runner_diagnostics.csv",
+                ],
+            },
         }
 
     def _build_summary(self, progress: dict[str, Any]) -> dict[str, object]:
@@ -953,6 +1052,10 @@ class PremktHistoricalReplayRunner:
                 "symbol_loss_concentration": "paper_symbol_loss_concentration.csv",
                 "hold_bucket_kpis": "paper_hold_bucket_kpis.csv",
                 "exit_path_diagnostics": "paper_exit_path_diagnostics.csv",
+                "setup_features": "paper_setup_features.csv",
+                "setup_state_kpis": "paper_setup_state_kpis.csv",
+                "setup_transition_matrix": "paper_setup_transition_matrix.csv",
+                "add_trim_runner_diagnostics": "paper_add_trim_runner_diagnostics.csv",
             },
             "predictor_weighted_vs_watchlist_momentum": _pair_diff(
                 bucket_results,
@@ -1279,6 +1382,129 @@ class PremktHistoricalReplayRunner:
             )
         return rows
 
+    def _setup_state_kpis(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            key = (
+                str(row.get("bucket") or ""),
+                str(row.get("entry_setup_state") or ""),
+                str(row.get("entry_action_bias") or ""),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, setup_state, action_bias), group in sorted(grouped.items()):
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "entry_setup_state": setup_state,
+                    "entry_action_bias": action_bias,
+                    **_closed_trade_stats(group),
+                    "stop_loss_count": sum(1 for row in group if row.get("exit_reason") == "stop_loss"),
+                    "label_exit_count": sum(1 for row in group if row.get("exit_reason") == "label_exit"),
+                    "session_end_count": sum(1 for row in group if row.get("exit_reason") == "session_end"),
+                    "quick_stop_3m_count": sum(
+                        1
+                        for row in group
+                        if row.get("exit_reason") == "stop_loss"
+                        and _number(row.get("holding_minutes")) <= 3.0
+                    ),
+                    "avg_entry_setup_quality": _avg(
+                        _number(row.get("entry_setup_quality"))
+                        for row in group
+                        if row.get("entry_setup_quality") not in (None, "")
+                    ),
+                    "avg_entry_setup_risk": _avg(
+                        _number(row.get("entry_setup_risk"))
+                        for row in group
+                        if row.get("entry_setup_risk") not in (None, "")
+                    ),
+                    "avg_exit_setup_risk": _avg(
+                        _number(row.get("exit_setup_risk"))
+                        for row in group
+                        if row.get("exit_setup_risk") not in (None, "")
+                    ),
+                }
+            )
+        return rows
+
+    def _setup_transition_matrix(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str, str, str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            key = (
+                str(row.get("bucket") or ""),
+                str(row.get("entry_setup_state") or ""),
+                str(row.get("exit_setup_state") or ""),
+                str(row.get("exit_reason") or ""),
+                _hold_bucket(_number(row.get("holding_minutes"))),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, entry_state, exit_state, exit_reason, hold_bucket), group in sorted(grouped.items()):
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "entry_setup_state": entry_state,
+                    "exit_setup_state": exit_state,
+                    "exit_reason": exit_reason,
+                    "hold_bucket": hold_bucket,
+                    **_closed_trade_stats(group),
+                    "entry_action_bias": _mode(str(row.get("entry_action_bias") or "") for row in group),
+                    "exit_action_bias": _mode(str(row.get("exit_action_bias") or "") for row in group),
+                    "stop_loss_count": sum(1 for row in group if row.get("exit_reason") == "stop_loss"),
+                }
+            )
+        return rows
+
+    def _add_trim_runner_diagnostics(self) -> list[dict[str, object]]:
+        grouped: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+        for row in self._setup_feature_rows:
+            action_bias = str(row.get("action_bias") or "")
+            if action_bias not in {"starter_ok", "add_ok", "trim", "exit", "watch"}:
+                continue
+            key = (
+                str(row.get("bucket") or ""),
+                str(row.get("position_state") or ""),
+                str(row.get("setup_state") or ""),
+                action_bias,
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, position_state, setup_state, action_bias), group in sorted(grouped.items()):
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "position_state": position_state,
+                    "setup_state": setup_state,
+                    "action_bias": action_bias,
+                    "observation_count": len(group),
+                    "unique_symbol_count": len({str(row.get("symbol") or "") for row in group}),
+                    "avg_quality": _avg(_number(row.get("quality")) for row in group),
+                    "avg_risk": _avg(_number(row.get("risk")) for row in group),
+                    "avg_distance_to_vwap_pct": _avg(
+                        _number(row.get("distance_to_vwap_pct"))
+                        for row in group
+                        if row.get("distance_to_vwap_pct") not in (None, "")
+                    ),
+                    "avg_volume_expansion_ratio": _avg(
+                        _number(row.get("volume_expansion_ratio"))
+                        for row in group
+                        if row.get("volume_expansion_ratio") not in (None, "")
+                    ),
+                    "true_leader_observation_count": sum(
+                        1 for row in group if _truthy(row.get("true_leader"))
+                    ),
+                    "failed_breakout_observation_count": sum(
+                        1 for row in group if _truthy(row.get("failed_breakout"))
+                    ),
+                }
+            )
+        return rows
+
     def _conclusion_status(
         self,
         *,
@@ -1327,6 +1553,22 @@ class PremktHistoricalReplayRunner:
         _write_csv(
             self.export_dir / "paper_exit_path_diagnostics.csv",
             self._exit_path_diagnostics(),
+        )
+        _write_csv(
+            self.export_dir / "paper_setup_features.csv",
+            self._setup_feature_rows,
+        )
+        _write_csv(
+            self.export_dir / "paper_setup_state_kpis.csv",
+            self._setup_state_kpis(),
+        )
+        _write_csv(
+            self.export_dir / "paper_setup_transition_matrix.csv",
+            self._setup_transition_matrix(),
+        )
+        _write_csv(
+            self.export_dir / "paper_add_trim_runner_diagnostics.csv",
+            self._add_trim_runner_diagnostics(),
         )
         pair_rows = [
             {"left_bucket": left, "right_bucket": right, **_pair_diff(dict(summary["bucket_results"]), left, right)}
@@ -1408,6 +1650,7 @@ class PremktHistoricalReplayRunner:
     def _load_existing_outputs(self) -> None:
         self._prediction_rows = _read_csv(self.export_dir / "premkt_predictions_replay.csv")
         self._trade_rows = _read_csv(self.export_dir / "paper_trade_log.csv")
+        self._setup_feature_rows = _read_csv(self.export_dir / "paper_setup_features.csv")
 
     def _write_json(self, path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1716,6 +1959,22 @@ def _fill_metrics(fill: Any) -> dict[str, object]:
         "estimated_capacity_at_2pct_volume": _round_optional(fill.estimated_capacity_at_2pct_volume),
         "capacity_limited": int(fill.capacity_limited),
     }
+
+
+def _setup_prefixed_fields(
+    judgement: SetupJudgement | None,
+    prefix: str,
+) -> dict[str, object]:
+    if judgement is None:
+        return {
+            f"{prefix}_setup_state": "",
+            f"{prefix}_setup_quality": "",
+            f"{prefix}_setup_risk": "",
+            f"{prefix}_action_bias": "",
+            f"{prefix}_setup_confidence": "",
+            f"{prefix}_setup_reasons": "",
+        }
+    return judgement.prefixed_fields(prefix)
 
 
 def _round_optional(value: object, digits: int = 6) -> object:

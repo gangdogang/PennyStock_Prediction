@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-05-01
+최종 갱신일: 2026-05-02
 
 ## 운영 원칙
 
@@ -58,7 +58,8 @@
 - 2026-05-01: historical replay 속도 개선으로 minute bars/model scoring bulk fetch, `(market_date, symbol, bar_at)` index, prepared bar cursor, activity copy 제거, 날짜별 timing/progress metric 을 추가했다. 생성물인 `src/penny_stock_radar.egg-info/` 와 로컬 캐시/중복 `.gitkeep 2` 도 정리했다. 이번 변경은 성능 최적화/구조 분리이며 entry/exit/stop/sizing 의사결정 로직은 변경하지 않는다.
 - 2026-05-01: `run-premkt-model-replay` 에 close 기준 R multiple 도달 후 stop 을 entry 가격으로 올리는 replay-only `--breakeven-stop-after-r` 옵션을 추가했다. 이 옵션은 +1R 이후 stop-out/giveback 감소 가설 검증용이며, L1 없는 minute-only 환경에서는 실전 stop 체결 보장으로 해석하지 않는다.
 - 2026-05-01: breakeven stop 결과는 giveback 은 줄였지만 stop 이후 같은 종목 반복 진입이 늘어 총손실이 커질 수 있음을 보여줬다. 이를 분리하기 위해 replay-only `--max-entries-per-symbol-per-day`, `--cooldown-after-stop-minutes` 옵션을 추가했다.
-- 다음 우선순위는 fixed parameter OOS 결과를 바탕으로 shadow/live paper 검증을 진행하는 것이다.
+- 2026-05-02: threshold/parameter ablation 을 계속 늘리지 않고 `setup_state` v1 진단 레이어를 추가했다. `SetupContextBuilder` 는 minute bar 로 VWAP/reclaim/HOD/ORH/pullback/volume/rank/liquidity feature 를 만들고, deterministic `AISetupJudgeV1` 은 taxonomy/action_bias JSON 판단을 기록한다. replay 는 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 남긴다.
+- 다음 우선순위는 setup_state 진단 CSV가 포함된 1개월 baseline 을 재생성해 `STARTER_VALID`/`FAILED_BREAKOUT`/`TRIM_EXTENSION`/`EXIT_FAIL` 등이 손익과 stop-out 을 실제로 분리하는지 보는 것이다. 분리력이 확인되기 전에는 fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.
