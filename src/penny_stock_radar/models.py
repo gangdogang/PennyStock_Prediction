@@ -211,6 +211,8 @@ class MarketActivity(BaseModel):
     last_price: float | None = None
     bid_price: float | None = None
     ask_price: float | None = None
+    bar_high_price: float | None = None
+    bar_low_price: float | None = None
     previous_close: float | None = None
     pct_change: float | None = None
     volume: float | None = None

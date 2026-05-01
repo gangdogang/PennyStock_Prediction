@@ -107,6 +107,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     predictions = list(csv.DictReader((export_dir / "premkt_predictions_replay.csv").open(encoding="utf-8")))
     kpis = list(csv.DictReader((export_dir / "paper_backtest_kpis.csv").open(encoding="utf-8")))
     pair_diff = list(csv.DictReader((export_dir / "paper_bucket_pair_diff.csv").open(encoding="utf-8")))
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
 
     assert manifest["local_only"] is True
     assert manifest["db_path"] == str(db_path)
@@ -119,6 +120,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
         "momentum_only",
         "watchlist_blind_momentum",
     }
+    assert summary["diagnostic_artifacts"]["exit_path_diagnostics"] == "paper_exit_path_diagnostics.csv"
     assert {row["bucket"] for row in kpis} == {
         "predictor_weighted",
         "momentum_only",
@@ -132,6 +134,14 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
         ("predictor_weighted", "watchlist_blind_momentum"),
     }
     assert [row["symbol"] for row in predictions] == ["AAA"]
+    session_exit = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+    assert session_exit["exit_reason"] == "session_end"
+    assert session_exit["intrabar_stop_touched"] == "1"
+    assert session_exit["stop_trigger_basis"] == "intrabar_low_only"
 
 
 def test_replay_model_scoring_uses_only_pre_cutoff_and_not_future_dates(
@@ -247,6 +257,7 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
     stop_diagnostics = list(csv.DictReader((export_dir / "paper_stop_out_diagnostics.csv").open(encoding="utf-8")))
     symbol_losses = list(csv.DictReader((export_dir / "paper_symbol_loss_concentration.csv").open(encoding="utf-8")))
     hold_buckets = list(csv.DictReader((export_dir / "paper_hold_bucket_kpis.csv").open(encoding="utf-8")))
+    path_diagnostics = list(csv.DictReader((export_dir / "paper_exit_path_diagnostics.csv").open(encoding="utf-8")))
 
     assert exit_row["exit_reason"] == "stop_loss"
     assert exit_row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
@@ -256,6 +267,18 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
     assert exit_row["fill_reference_price"]
     assert exit_row["fill_slippage_pct"]
     assert exit_row["estimated_capacity_at_1pct_volume"]
+    assert float(exit_row["entry_stop_price"]) < float(exit_row["entry_price"])
+    assert float(exit_row["risk_per_share"]) > 0
+    assert float(exit_row["mfe_pct_intrabar"]) > 0
+    assert float(exit_row["mae_pct_intrabar"]) < 0
+    assert float(exit_row["max_r_multiple"]) > 1.0
+    assert float(exit_row["min_r_multiple"]) < 0
+    assert exit_row["reached_0_5r"] == "1"
+    assert exit_row["reached_1r"] == "1"
+    assert float(exit_row["first_1r_minutes"]) == pytest.approx(1.0)
+    assert exit_row["intrabar_stop_touched"] == "1"
+    assert exit_row["stop_trigger_basis"] == "close"
+    assert float(exit_row["giveback_from_mfe_pct"]) > 0
     assert any(
         row["bucket"] == "predictor_weighted"
         and row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
@@ -294,6 +317,16 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
         and row["hold_bucket"] == "00_0_3m"
         and row["stop_loss_count"] == "1"
         for row in hold_buckets
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+        and row["exit_reason"] == "stop_loss"
+        and row["hold_bucket"] == "00_0_3m"
+        and row["reached_1r_count"] == "1"
+        and row["stop_after_1r_count"] == "1"
+        and row["intrabar_stop_touched_count"] == "1"
+        for row in path_diagnostics
     )
 
 

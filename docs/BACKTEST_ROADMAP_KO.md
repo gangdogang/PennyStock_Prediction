@@ -28,6 +28,7 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 3. **1개월 calibration replay**
    - 파라미터 후보를 좁히는 용도다.
    - 여전히 최종 검증이 아니며, tuning set 으로만 취급한다.
+   - calibration 에서 발견한 score cutoff 는 frozen hypothesis 로만 다음 검증에 넘기고, calibration 손익 개선만으로 live 전략으로 해석하지 않는다.
 4. **3개월 이상 out-of-sample replay**
    - 튜닝이 끝난 설정을 고정한 뒤 단 1회 실행한다.
    - 실매매 전환 판단에는 이 결과와 shadow 결과를 함께 사용한다.
@@ -345,6 +346,7 @@ Intraday 전용으로는 `0-5분`, `5-15분`, `15-30분`, `30-60분`, `1-2시간
 - 대시보드 내 "백테스팅 KPI" 섹션
 - 포트폴리오 A / B / baseline 나란히 비교
 - 거래 수준 CSV + regime-split CSV export
+- `paper_exit_path_diagnostics.csv`: entry label, exit reason, hold bucket 별 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, giveback 을 연결해 stop/exit 손실 경로를 분해한다.
 
 ### Exit Criteria
 
@@ -352,6 +354,8 @@ Intraday 전용으로는 `0-5분`, `5-15분`, `15-30분`, `30-60분`, `1-2시간
 - [ ] A vs B vs baseline 비교가 한 화면에 보임
 - [ ] Sharpe / MDD 에 bootstrap 또는 Monte Carlo 신뢰구간 동반
 - [ ] regime-split 리포트가 최소 2개 장세(trend/chop)로 분해됨
+- [ ] stop/exit path diagnostics 가 1개월 calibration replay 와 3개월 이상 OOS replay 에서 모두 생성됨
+- [ ] `score_lt45` 같은 score filter 결과는 loss-reduction hypothesis 로만 기록되고, OOS/shadow 전에는 live strategy 로 승격되지 않음
 
 ---
 

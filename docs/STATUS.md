@@ -36,6 +36,7 @@
 - `train-premkt-model` CLI 는 1단계 CSV 를 읽어 `label_winner` baseline classifier 를 학습하고, `market_date` 시간순 split 기준 model artifact 와 metrics JSON 을 저장할 수 있다.
 - `run-premkt-model-replay` CLI 는 `data/backtest_lab/` DB 사본을 기본 입력으로, point-in-time universe/watchlist 와 cutoff 이전 model feature 만 사용해 과거 날짜 범위를 local-only 로 재생하고 replay 산출물을 `data/backtest_lab/replays/<run_id>/` 아래에 남길 수 있다.
 - `run-premkt-model-replay` 는 entry label include/exclude, replay 전용 `k1/k2` override, L1 quote 필수 entry 옵션을 지원하며, trade log 에 entry-time label, exit-time label, fill/slippage/capacity metric, label별 stop-out attribution CSV 를 남긴다.
+- `run-premkt-model-replay` 는 stop/exit path diagnostics 를 산출해 stop 전후 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, giveback 을 bucket/label/exit reason/hold bucket 기준으로 분해할 수 있다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
@@ -61,6 +62,7 @@
 - PremktPredictor 학습 준비 1일차 산출물은 성능 판별이 아니라 누수 없는 학습 데이터셋 생성 기반이다. cutoff 이후 minute bar 가 없으면 row 는 유지하고 label 컬럼은 비워 둔다.
 - PremktPredictor 학습 준비 3단계는 모델 점수 연결이며, trading 성능 판단은 아직 아님. 모델 점수에 필요한 historical minute feature 가 부족하면 rule score 로 fallback 하고 JSON lineage 에 이유를 남긴다.
 - historical replay smoke 또는 calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
+- `score_lt45` 는 live strategy 가 아니라 2025년 6월 sanity replay 와 2025년 4~5월 backward robustness 에서 손실 감소 가능성을 본 frozen hypothesis 다. Step 0 coverage, 고정 파라미터 OOS, shadow 검증 전에는 실매매 진입 필터로 해석하지 않는다.
 - 2026-04-30 이전 historical replay CSV 의 `analysis_label` 은 EXIT row 에서 청산 시점 label 로 기록됐을 수 있다. `WAIT_PULLBACK` 등 entry label attribution 은 새 replay 산출물의 `entry_analysis_label` / `exit_analysis_label` 기준으로 다시 봐야 한다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 
@@ -105,6 +107,8 @@
 - exit 시점 label 은 `WAIT_PULLBACK` 과 `OPENING_RANGE_CANDIDATE` 에 손실이 집중되고, `CONDITIONAL_ENTRY` exit label 은 상대적으로 양호하다. 다만 minute-only stop/exit 구조라 매매 품질 결론은 금지한다.
 - 새 replay 산출물은 label 전이, quick stop, 심볼 손실 집중도, 보유시간 bucket 을 보기 위해 `paper_entry_exit_label_matrix.csv`, `paper_stop_out_diagnostics.csv`, `paper_symbol_loss_concentration.csv`, `paper_hold_bucket_kpis.csv` 를 추가로 저장한다. 이 네 파일은 성능 판정용이 아니라 다음 ablation 우선순위 결정용이다.
 - 다음 손실 감소 실험을 위해 `run-premkt-model-replay` 는 replay-only 옵션 `--entry-score-upper-bound`, `--min-entry-time`, `--exit-label` 을 지원한다. 현재 6월 sanity 결과의 우선 가설은 `OPENING_RANGE_CANDIDATE` 제외 후에도 남는 `CONDITIONAL_ENTRY` early stop, `analysis_score >= 4.5` 과열 진입, `WAIT_PULLBACK` 전환 방치다.
+- `score_lt45` 는 `analysis_score < 4.5` 과열 진입 회피 가설로 고정한다. 현재 해석은 손실 감소 ablation 후보이며, predictor edge 또는 live 전략 승인 신호가 아니다.
+- stop/exit path diagnostics 는 stop 발생 전후의 MFE/MAE, R multiple, intrabar low stop touch, session_end giveback 을 보기 위한 원인 분해 산출물이다. 성능 판정이 아니라 `entry filter -> stop/exit structure -> OOS` 순서의 다음 실험 우선순위 결정에만 사용한다.
 
 ## 다음 우선순위
 

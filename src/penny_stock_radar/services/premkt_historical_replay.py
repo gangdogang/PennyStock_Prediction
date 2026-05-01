@@ -80,6 +80,14 @@ class _Position:
     predictor_weight: float
     entry_reasons: list[str]
     fees_paid: float
+    best_close_price: float
+    worst_close_price: float
+    best_intrabar_price: float
+    worst_intrabar_price: float
+    first_0_5r_at: datetime | None = None
+    first_1r_at: datetime | None = None
+    intrabar_stop_touched: bool = False
+    intrabar_stop_first_at: datetime | None = None
 
 
 @dataclass
@@ -476,6 +484,8 @@ class PremktHistoricalReplayRunner:
             dollar_volume = sum(float(row["close_price"] or 0.0) * float(row["volume"] or 0.0) for row in visible)
             bid = _positive_float(current["bid_price"])
             ask = _positive_float(current["ask_price"])
+            bar_high = _positive_float(current["high_price"])
+            bar_low = _positive_float(current["low_price"])
             spread_pct = _spread_pct(current, bid=bid, ask=ask, last_price=last_price)
             pct_change = (
                 ((last_price / first_open) - 1.0) * 100.0
@@ -499,6 +509,8 @@ class PremktHistoricalReplayRunner:
                     last_price=last_price,
                     bid_price=bid,
                     ask_price=ask,
+                    bar_high_price=bar_high,
+                    bar_low_price=bar_low,
                     previous_close=first_open,
                     pct_change=pct_change,
                     volume=volume,
@@ -536,7 +548,10 @@ class PremktHistoricalReplayRunner:
         exit_labels = set(self.options.exit_labels)
         for row in activity:
             position = state.positions.get(row.symbol)
-            if position is not None and row.last_price is not None and row.last_price <= position.stop_price:
+            if position is None:
+                continue
+            self._update_position_path(position, row=row, simulated_time=simulated_time)
+            if row.last_price is not None and row.last_price <= position.stop_price:
                 trades.append(
                     self._close_position(
                         state,
@@ -643,6 +658,10 @@ class PremktHistoricalReplayRunner:
             predictor_weight=predictor_weight,
             entry_reasons=[*row.reasons, f"predictor_score:{predictor_score:.1f}" if predictor_score is not None else ""],
             fees_paid=fill.transaction_cost,
+            best_close_price=fill.fill_price,
+            worst_close_price=fill.fill_price,
+            best_intrabar_price=fill.fill_price,
+            worst_intrabar_price=fill.fill_price,
         )
         state.positions[row.symbol] = position
         return {
@@ -738,10 +757,50 @@ class PremktHistoricalReplayRunner:
             "holding_minutes": round(holding_minutes, 6),
             "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
+            **_position_path_metrics(
+                position,
+                exit_price=exit_price,
+                exit_reason=reason,
+            ),
             **_fill_metrics(fill),
         }
         state.trades.append(row_payload)
         return row_payload
+
+    def _update_position_path(
+        self,
+        position: _Position,
+        *,
+        row: MarketActivity,
+        simulated_time: datetime,
+    ) -> None:
+        close_price = row.last_price
+        if close_price is not None and close_price > 0:
+            position.best_close_price = max(position.best_close_price, close_price)
+            position.worst_close_price = min(position.worst_close_price, close_price)
+        high_price = row.bar_high_price if row.bar_high_price is not None else close_price
+        low_price = row.bar_low_price if row.bar_low_price is not None else close_price
+        if high_price is not None and high_price > 0:
+            position.best_intrabar_price = max(position.best_intrabar_price, high_price)
+        if low_price is not None and low_price > 0:
+            position.worst_intrabar_price = min(position.worst_intrabar_price, low_price)
+            if low_price <= position.stop_price:
+                position.intrabar_stop_touched = True
+                if position.intrabar_stop_first_at is None:
+                    position.intrabar_stop_first_at = simulated_time
+
+        risk_per_share = position.entry_price - position.stop_price
+        if risk_per_share <= 0:
+            return
+        reached_price_0_5r = position.entry_price + (0.5 * risk_per_share)
+        reached_price_1r = position.entry_price + risk_per_share
+        reference_high = high_price if high_price is not None else close_price
+        if reference_high is None:
+            return
+        if position.first_0_5r_at is None and reference_high >= reached_price_0_5r:
+            position.first_0_5r_at = simulated_time
+        if position.first_1r_at is None and reference_high >= reached_price_1r:
+            position.first_1r_at = simulated_time
 
     def _build_manifest(self) -> dict[str, object]:
         return {
@@ -850,6 +909,7 @@ class PremktHistoricalReplayRunner:
                 "stop_out_diagnostics": "paper_stop_out_diagnostics.csv",
                 "symbol_loss_concentration": "paper_symbol_loss_concentration.csv",
                 "hold_bucket_kpis": "paper_hold_bucket_kpis.csv",
+                "exit_path_diagnostics": "paper_exit_path_diagnostics.csv",
             },
             "predictor_weighted_vs_watchlist_momentum": _pair_diff(
                 bucket_results,
@@ -1064,6 +1124,106 @@ class PremktHistoricalReplayRunner:
             )
         return rows
 
+    def _exit_path_diagnostics(self) -> list[dict[str, object]]:
+        exits = [row for row in self._trade_rows if row.get("event") == "EXIT"]
+        grouped: dict[tuple[str, str, str, str], list[dict[str, object]]] = {}
+        for row in exits:
+            key = (
+                str(row.get("bucket") or ""),
+                _entry_label(row),
+                str(row.get("exit_reason") or ""),
+                _hold_bucket(_number(row.get("holding_minutes"))),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        rows: list[dict[str, object]] = []
+        for (bucket, entry_label, exit_reason, hold_bucket), group in sorted(grouped.items()):
+            session_end_rows = [row for row in group if row.get("exit_reason") == "session_end"]
+            reached_0_5r_count = sum(1 for row in group if _truthy(row.get("reached_0_5r")))
+            reached_1r_count = sum(1 for row in group if _truthy(row.get("reached_1r")))
+            intrabar_stop_touched_count = sum(
+                1 for row in group if _truthy(row.get("intrabar_stop_touched"))
+            )
+            rows.append(
+                {
+                    "bucket": bucket,
+                    "entry_analysis_label": entry_label,
+                    "exit_reason": exit_reason,
+                    "hold_bucket": hold_bucket,
+                    **_closed_trade_stats(group),
+                    "avg_mfe_pct_close": _avg(
+                        _number(row.get("mfe_pct_close"))
+                        for row in group
+                        if row.get("mfe_pct_close") not in (None, "")
+                    ),
+                    "avg_mae_pct_close": _avg(
+                        _number(row.get("mae_pct_close"))
+                        for row in group
+                        if row.get("mae_pct_close") not in (None, "")
+                    ),
+                    "avg_mfe_pct_intrabar": _avg(
+                        _number(row.get("mfe_pct_intrabar"))
+                        for row in group
+                        if row.get("mfe_pct_intrabar") not in (None, "")
+                    ),
+                    "avg_mae_pct_intrabar": _avg(
+                        _number(row.get("mae_pct_intrabar"))
+                        for row in group
+                        if row.get("mae_pct_intrabar") not in (None, "")
+                    ),
+                    "avg_max_r_multiple": _avg(
+                        _number(row.get("max_r_multiple"))
+                        for row in group
+                        if row.get("max_r_multiple") not in (None, "")
+                    ),
+                    "avg_min_r_multiple": _avg(
+                        _number(row.get("min_r_multiple"))
+                        for row in group
+                        if row.get("min_r_multiple") not in (None, "")
+                    ),
+                    "avg_max_close_r": _avg(
+                        _number(row.get("max_close_r"))
+                        for row in group
+                        if row.get("max_close_r") not in (None, "")
+                    ),
+                    "avg_min_close_r": _avg(
+                        _number(row.get("min_close_r"))
+                        for row in group
+                        if row.get("min_close_r") not in (None, "")
+                    ),
+                    "avg_first_1r_minutes": _avg(
+                        _number(row.get("first_1r_minutes"))
+                        for row in group
+                        if row.get("first_1r_minutes") not in (None, "")
+                    ),
+                    "avg_giveback_from_mfe_pct": _avg(
+                        _number(row.get("giveback_from_mfe_pct"))
+                        for row in group
+                        if row.get("giveback_from_mfe_pct") not in (None, "")
+                    ),
+                    "reached_0_5r_count": reached_0_5r_count,
+                    "reached_0_5r_rate": round(reached_0_5r_count / len(group), 6) if group else 0.0,
+                    "reached_1r_count": reached_1r_count,
+                    "reached_1r_rate": round(reached_1r_count / len(group), 6) if group else 0.0,
+                    "stop_after_1r_count": sum(
+                        1
+                        for row in group
+                        if row.get("exit_reason") == "stop_loss" and _truthy(row.get("reached_1r"))
+                    ),
+                    "intrabar_stop_touched_count": intrabar_stop_touched_count,
+                    "intrabar_stop_touched_rate": round(intrabar_stop_touched_count / len(group), 6)
+                    if group
+                    else 0.0,
+                    "session_end_winner_count": sum(
+                        1 for row in session_end_rows if _number(row.get("net_pnl")) > 0
+                    ),
+                    "session_end_loser_count": sum(
+                        1 for row in session_end_rows if _number(row.get("net_pnl")) < 0
+                    ),
+                }
+            )
+        return rows
+
     def _conclusion_status(
         self,
         *,
@@ -1108,6 +1268,10 @@ class PremktHistoricalReplayRunner:
         _write_csv(
             self.export_dir / "paper_hold_bucket_kpis.csv",
             self._hold_bucket_kpis(),
+        )
+        _write_csv(
+            self.export_dir / "paper_exit_path_diagnostics.csv",
+            self._exit_path_diagnostics(),
         )
         pair_rows = [
             {"left_bucket": left, "right_bucket": right, **_pair_diff(dict(summary["bucket_results"]), left, right)}
@@ -1343,6 +1507,90 @@ def _closed_trade_stats(rows: list[dict[str, object]]) -> dict[str, object]:
         "avg_realized_pnl_pct": _avg(pct_values),
         "avg_holding_minutes": _avg(hold_values),
     }
+
+
+def _position_path_metrics(
+    position: _Position,
+    *,
+    exit_price: float,
+    exit_reason: str,
+) -> dict[str, object]:
+    risk_per_share = position.entry_price - position.stop_price
+    mfe_pct_close = _price_move_pct(position.best_close_price, position.entry_price)
+    mae_pct_close = _price_move_pct(position.worst_close_price, position.entry_price)
+    mfe_pct_intrabar = _price_move_pct(position.best_intrabar_price, position.entry_price)
+    mae_pct_intrabar = _price_move_pct(position.worst_intrabar_price, position.entry_price)
+    max_r_multiple = (
+        (position.best_intrabar_price - position.entry_price) / risk_per_share
+        if risk_per_share > 0
+        else 0.0
+    )
+    min_r_multiple = (
+        (position.worst_intrabar_price - position.entry_price) / risk_per_share
+        if risk_per_share > 0
+        else 0.0
+    )
+    max_close_r = (
+        (position.best_close_price - position.entry_price) / risk_per_share
+        if risk_per_share > 0
+        else 0.0
+    )
+    min_close_r = (
+        (position.worst_close_price - position.entry_price) / risk_per_share
+        if risk_per_share > 0
+        else 0.0
+    )
+    giveback_from_mfe_pct = (
+        ((position.best_intrabar_price - exit_price) / position.best_intrabar_price) * 100.0
+        if position.best_intrabar_price > 0
+        else 0.0
+    )
+    first_1r_minutes = (
+        (position.first_1r_at - position.opened_at).total_seconds() / 60.0
+        if position.first_1r_at is not None
+        else None
+    )
+    return {
+        "entry_stop_price": round(position.stop_price, 6),
+        "risk_per_share": round(risk_per_share, 6),
+        "mfe_close_per_share": round(position.best_close_price - position.entry_price, 6),
+        "mae_close_per_share": round(position.worst_close_price - position.entry_price, 6),
+        "mfe_intrabar_per_share": round(position.best_intrabar_price - position.entry_price, 6),
+        "mae_intrabar_per_share": round(position.worst_intrabar_price - position.entry_price, 6),
+        "mfe_pct_close": round(mfe_pct_close, 6),
+        "mae_pct_close": round(mae_pct_close, 6),
+        "mfe_pct_intrabar": round(mfe_pct_intrabar, 6),
+        "mae_pct_intrabar": round(mae_pct_intrabar, 6),
+        "max_close_r": round(max_close_r, 6),
+        "min_close_r": round(min_close_r, 6),
+        "max_r_multiple": round(max_r_multiple, 6),
+        "min_r_multiple": round(min_r_multiple, 6),
+        "reached_0_5r": int(position.first_0_5r_at is not None),
+        "reached_1r": int(position.first_1r_at is not None),
+        "first_1r_minutes": _round_optional(first_1r_minutes),
+        "intrabar_stop_touched": int(position.intrabar_stop_touched),
+        "intrabar_stop_first_at": (
+            position.intrabar_stop_first_at.isoformat()
+            if position.intrabar_stop_first_at is not None
+            else ""
+        ),
+        "stop_trigger_basis": _stop_trigger_basis(position, exit_reason=exit_reason),
+        "giveback_from_mfe_pct": round(max(giveback_from_mfe_pct, 0.0), 6),
+    }
+
+
+def _stop_trigger_basis(position: _Position, *, exit_reason: str) -> str:
+    if exit_reason == "stop_loss":
+        return "close"
+    if position.intrabar_stop_touched:
+        return "intrabar_low_only"
+    return "none"
+
+
+def _price_move_pct(price: float, entry_price: float) -> float:
+    if entry_price <= 0:
+        return 0.0
+    return ((price - entry_price) / entry_price) * 100.0
 
 
 def _entry_label(row: dict[str, object]) -> str:
