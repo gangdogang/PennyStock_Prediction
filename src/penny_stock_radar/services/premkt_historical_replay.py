@@ -66,6 +66,8 @@ class ReplayOptions:
     min_entry_time: time | None = None
     exit_labels: tuple[str, ...] = ()
     breakeven_stop_after_r: float | None = None
+    max_entries_per_symbol_per_day: int | None = None
+    cooldown_after_stop_minutes: float | None = None
 
 
 @dataclass
@@ -102,6 +104,8 @@ class _BucketState:
     cash: float
     positions: dict[str, _Position] = field(default_factory=dict)
     trades: list[dict[str, object]] = field(default_factory=list)
+    entry_counts_by_symbol: dict[str, int] = field(default_factory=dict)
+    last_stop_at_by_symbol: dict[str, datetime] = field(default_factory=dict)
 
 
 @dataclass
@@ -154,6 +158,13 @@ class PremktHistoricalReplayRunner:
             raise ValueError("Entry label policy excludes all enabled labels.")
         if self.options.breakeven_stop_after_r is not None and self.options.breakeven_stop_after_r < 0:
             raise ValueError("breakeven_stop_after_r must be greater than or equal to 0.0.")
+        if (
+            self.options.max_entries_per_symbol_per_day is not None
+            and self.options.max_entries_per_symbol_per_day < 1
+        ):
+            raise ValueError("max_entries_per_symbol_per_day must be at least 1.")
+        if self.options.cooldown_after_stop_minutes is not None and self.options.cooldown_after_stop_minutes < 0:
+            raise ValueError("cooldown_after_stop_minutes must be greater than or equal to 0.0.")
         validate_replay_paths(
             db_path=self.db_path,
             export_dir=self.export_dir,
@@ -566,6 +577,12 @@ class PremktHistoricalReplayRunner:
         for row in sorted(activity, key=lambda item: (-item.analysis_score, item.pct_rank or 9999, item.symbol)):
             if row.symbol in state.positions:
                 continue
+            if not self._entry_reentry_policy_allows(
+                state=state,
+                symbol=row.symbol,
+                simulated_time=simulated_time,
+            ):
+                continue
             if len(state.positions) >= max(int(self.settings.paper_adaptive_max_open_positions), 1):
                 continue
             prediction = predictions_by_symbol.get(row.symbol)
@@ -600,6 +617,24 @@ class PremktHistoricalReplayRunner:
             if entry is not None:
                 trades.append(entry)
         return trades
+
+    def _entry_reentry_policy_allows(
+        self,
+        *,
+        state: _BucketState,
+        symbol: str,
+        simulated_time: datetime,
+    ) -> bool:
+        max_entries = self.options.max_entries_per_symbol_per_day
+        if max_entries is not None and state.entry_counts_by_symbol.get(symbol, 0) >= max_entries:
+            return False
+        cooldown_minutes = self.options.cooldown_after_stop_minutes
+        if cooldown_minutes is None:
+            return True
+        last_stop_at = state.last_stop_at_by_symbol.get(symbol)
+        if last_stop_at is None:
+            return True
+        return simulated_time >= last_stop_at + timedelta(minutes=cooldown_minutes)
 
     def _open_position(
         self,
@@ -654,6 +689,7 @@ class PremktHistoricalReplayRunner:
             breakeven_stop_after_r=self.options.breakeven_stop_after_r,
         )
         state.positions[row.symbol] = position
+        state.entry_counts_by_symbol[row.symbol] = state.entry_counts_by_symbol.get(row.symbol, 0) + 1
         return {
             "run_id": self.run_id,
             "market_date": market_date,
@@ -719,6 +755,8 @@ class PremktHistoricalReplayRunner:
         net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost
         state.cash += (exit_price * fill.quantity) - fill.transaction_cost
         state.positions.pop(position.symbol, None)
+        if reason == "stop_loss":
+            state.last_stop_at_by_symbol[position.symbol] = simulated_time
         holding_minutes = (simulated_time - position.opened_at).total_seconds() / 60.0
         row_payload = {
             "run_id": self.run_id,
@@ -825,6 +863,8 @@ class PremktHistoricalReplayRunner:
                 else None,
                 "exit_labels": list(self.options.exit_labels),
                 "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
+                "max_entries_per_symbol_per_day": self.options.max_entries_per_symbol_per_day,
+                "cooldown_after_stop_minutes": self.options.cooldown_after_stop_minutes,
             },
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
@@ -872,6 +912,8 @@ class PremktHistoricalReplayRunner:
                 else None,
                 "exit_labels": list(self.options.exit_labels),
                 "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
+                "max_entries_per_symbol_per_day": self.options.max_entries_per_symbol_per_day,
+                "cooldown_after_stop_minutes": self.options.cooldown_after_stop_minutes,
             },
         }
 

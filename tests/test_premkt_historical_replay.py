@@ -384,6 +384,10 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
             "WAIT_PULLBACK",
             "--breakeven-stop-after-r",
             "1.0",
+            "--max-entries-per-symbol-per-day",
+            "1",
+            "--cooldown-after-stop-minutes",
+            "30",
         ],
     )
 
@@ -399,6 +403,8 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
     assert manifest["replay_ablation_policy"]["min_entry_time"] == "08:02"
     assert manifest["replay_ablation_policy"]["exit_labels"] == ["WAIT_PULLBACK"]
     assert manifest["replay_ablation_policy"]["breakeven_stop_after_r"] == 1.0
+    assert manifest["replay_ablation_policy"]["max_entries_per_symbol_per_day"] == 1
+    assert manifest["replay_ablation_policy"]["cooldown_after_stop_minutes"] == 30.0
     assert trade_log.read_text(encoding="utf-8") == ""
 
 

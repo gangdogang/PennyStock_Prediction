@@ -354,6 +354,18 @@ def run_premkt_model_replay(
         min=0.0,
         help="Replay-only ablation: move stop to entry after a close-based R multiple is reached.",
     ),
+    max_entries_per_symbol_per_day: int | None = typer.Option(
+        None,
+        "--max-entries-per-symbol-per-day",
+        min=1,
+        help="Replay-only ablation: cap same-symbol entries per bucket per replay date.",
+    ),
+    cooldown_after_stop_minutes: float | None = typer.Option(
+        None,
+        "--cooldown-after-stop-minutes",
+        min=0.0,
+        help="Replay-only ablation: block same-symbol re-entry for this many minutes after a stop loss.",
+    ),
     predictor_k1: float | None = typer.Option(
         None,
         "--predictor-k1",
@@ -402,6 +414,8 @@ def run_premkt_model_replay(
                 min_entry_time=min_entry,
                 exit_labels=_normalize_label_options(exit_label, default=()),
                 breakeven_stop_after_r=breakeven_stop_after_r,
+                max_entries_per_symbol_per_day=max_entries_per_symbol_per_day,
+                cooldown_after_stop_minutes=cooldown_after_stop_minutes,
             ),
         )
         result = runner.run()
