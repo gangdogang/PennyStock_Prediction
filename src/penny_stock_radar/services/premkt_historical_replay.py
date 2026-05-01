@@ -65,6 +65,7 @@ class ReplayOptions:
     entry_score_upper_bound: float | None = None
     min_entry_time: time | None = None
     exit_labels: tuple[str, ...] = ()
+    breakeven_stop_after_r: float | None = None
 
 
 @dataclass
@@ -74,6 +75,7 @@ class _Position:
     quantity: int
     entry_price: float
     stop_price: float
+    initial_stop_price: float
     opened_at: datetime
     entry_score: float
     entry_label: str
@@ -89,6 +91,9 @@ class _Position:
     first_1r_at: datetime | None = None
     intrabar_stop_touched: bool = False
     intrabar_stop_first_at: datetime | None = None
+    breakeven_stop_active: bool = False
+    breakeven_stop_after_r: float | None = None
+    breakeven_stop_activated_at: datetime | None = None
 
 
 @dataclass
@@ -147,6 +152,8 @@ class PremktHistoricalReplayRunner:
             raise ValueError("At least one entry label must be enabled.")
         if not (set(self.options.entry_labels) - set(self.options.exclude_entry_labels)):
             raise ValueError("Entry label policy excludes all enabled labels.")
+        if self.options.breakeven_stop_after_r is not None and self.options.breakeven_stop_after_r < 0:
+            raise ValueError("breakeven_stop_after_r must be greater than or equal to 0.0.")
         validate_replay_paths(
             db_path=self.db_path,
             export_dir=self.export_dir,
@@ -632,6 +639,7 @@ class PremktHistoricalReplayRunner:
             quantity=fill.quantity,
             entry_price=fill.fill_price,
             stop_price=stop_price,
+            initial_stop_price=stop_price,
             opened_at=simulated_time,
             entry_score=row.analysis_score,
             entry_label=row.analysis_label,
@@ -643,6 +651,7 @@ class PremktHistoricalReplayRunner:
             worst_close_price=fill.fill_price,
             best_intrabar_price=fill.fill_price,
             worst_intrabar_price=fill.fill_price,
+            breakeven_stop_after_r=self.options.breakeven_stop_after_r,
         )
         state.positions[row.symbol] = position
         return {
@@ -770,7 +779,7 @@ class PremktHistoricalReplayRunner:
                 if position.intrabar_stop_first_at is None:
                     position.intrabar_stop_first_at = simulated_time
 
-        risk_per_share = position.entry_price - position.stop_price
+        risk_per_share = position.entry_price - position.initial_stop_price
         if risk_per_share <= 0:
             return
         reached_price_0_5r = position.entry_price + (0.5 * risk_per_share)
@@ -782,6 +791,15 @@ class PremktHistoricalReplayRunner:
             position.first_0_5r_at = simulated_time
         if position.first_1r_at is None and reference_high >= reached_price_1r:
             position.first_1r_at = simulated_time
+        if (
+            position.breakeven_stop_after_r is not None
+            and not position.breakeven_stop_active
+            and close_price is not None
+            and close_price >= position.entry_price + (position.breakeven_stop_after_r * risk_per_share)
+        ):
+            position.stop_price = max(position.stop_price, position.entry_price)
+            position.breakeven_stop_active = True
+            position.breakeven_stop_activated_at = simulated_time
 
     def _build_manifest(self) -> dict[str, object]:
         return {
@@ -806,6 +824,7 @@ class PremktHistoricalReplayRunner:
                 if self.options.min_entry_time
                 else None,
                 "exit_labels": list(self.options.exit_labels),
+                "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
             },
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
@@ -852,6 +871,7 @@ class PremktHistoricalReplayRunner:
                 if self.options.min_entry_time
                 else None,
                 "exit_labels": list(self.options.exit_labels),
+                "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
             },
         }
 
@@ -1125,6 +1145,9 @@ class PremktHistoricalReplayRunner:
             intrabar_stop_touched_count = sum(
                 1 for row in group if _truthy(row.get("intrabar_stop_touched"))
             )
+            breakeven_stop_active_count = sum(
+                1 for row in group if _truthy(row.get("breakeven_stop_active"))
+            )
             rows.append(
                 {
                     "bucket": bucket,
@@ -1177,6 +1200,11 @@ class PremktHistoricalReplayRunner:
                         for row in group
                         if row.get("first_1r_minutes") not in (None, "")
                     ),
+                    "avg_breakeven_stop_activated_minutes": _avg(
+                        _number(row.get("breakeven_stop_activated_minutes"))
+                        for row in group
+                        if row.get("breakeven_stop_activated_minutes") not in (None, "")
+                    ),
                     "avg_giveback_from_mfe_pct": _avg(
                         _number(row.get("giveback_from_mfe_pct"))
                         for row in group
@@ -1193,6 +1221,10 @@ class PremktHistoricalReplayRunner:
                     ),
                     "intrabar_stop_touched_count": intrabar_stop_touched_count,
                     "intrabar_stop_touched_rate": round(intrabar_stop_touched_count / len(group), 6)
+                    if group
+                    else 0.0,
+                    "breakeven_stop_active_count": breakeven_stop_active_count,
+                    "breakeven_stop_active_rate": round(breakeven_stop_active_count / len(group), 6)
                     if group
                     else 0.0,
                     "session_end_winner_count": sum(
@@ -1471,7 +1503,7 @@ def _position_path_metrics(
     exit_price: float,
     exit_reason: str,
 ) -> dict[str, object]:
-    risk_per_share = position.entry_price - position.stop_price
+    risk_per_share = position.entry_price - position.initial_stop_price
     mfe_pct_close = _price_move_pct(position.best_close_price, position.entry_price)
     mae_pct_close = _price_move_pct(position.worst_close_price, position.entry_price)
     mfe_pct_intrabar = _price_move_pct(position.best_intrabar_price, position.entry_price)
@@ -1506,8 +1538,15 @@ def _position_path_metrics(
         if position.first_1r_at is not None
         else None
     )
+    breakeven_stop_activated_minutes = (
+        (position.breakeven_stop_activated_at - position.opened_at).total_seconds() / 60.0
+        if position.breakeven_stop_activated_at is not None
+        else None
+    )
     return {
-        "entry_stop_price": round(position.stop_price, 6),
+        "entry_stop_price": round(position.initial_stop_price, 6),
+        "initial_stop_price": round(position.initial_stop_price, 6),
+        "final_stop_price": round(position.stop_price, 6),
         "risk_per_share": round(risk_per_share, 6),
         "mfe_close_per_share": round(position.best_close_price - position.entry_price, 6),
         "mae_close_per_share": round(position.worst_close_price - position.entry_price, 6),
@@ -1532,6 +1571,14 @@ def _position_path_metrics(
         ),
         "stop_trigger_basis": _stop_trigger_basis(position, exit_reason=exit_reason),
         "giveback_from_mfe_pct": round(max(giveback_from_mfe_pct, 0.0), 6),
+        "breakeven_stop_active": int(position.breakeven_stop_active),
+        "breakeven_stop_after_r": _round_optional(position.breakeven_stop_after_r),
+        "breakeven_stop_activated_at": (
+            position.breakeven_stop_activated_at.isoformat()
+            if position.breakeven_stop_activated_at is not None
+            else ""
+        ),
+        "breakeven_stop_activated_minutes": _round_optional(breakeven_stop_activated_minutes),
     }
 
 

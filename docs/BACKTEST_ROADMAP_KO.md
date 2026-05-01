@@ -346,7 +346,7 @@ Intraday 전용으로는 `0-5분`, `5-15분`, `15-30분`, `30-60분`, `1-2시간
 - 대시보드 내 "백테스팅 KPI" 섹션
 - 포트폴리오 A / B / baseline 나란히 비교
 - 거래 수준 CSV + regime-split CSV export
-- `paper_exit_path_diagnostics.csv`: entry label, exit reason, hold bucket 별 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, giveback 을 연결해 stop/exit 손실 경로를 분해한다.
+- `paper_exit_path_diagnostics.csv`: entry label, exit reason, hold bucket 별 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, breakeven stop 활성화, giveback 을 연결해 stop/exit 손실 경로를 분해한다.
 
 ### Exit Criteria
 

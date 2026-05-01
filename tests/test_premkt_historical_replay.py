@@ -382,6 +382,8 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
             "08:02",
             "--exit-label",
             "WAIT_PULLBACK",
+            "--breakeven-stop-after-r",
+            "1.0",
         ],
     )
 
@@ -396,7 +398,66 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
     assert manifest["replay_ablation_policy"]["entry_score_upper_bound"] == 4.5
     assert manifest["replay_ablation_policy"]["min_entry_time"] == "08:02"
     assert manifest["replay_ablation_policy"]["exit_labels"] == ["WAIT_PULLBACK"]
+    assert manifest["replay_ablation_policy"]["breakeven_stop_after_r"] == 1.0
     assert trade_log.read_text(encoding="utf-8") == ""
+
+
+def test_replay_breakeven_stop_after_r_moves_stop_to_entry(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_breakeven_fixture_db(tmp_path)
+    export_dir = tmp_path / "replays" / "run_breakeven"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+            "--breakeven-stop-after-r",
+            "1.0",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    path_diagnostics = list(csv.DictReader((export_dir / "paper_exit_path_diagnostics.csv").open(encoding="utf-8")))
+    exit_row = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+
+    assert exit_row["exit_reason"] == "stop_loss"
+    assert exit_row["breakeven_stop_active"] == "1"
+    assert float(exit_row["breakeven_stop_after_r"]) == pytest.approx(1.0)
+    assert float(exit_row["breakeven_stop_activated_minutes"]) == pytest.approx(1.0)
+    assert float(exit_row["entry_stop_price"]) < float(exit_row["entry_price"])
+    assert float(exit_row["initial_stop_price"]) == pytest.approx(float(exit_row["entry_stop_price"]))
+    assert float(exit_row["final_stop_price"]) == pytest.approx(float(exit_row["entry_price"]))
+    assert float(exit_row["risk_per_share"]) == pytest.approx(
+        float(exit_row["entry_price"]) - float(exit_row["initial_stop_price"])
+    )
+    assert any(
+        row["bucket"] == "predictor_weighted"
+        and row["exit_reason"] == "stop_loss"
+        and row["breakeven_stop_active_count"] == "1"
+        and float(row["avg_breakeven_stop_activated_minutes"]) == pytest.approx(1.0)
+        for row in path_diagnostics
+    )
 
 
 def test_replay_exit_label_ablation_closes_on_label_transition(
@@ -514,6 +575,51 @@ def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Pat
             _bar("AAA", "2026-04-10T08:00:00-04:00", 1.10, 2.00, 1.09, 1.90, 100_000),
             _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.10, min(exit_close, 1.80), exit_close, 50_000),
             _bar("FUTR", "2026-04-11T07:59:00-04:00", 1.00, 4.00, 1.00, 4.00, 900_000),
+        ],
+    )
+    return db_path
+
+
+def _build_breakeven_fixture_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "breakeven.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=1,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="breakeven_fixture",
+    )
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [_candidate("AAA", price=1.0)],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                market_context_score=0.0,
+                low_float_bonus=1.0,
+                reasons=["fixture_watchlist"],
+            )
+        ],
+    )
+    insert_historical_minute_bars(
+        db_path,
+        [
+            _bar("AAA", "2026-04-10T07:58:00-04:00", 1.00, 1.08, 0.99, 1.05, 100),
+            _bar("AAA", "2026-04-10T07:59:00-04:00", 1.05, 1.12, 1.04, 1.10, 200),
+            _bar("AAA", "2026-04-10T08:00:00-04:00", 1.10, 1.95, 1.09, 1.90, 100_000),
+            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.12, 1.90, 2.10, 90_000),
+            _bar("AAA", "2026-04-10T08:02:00-04:00", 2.10, 2.11, 1.84, 1.88, 90_000),
         ],
     )
     return db_path

@@ -348,6 +348,12 @@ def run_premkt_model_replay(
         "--exit-label",
         help="Replay-only ablation: close open positions when this analysis label appears. Repeatable.",
     ),
+    breakeven_stop_after_r: float | None = typer.Option(
+        None,
+        "--breakeven-stop-after-r",
+        min=0.0,
+        help="Replay-only ablation: move stop to entry after a close-based R multiple is reached.",
+    ),
     predictor_k1: float | None = typer.Option(
         None,
         "--predictor-k1",
@@ -395,6 +401,7 @@ def run_premkt_model_replay(
                 entry_score_upper_bound=entry_score_upper_bound,
                 min_entry_time=min_entry,
                 exit_labels=_normalize_label_options(exit_label, default=()),
+                breakeven_stop_after_r=breakeven_stop_after_r,
             ),
         )
         result = runner.run()
