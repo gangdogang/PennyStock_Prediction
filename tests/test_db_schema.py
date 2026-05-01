@@ -49,6 +49,23 @@ def test_initialize_database_creates_expected_tables(tmp_path: Path) -> None:
     assert "universe" in tables
 
 
+def test_initialize_database_indexes_historical_minute_bars_by_date_symbol_time(tmp_path: Path) -> None:
+    module = load_first_module(DB_CANDIDATES)
+    init_fn = getattr(module, "initialize_database", None) or getattr(module, "init_db", None)
+    assert callable(init_fn)
+
+    db_path = tmp_path / "penny_stock.sqlite3"
+    init_fn(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        index_names = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(historical_minute_bars)")
+        }
+
+    assert "idx_historical_minute_bars_date_symbol_time" in index_names
+
+
 def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path) -> None:
     module = load_first_module(DB_CANDIDATES)
     init_fn = getattr(module, "initialize_database", None) or getattr(module, "init_db", None)

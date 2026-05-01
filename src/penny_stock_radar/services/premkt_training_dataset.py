@@ -113,17 +113,17 @@ class PremktTrainingDatasetBuilder:
 
         dataset_rows: list[dict[str, object]] = []
         for symbol in sorted(by_symbol):
-            symbol_rows = sorted(
-                by_symbol[symbol],
-                key=lambda row: _parse_bar_at(row["bar_at"]),
+            parsed_rows = sorted(
+                ((_parse_bar_at(row["bar_at"]), row) for row in by_symbol[symbol]),
+                key=lambda item: item[0],
             )
             feature_rows = [
-                row for row in symbol_rows if _parse_bar_at(row["bar_at"]) < cutoff_at
+                row for bar_at, row in parsed_rows if bar_at < cutoff_at
             ]
             if not feature_rows:
                 continue
             label_rows = [
-                row for row in symbol_rows if _parse_bar_at(row["bar_at"]) >= cutoff_at
+                row for bar_at, row in parsed_rows if bar_at >= cutoff_at
             ]
             dataset_rows.append(
                 self._build_symbol_row(

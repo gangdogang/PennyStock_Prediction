@@ -1,2 +1,0 @@
-[console_scripts]
-psradar = penny_stock_radar.cli:app

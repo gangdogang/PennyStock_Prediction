@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-04-30
+최종 정리일: 2026-05-01
 
 ## 현재 capabilities
 
@@ -38,6 +38,7 @@
 - `run-premkt-model-replay` 는 entry label include/exclude, replay 전용 `k1/k2` override, L1 quote 필수 entry 옵션을 지원하며, trade log 에 entry-time label, exit-time label, fill/slippage/capacity metric, label별 stop-out attribution CSV 를 남긴다.
 - `run-premkt-model-replay` 는 stop/exit path diagnostics 를 산출해 stop 전후 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, giveback 을 bucket/label/exit reason/hold bucket 기준으로 분해할 수 있다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
+- historical replay 는 날짜별 minute bar 와 모델 scoring feature 를 symbol별 반복 조회하지 않고 `market_date + symbol IN (...)` bulk load 로 읽은 뒤, prepared bar cursor 와 누적 volume/dollar volume 으로 simulated time 을 진행한다. non-blind bucket 은 activity deep-copy 를 생략하고, 전략 entry/exit/stop/sizing 규칙은 변경하지 않는다. `progress.json` 에 날짜별 elapsed, loaded bar rows, loaded symbols, simulated time count 를 남긴다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
 - Streamlit 대시보드는 v1 cleanup 기준으로 `ui/app.py` 를 bootstrap/sidebar/data load/tab routing 중심으로 줄이고, 공통 layout helper, `ui/pages/` 탭 렌더러, 첫 화면 view model 로 분리한다.
@@ -51,6 +52,7 @@
 - live observability 는 아직 JSONL sidecar 수준이며 대시보드 집계, 알람, broker execution reject telemetry 분리는 남아 있다.
 - stale/halt/trade-condition hard gate 는 live smoke 기준으로 다시 검증해야 한다.
 - `report_builder.py`, `ai_supervisor.py`, `providers/live_market.py` 는 여전히 단일 파일이 커서 변경 범위가 넓다.
+- `premkt_historical_replay.py` 는 bulk load/cursor/scoring 분리 후에도 아직 큰 orchestration 파일이다. 후속 정리는 export/report aggregation, diagnostics writer, CLI-facing runner facade 순서로 작게 나눈다.
 - Streamlit UI cleanup v1 은 구조 분리와 첫 화면 정보 구조 보존이 목표이며, 디자인 polish 와 비즈니스 로직 변경은 후속 작업으로 둔다.
 - 큰 service 파일 cleanup 은 `report_builder.py` 를 1순위로 두고 facade/API 를 유지한 채 payload loading, markdown export, snapshot HTML renderer, HTML formatting helper 순서로 나눈다.
 - KIS mock broker execution 은 `trade-plan` 기반 반자동 검증 범위만 지원하고 auto loop, reconciliation, recovery runbook 이 없다.

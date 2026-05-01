@@ -13,6 +13,10 @@ from ..models import (
 )
 from .connection import get_connection
 
+_SQLITE_PARAMETER_LIMIT = 999
+_BULK_SYMBOL_CHUNK_SIZE = 900
+
+
 def insert_historical_l1_quotes(
     database_path: Path,
     quotes: Iterable[HistoricalL1Quote],
@@ -139,6 +143,46 @@ def fetch_historical_minute_bars(
     query += " ORDER BY symbol ASC, bar_at ASC"
     with get_connection(database_path) as connection:
         return connection.execute(query, tuple(params)).fetchall()
+
+
+def fetch_historical_minute_bars_for_symbols(
+    database_path: Path,
+    *,
+    market_date: str,
+    symbols: Iterable[str],
+) -> list[sqlite3.Row]:
+    normalized_symbols: set[str] = set()
+    for symbol in symbols:
+        normalized = str(symbol).strip().upper()
+        if normalized:
+            normalized_symbols.add(normalized)
+    requested_symbols = sorted(normalized_symbols)
+    if not requested_symbols:
+        return []
+
+    rows_by_symbol: dict[str, list[sqlite3.Row]] = {}
+    max_symbols_per_query = min(_BULK_SYMBOL_CHUNK_SIZE, _SQLITE_PARAMETER_LIMIT - 1)
+    with get_connection(database_path) as connection:
+        for start in range(0, len(requested_symbols), max_symbols_per_query):
+            chunk = requested_symbols[start : start + max_symbols_per_query]
+            placeholders = ", ".join("?" for _ in chunk)
+            chunk_rows = connection.execute(
+                f"""
+                SELECT *
+                FROM historical_minute_bars
+                WHERE market_date = ?
+                  AND symbol IN ({placeholders})
+                ORDER BY symbol ASC, bar_at ASC
+                """,
+                (market_date, *chunk),
+            ).fetchall()
+            for row in chunk_rows:
+                rows_by_symbol.setdefault(str(row["symbol"]).upper(), []).append(row)
+    return [
+        row
+        for symbol in sorted(rows_by_symbol)
+        for row in rows_by_symbol[symbol]
+    ]
 
 
 def insert_historical_halt_events(

@@ -13,7 +13,7 @@ from ..config import AppSettings
 from ..kis_auth import load_cached_token, store_cached_token
 from ..db import (
     fetch_historical_l1_quotes,
-    fetch_historical_minute_bars,
+    fetch_historical_minute_bars_for_symbols,
     fetch_latest_passed_universe,
     fetch_passed_universe_for_market_date,
     insert_historical_l1_quotes,
@@ -77,9 +77,10 @@ class KISHistoricalDataService:
     ) -> HistoricalIngestSummary:
         market_date_str = self._coerce_market_date(market_date).isoformat()
         requested_symbols = self._resolve_symbols(market_date_str, symbols, symbol_limit=symbol_limit)
-        existing_rows = fetch_historical_minute_bars(
+        existing_rows = fetch_historical_minute_bars_for_symbols(
             self.settings.database_path,
             market_date=market_date_str,
+            symbols=requested_symbols,
         )
         existing_keys: set[tuple[str, str]] = set()
         for row in existing_rows:

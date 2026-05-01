@@ -129,6 +129,15 @@ class PremktPredictor:
         filings_by_symbol: dict[str, list[FilingMatch]] = defaultdict(list)
         for filing in filings:
             filings_by_symbol[filing.symbol.upper()].append(filing)
+        model_scores = (
+            scorer.score_symbols(
+                symbols=[entry.symbol for entry in entries],
+                market_date=market_date,
+                cutoff_at=cutoff_at,
+            )
+            if scorer is not None
+            else {}
+        )
 
         predictions: list[PremktPrediction] = []
         for entry in entries:
@@ -143,11 +152,14 @@ class PremktPredictor:
             notes = list(scoring_notes)
             row_score_mode = score_mode
             if scorer is not None:
-                model_result = scorer.score_symbol(
-                    symbol=symbol,
-                    market_date=market_date,
-                    cutoff_at=cutoff_at,
-                )
+                model_result = model_scores.get(symbol)
+                if model_result is None:
+                    model_result = scorer.fallback_score(
+                        symbol=symbol,
+                        notes=[
+                            "model_scoring_unavailable: no historical minute bars before cutoff."
+                        ],
+                    )
                 ml_score = model_result.ml_score
                 model_feature_version = model_result.model_feature_version
                 model_missing_features = model_result.missing_feature_names

@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-04-30
+최종 갱신일: 2026-05-01
 
 ## 운영 원칙
 
@@ -55,6 +55,7 @@
 - 2026-05-01: `run-premkt-model-replay` 에 replay-only ablation 옵션 `--entry-score-upper-bound`, `--min-entry-time`, `--exit-label` 을 추가했다. 목적은 2025년 6월 손실 가설인 과열 score 진입, 09:30 직후 진입, `WAIT_PULLBACK` 전환 방치를 실제 재생으로 분리 검증하는 것이다.
 - 2026-05-01: stop/exit path diagnostics 구현은 성능 판정이 아니라 손실 경로 분해 배선으로 본다. 이 산출물은 entry filter ablation 과 stop/exit 구조 ablation 의 우선순위를 정하는 용도다.
 - 2026-05-01: `score_lt45` 해석은 `analysis_score < 4.5` 과열 진입 회피에 따른 손실 감소 hypothesis 로 동결한다. live strategy 가 아니며, 고정 파라미터 3개월 이상 OOS 와 shadow 검증 전에는 실매매 판단에 쓰지 않는다.
+- 2026-05-01: historical replay 속도 개선으로 minute bars/model scoring bulk fetch, `(market_date, symbol, bar_at)` index, prepared bar cursor, activity copy 제거, 날짜별 timing/progress metric 을 추가했다. 생성물인 `src/penny_stock_radar.egg-info/` 와 로컬 캐시/중복 `.gitkeep 2` 도 정리했다. 이번 변경은 성능 최적화/구조 분리이며 entry/exit/stop/sizing 의사결정 로직은 변경하지 않는다.
 - 다음 우선순위는 fixed parameter OOS 결과를 바탕으로 shadow/live paper 검증을 진행하는 것이다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.

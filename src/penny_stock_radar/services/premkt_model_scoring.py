@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..db import fetch_historical_minute_bars
+from ..db import fetch_historical_minute_bars_for_symbols
 from .premkt_training_dataset import (
     EASTERN,
     FEATURE_VERSION,
@@ -63,12 +63,35 @@ class PremktModelScorer:
         market_date: date | str | None,
         cutoff_at: datetime | None,
     ) -> PremktModelScore:
+        scores = self.score_symbols(
+            symbols=[symbol],
+            market_date=market_date,
+            cutoff_at=cutoff_at,
+        )
+        return scores.get(symbol.upper()) or self.fallback_score(
+            symbol=symbol,
+            notes=["model_scoring_unavailable: no historical minute bars before cutoff."],
+        )
+
+    def score_symbols(
+        self,
+        *,
+        symbols: list[str],
+        market_date: date | str | None,
+        cutoff_at: datetime | None,
+    ) -> dict[str, PremktModelScore]:
+        normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        if not normalized_symbols:
+            return {}
         notes: list[str] = []
         if market_date is None:
-            return self._fallback_score(
-                symbol=symbol,
-                notes=["model_scoring_unavailable: market_date is required."],
-            )
+            return {
+                symbol: self.fallback_score(
+                    symbol=symbol,
+                    notes=["model_scoring_unavailable: market_date is required."],
+                )
+                for symbol in normalized_symbols
+            }
 
         market_date_str = _coerce_market_date(market_date)
         feature_cutoff = cutoff_at or datetime.combine(
@@ -76,67 +99,91 @@ class PremktModelScorer:
             self.cutoff_time,
             tzinfo=EASTERN,
         )
-        rows = fetch_historical_minute_bars(
+        rows = fetch_historical_minute_bars_for_symbols(
             self.database_path,
             market_date=market_date_str,
-            symbol=symbol,
+            symbols=normalized_symbols,
         )
-        feature_rows = [
-            row for row in rows if _parse_bar_at(row["bar_at"]) < feature_cutoff
-        ]
-        if not feature_rows:
-            return self._fallback_score(
+        rows_by_symbol: dict[str, list[Any]] = {symbol: [] for symbol in normalized_symbols}
+        for row in rows:
+            rows_by_symbol.setdefault(str(row["symbol"]).upper(), []).append(row)
+
+        results: dict[str, PremktModelScore] = {}
+        feature_payloads: list[dict[str, object]] = []
+        feature_symbols: list[str] = []
+        missing_by_symbol: dict[str, list[str]] = {}
+        notes_by_symbol: dict[str, list[str]] = {}
+        for symbol in normalized_symbols:
+            feature_rows = [
+                row
+                for row in rows_by_symbol.get(symbol, [])
+                if _parse_bar_at(row["bar_at"]) < feature_cutoff
+            ]
+            if not feature_rows:
+                results[symbol] = self.fallback_score(
+                    symbol=symbol,
+                    notes=[
+                        "model_scoring_unavailable: no historical minute bars before cutoff."
+                    ],
+                )
+                continue
+            row = build_premarket_feature_row(
                 symbol=symbol,
-                notes=[
-                    "model_scoring_unavailable: no historical minute bars before cutoff."
-                ],
+                market_date=market_date_str,
+                cutoff_at=feature_cutoff,
+                feature_rows=feature_rows,
             )
-
-        row = build_premarket_feature_row(
-            symbol=symbol.upper(),
-            market_date=market_date_str,
-            cutoff_at=feature_cutoff,
-            feature_rows=feature_rows,
-        )
-        missing = [
-            column
-            for column in self.feature_columns
-            if column not in row or _is_missing(row[column])
-        ]
-        if missing:
-            notes.append(
-                "missing_features_filled: "
-                + ", ".join(f"{name}={self.fill_values.get(name, 0.0)}" for name in missing)
-            )
-
-        features = pd.DataFrame(
-            [
+            missing = [
+                column
+                for column in self.feature_columns
+                if column not in row or _is_missing(row[column])
+            ]
+            row_notes = list(notes)
+            if missing:
+                row_notes.append(
+                    "missing_features_filled: "
+                    + ", ".join(f"{name}={self.fill_values.get(name, 0.0)}" for name in missing)
+                )
+            missing_by_symbol[symbol] = missing
+            notes_by_symbol[symbol] = row_notes
+            feature_symbols.append(symbol)
+            feature_payloads.append(
                 {
                     column: row.get(column, self.fill_values.get(column, 0.0))
                     for column in self.feature_columns
                 }
-            ],
-            columns=self.feature_columns,
-        ).apply(pd.to_numeric, errors="coerce")
+            )
+        if not feature_payloads:
+            return results
+
+        features = pd.DataFrame(feature_payloads, columns=self.feature_columns).apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
         features = features.fillna(self.fill_values).fillna(0.0)
         try:
-            ml_score = _score_model_probability(self.artifact.model, features) * 100.0
+            probabilities = _score_model_probabilities(self.artifact.model, features)
         except Exception as exc:
-            return self._fallback_score(
+            for symbol in feature_symbols:
+                results[symbol] = self.fallback_score(
+                    symbol=symbol,
+                    notes=[f"model_scoring_unavailable: {type(exc).__name__}: {exc}"],
+                )
+            return results
+
+        for symbol, probability in zip(feature_symbols, probabilities, strict=False):
+            ml_score = probability * 100.0
+            results[symbol] = PremktModelScore(
                 symbol=symbol,
-                notes=[f"model_scoring_unavailable: {type(exc).__name__}: {exc}"],
+                ml_score=round(max(0.0, min(ml_score, 100.0)), 2),
+                model_path=str(self.model_path),
+                model_feature_version=self.feature_version,
+                missing_feature_names=missing_by_symbol.get(symbol, []),
+                scoring_notes=notes_by_symbol.get(symbol, []),
             )
+        return results
 
-        return PremktModelScore(
-            symbol=symbol.upper(),
-            ml_score=round(max(0.0, min(ml_score, 100.0)), 2),
-            model_path=str(self.model_path),
-            model_feature_version=self.feature_version,
-            missing_feature_names=missing,
-            scoring_notes=notes,
-        )
-
-    def _fallback_score(self, *, symbol: str, notes: list[str]) -> PremktModelScore:
+    def fallback_score(self, *, symbol: str, notes: list[str]) -> PremktModelScore:
         return PremktModelScore(
             symbol=symbol.upper(),
             ml_score=None,
@@ -147,7 +194,7 @@ class PremktModelScorer:
         )
 
 
-def _score_model_probability(model: Any, features: pd.DataFrame) -> float:
+def _score_model_probabilities(model: Any, features: pd.DataFrame) -> list[float]:
     if hasattr(model, "predict_proba"):
         probabilities = model.predict_proba(features)
         classes = list(getattr(model, "classes_", []))
@@ -155,10 +202,9 @@ def _score_model_probability(model: Any, features: pd.DataFrame) -> float:
             positive_index = classes.index(1)
         else:
             positive_index = 1 if len(probabilities[0]) > 1 else 0
-        return float(probabilities[0][positive_index])
+        return [float(row[positive_index]) for row in probabilities]
 
-    prediction = model.predict(features)[0]
-    return float(prediction)
+    return [float(prediction) for prediction in model.predict(features)]
 
 
 def _coerce_market_date(value: date | str) -> str:

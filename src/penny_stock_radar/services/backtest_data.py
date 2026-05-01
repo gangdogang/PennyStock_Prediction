@@ -12,6 +12,7 @@ from ..config import AppSettings
 from ..db import (
     fetch_historical_l1_quotes,
     fetch_historical_minute_bars,
+    fetch_historical_minute_bars_for_symbols,
     fetch_latest_passed_universe,
     fetch_passed_universe_for_market_date,
     fetch_point_in_time_scan_id,
@@ -248,12 +249,18 @@ class BacktestDataManager:
     ) -> list[HistoricalHaltEvent]:
         market_date_str = self._coerce_market_date(market_date).isoformat()
         symbol_filter = {symbol.upper() for symbol in symbols} if symbols is not None else None
-        rows = fetch_historical_minute_bars(self.settings.database_path, market_date=market_date_str)
+        rows = (
+            fetch_historical_minute_bars_for_symbols(
+                self.settings.database_path,
+                market_date=market_date_str,
+                symbols=symbol_filter,
+            )
+            if symbol_filter is not None
+            else fetch_historical_minute_bars(self.settings.database_path, market_date=market_date_str)
+        )
         grouped: dict[str, list[object]] = defaultdict(list)
         for row in rows:
             symbol = str(row["symbol"]).upper()
-            if symbol_filter is not None and symbol not in symbol_filter:
-                continue
             grouped[symbol].append(row)
 
         inferred: list[HistoricalHaltEvent] = []
@@ -286,30 +293,28 @@ class BacktestDataManager:
         events: list[HistoricalHaltEvent] = []
         zero_volume_start: datetime | None = None
         zero_volume_count = 0
-        last_row = None
+        last_bar_at: datetime | None = None
         for row in rows:
             bar_at = self._parse_timestamp(row["bar_at"])
             if bar_at is None:
                 continue
             volume = float(row["volume"] or 0.0)
-            if last_row is not None:
-                previous_at = self._parse_timestamp(last_row["bar_at"])
-                if previous_at is not None:
-                    gap_minutes = int((bar_at - previous_at).total_seconds() // 60)
-                    if gap_minutes >= min_gap_minutes:
-                        events.append(
-                            HistoricalHaltEvent(
-                                symbol=symbol,
-                                market_date=market_date,
-                                start_at=previous_at + timedelta(minutes=1),
-                                end_at=bar_at,
-                                reason="minute_gap_detected",
-                                resume_price=float(row["open_price"]),
-                                source=source,
-                                inferred=True,
-                                notes=[f"gap_minutes={gap_minutes}"],
-                            )
+            if last_bar_at is not None:
+                gap_minutes = int((bar_at - last_bar_at).total_seconds() // 60)
+                if gap_minutes >= min_gap_minutes:
+                    events.append(
+                        HistoricalHaltEvent(
+                            symbol=symbol,
+                            market_date=market_date,
+                            start_at=last_bar_at + timedelta(minutes=1),
+                            end_at=bar_at,
+                            reason="minute_gap_detected",
+                            resume_price=float(row["open_price"]),
+                            source=source,
+                            inferred=True,
+                            notes=[f"gap_minutes={gap_minutes}"],
                         )
+                    )
             if volume <= 0:
                 zero_volume_count += 1
                 if zero_volume_start is None:
@@ -333,7 +338,7 @@ class BacktestDataManager:
             elif volume > 0:
                 zero_volume_start = None
                 zero_volume_count = 0
-            last_row = row
+            last_bar_at = bar_at
         return events
 
     def _session_window(self, market_date: str, session: str) -> tuple[datetime, datetime]:

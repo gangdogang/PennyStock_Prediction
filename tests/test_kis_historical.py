@@ -10,6 +10,7 @@ from penny_stock_radar.config import AppSettings
 from penny_stock_radar.db import (
     fetch_historical_l1_quotes,
     fetch_historical_minute_bars,
+    fetch_historical_minute_bars_for_symbols,
     init_database,
     insert_historical_minute_bars,
 )
@@ -158,6 +159,39 @@ def test_kis_historical_service_backfills_minute_bars_without_duplicates(tmp_pat
     assert [row["close_price"] for row in rows] == [1.03, 1.07]
     assert all(row["source"] == "kis_minute_api" for row in rows)
     assert any(path.endswith("inquire-time-itemchartprice") for path, _ in requests)
+
+
+def test_fetch_historical_minute_bars_for_symbols_bulk_orders_and_handles_empty(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    insert_historical_minute_bars(
+        db_path,
+        [
+            _minute_bar("BBB", "2026-04-10T08:01:00+00:00", close_price=2.01),
+            _minute_bar("AAA", "2026-04-10T08:02:00+00:00", close_price=1.02),
+            _minute_bar("AAA", "2026-04-10T08:00:00+00:00", close_price=1.00),
+            _minute_bar("CCC", "2026-04-11T08:00:00+00:00", close_price=3.00),
+        ],
+    )
+
+    rows = fetch_historical_minute_bars_for_symbols(
+        db_path,
+        market_date="2026-04-10",
+        symbols=["BBB", "ZZZ", "aaa", "AAA", *(f"S{index:04d}" for index in range(901))],
+    )
+    empty_rows = fetch_historical_minute_bars_for_symbols(
+        db_path,
+        market_date="2026-04-10",
+        symbols=[],
+    )
+
+    assert [(row["symbol"], row["bar_at"]) for row in rows] == [
+        ("AAA", "2026-04-10T08:00:00+00:00"),
+        ("AAA", "2026-04-10T08:02:00+00:00"),
+        ("BBB", "2026-04-10T08:01:00+00:00"),
+    ]
+    assert [row["close_price"] for row in rows] == [1.00, 1.02, 2.01]
+    assert empty_rows == []
 
 
 def test_kis_historical_service_backfill_normalizes_existing_timestamp_keys(tmp_path: Path) -> None:
@@ -450,3 +484,19 @@ def test_kis_historical_service_tracks_duplicate_minute_bucket_diagnostics(tmp_p
     assert second.rows == 1
     assert second.distinct_minute_keys == 0
     assert second.duplicate_minute_bucket_count == 1
+
+
+def _minute_bar(symbol: str, timestamp: str, *, close_price: float) -> HistoricalMinuteBar:
+    bar_at = datetime.fromisoformat(timestamp)
+    return HistoricalMinuteBar(
+        symbol=symbol,
+        market_date=bar_at.date().isoformat(),
+        market_phase="premarket",
+        timestamp=bar_at,
+        open_price=close_price,
+        high_price=close_price,
+        low_price=close_price,
+        close_price=close_price,
+        volume=1000,
+        source="fixture",
+    )

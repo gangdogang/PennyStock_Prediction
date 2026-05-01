@@ -73,10 +73,12 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
         path.write_text("", encoding="utf-8")
         return
     fieldnames: list[str] = []
+    seen_fieldnames: set[str] = set()
     for row in rows:
         for key in row.keys():
-            if key not in fieldnames:
+            if key not in seen_fieldnames:
                 fieldnames.append(key)
+                seen_fieldnames.add(key)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()

@@ -13,10 +13,10 @@ def sanitize_activity_for_bucket(
     activity: Iterable[MarketActivity],
 ) -> list[MarketActivity]:
     policy = paper_bucket_policy(bucket)
+    if not policy.recompute_analysis_without_watchlist:
+        return list(activity)
     return [
         _sanitize_watchlist_blind(scanner, row)
-        if policy.recompute_analysis_without_watchlist
-        else row.model_copy(deep=True)
         for row in activity
     ]
 

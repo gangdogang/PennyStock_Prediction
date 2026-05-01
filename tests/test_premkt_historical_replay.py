@@ -112,7 +112,12 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert manifest["local_only"] is True
     assert manifest["db_path"] == str(db_path)
     assert "Future bars are used only" in " ".join(manifest["leakage_guard"])
-    assert progress["dates"]["2026-04-10"]["status"] == "completed"
+    date_progress = progress["dates"]["2026-04-10"]
+    assert date_progress["status"] == "completed"
+    assert date_progress["elapsed_seconds"] >= 0
+    assert date_progress["loaded_bar_rows"] == 4
+    assert date_progress["loaded_symbol_count"] == 1
+    assert date_progress["simulated_time_count"] == 2
     assert summary["conclusion_status"] == "smoke_only"
     assert summary["conclusion_status"] != "comparable"
     assert set(summary["bucket_results"]) == {
@@ -120,6 +125,12 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
         "momentum_only",
         "watchlist_blind_momentum",
     }
+    assert summary["bucket_results"]["predictor_weighted"]["trade_count"] == 1
+    assert summary["bucket_results"]["predictor_weighted"]["total_net_pnl"] == pytest.approx(32.68255)
+    assert summary["bucket_results"]["momentum_only"]["trade_count"] == 1
+    assert summary["bucket_results"]["momentum_only"]["total_net_pnl"] == pytest.approx(28.60225)
+    assert summary["bucket_results"]["watchlist_blind_momentum"]["trade_count"] == 1
+    assert summary["bucket_results"]["watchlist_blind_momentum"]["total_net_pnl"] == pytest.approx(18.4015)
     assert summary["diagnostic_artifacts"]["exit_path_diagnostics"] == "paper_exit_path_diagnostics.csv"
     assert {row["bucket"] for row in kpis} == {
         "predictor_weighted",
@@ -140,6 +151,9 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
         if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
     )
     assert session_exit["exit_reason"] == "session_end"
+    assert session_exit["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert session_exit["exit_analysis_label"] == "OPENING_RANGE_CANDIDATE"
+    assert float(session_exit["net_pnl"]) == pytest.approx(32.68255)
     assert session_exit["intrabar_stop_touched"] == "1"
     assert session_exit["stop_trigger_basis"] == "intrabar_low_only"
 

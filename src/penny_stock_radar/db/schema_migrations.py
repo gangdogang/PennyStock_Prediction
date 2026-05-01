@@ -269,6 +269,12 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 "TEXT NOT NULL DEFAULT 'premkt_prediction'",
             )
             _ensure_column(connection, "premkt_predictions", "market_date", "TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_historical_minute_bars_date_symbol_time
+                ON historical_minute_bars(market_date, symbol, bar_at)
+                """
+            )
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

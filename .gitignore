@@ -8,6 +8,7 @@ __pycache__/
 .env.*
 !.env.example
 dist/
+src/*.egg-info/
 sample_outputs/*
 !sample_outputs/.gitkeep
 !sample_outputs/paper_trading/
@@ -27,3 +28,5 @@ automation/logs/*.log
 !automation/logs/.gitkeep
 automation/state/*.json
 !automation/state/.gitkeep
+
+data_backup_before_code_update/

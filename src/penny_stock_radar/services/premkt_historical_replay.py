@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import AppSettings
 from ..db import (
-    fetch_historical_minute_bars,
+    fetch_historical_minute_bars_for_symbols,
     fetch_latest_watchlist,
     fetch_point_in_time_scan_id,
     init_database,
@@ -28,6 +28,7 @@ from .paper_runtime import (
 )
 from .premkt_model_scoring import PremktModelScorer
 from .premkt_predictor import PremktPredictor
+from .replay_bar_cache import ReplayBarSeriesCache
 
 EASTERN = ZoneInfo("America/New_York")
 DEFAULT_REPLAY_DB = Path("data/backtest_lab/penny_stock_radar.sqlite3")
@@ -187,15 +188,23 @@ class PremktHistoricalReplayRunner:
         )
 
     def _run_market_date(self, market_date: str, progress: dict[str, Any]) -> None:
+        started_at = _utc_now_iso()
+        date_started = time_module.monotonic()
         progress["dates"][market_date] = {
             "status": "running",
-            "started_at": _utc_now_iso(),
+            "started_at": started_at,
         }
         self._write_json(self._progress_path, progress)
         try:
             scan_row = fetch_point_in_time_scan_id(self.db_path, market_date)
             if scan_row is None:
-                self._skip(progress, market_date, "missing_point_in_time_universe")
+                self._skip(
+                    progress,
+                    market_date,
+                    "missing_point_in_time_universe",
+                    started_at=started_at,
+                    date_started=date_started,
+                )
                 return
             scan_id = str(scan_row["scan_id"])
             watchlist_rows = fetch_latest_watchlist(
@@ -205,7 +214,13 @@ class PremktHistoricalReplayRunner:
                 prefer_reportable=False,
             )
             if not watchlist_rows:
-                self._skip(progress, market_date, "missing_point_in_time_watchlist")
+                self._skip(
+                    progress,
+                    market_date,
+                    "missing_point_in_time_watchlist",
+                    started_at=started_at,
+                    date_started=date_started,
+                )
                 return
 
             cutoff_at = self._cutoff_at(market_date)
@@ -222,44 +237,86 @@ class PremktHistoricalReplayRunner:
                 symbols=[str(row["symbol"]).upper() for row in watchlist_rows],
             )
             if not bars:
-                self._skip(progress, market_date, "missing_historical_minute_bars")
+                self._skip(
+                    progress,
+                    market_date,
+                    "missing_historical_minute_bars",
+                    started_at=started_at,
+                    date_started=date_started,
+                    loaded_bar_rows=bars.loaded_bar_count,
+                    loaded_symbol_count=bars.loaded_symbol_count,
+                )
                 return
+            simulated_times = bars.simulated_times(cutoff_at)
             date_trade_rows = self._replay_intraday(
                 market_date=market_date,
                 cutoff_at=cutoff_at,
                 watchlist_rows=watchlist_rows,
                 predictions=predictions,
                 bars=bars,
+                simulated_times=simulated_times,
             )
             self._trade_rows.extend(date_trade_rows)
+            finished_at = _utc_now_iso()
             progress["dates"][market_date] = {
                 "status": "completed",
-                "completed_at": _utc_now_iso(),
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "completed_at": finished_at,
+                "elapsed_seconds": round(time_module.monotonic() - date_started, 6),
                 "scan_id": scan_id,
                 "watchlist_count": len(watchlist_rows),
                 "prediction_count": len(predictions),
+                "loaded_bar_rows": bars.loaded_bar_count,
+                "loaded_symbol_count": bars.loaded_symbol_count,
+                "simulated_time_count": len(simulated_times),
                 "trade_count": len(date_trade_rows),
             }
             self._write_json(self._progress_path, progress)
         except Exception as exc:
+            failed_at = _utc_now_iso()
             progress["dates"][market_date] = {
                 "status": "failed",
-                "failed_at": _utc_now_iso(),
+                "started_at": started_at,
+                "finished_at": failed_at,
+                "failed_at": failed_at,
+                "elapsed_seconds": round(time_module.monotonic() - date_started, 6),
                 "reason": f"{type(exc).__name__}: {exc}",
             }
             self._write_json(self._progress_path, progress)
 
-    def _skip(self, progress: dict[str, Any], market_date: str, reason: str) -> None:
+    def _skip(
+        self,
+        progress: dict[str, Any],
+        market_date: str,
+        reason: str,
+        *,
+        started_at: str | None = None,
+        date_started: float | None = None,
+        loaded_bar_rows: int | None = None,
+        loaded_symbol_count: int | None = None,
+    ) -> None:
         note = {
             "market_date": market_date,
             "reason": reason,
         }
         self._coverage_warnings.append(note)
-        progress["dates"][market_date] = {
+        skipped_at = _utc_now_iso()
+        payload: dict[str, object] = {
             "status": "skipped",
-            "skipped_at": _utc_now_iso(),
+            "skipped_at": skipped_at,
             "reason": reason,
         }
+        if started_at is not None:
+            payload["started_at"] = started_at
+            payload["finished_at"] = skipped_at
+        if date_started is not None:
+            payload["elapsed_seconds"] = round(time_module.monotonic() - date_started, 6)
+        if loaded_bar_rows is not None:
+            payload["loaded_bar_rows"] = loaded_bar_rows
+        if loaded_symbol_count is not None:
+            payload["loaded_symbol_count"] = loaded_symbol_count
+        progress["dates"][market_date] = payload
         self._write_json(self._progress_path, progress)
 
     def _score_predictions(
@@ -271,8 +328,17 @@ class PremktHistoricalReplayRunner:
     ) -> list[PremktPrediction]:
         scorer, scoring_notes = self._build_model_scorer()
         predictions: list[PremktPrediction] = []
-        for row in watchlist_rows:
-            entry = _watchlist_entry_from_row(row)
+        entries = [_watchlist_entry_from_row(row) for row in watchlist_rows]
+        model_scores = (
+            scorer.score_symbols(
+                symbols=[entry.symbol for entry in entries],
+                market_date=market_date,
+                cutoff_at=cutoff_at,
+            )
+            if scorer is not None and self.options.score_mode.lower() != "rule"
+            else {}
+        )
+        for entry in entries:
             rule_score = self.predictor._score_entry(entry, filing_summary="")
             ml_score: float | None = None
             feature_version: str | None = None
@@ -282,11 +348,14 @@ class PremktHistoricalReplayRunner:
             final_score = rule_score
             row_score_mode = score_mode
             if scorer is not None and score_mode != "rule":
-                model_score = scorer.score_symbol(
-                    symbol=entry.symbol,
-                    market_date=market_date,
-                    cutoff_at=cutoff_at,
-                )
+                model_score = model_scores.get(entry.symbol)
+                if model_score is None:
+                    model_score = scorer.fallback_score(
+                        symbol=entry.symbol,
+                        notes=[
+                            "model_scoring_unavailable: no historical minute bars before cutoff."
+                        ],
+                    )
                 ml_score = model_score.ml_score
                 feature_version = model_score.model_feature_version
                 missing = model_score.missing_feature_names
@@ -346,21 +415,15 @@ class PremktHistoricalReplayRunner:
         except (FileNotFoundError, RuntimeError, ValueError, OSError) as exc:
             return None, [f"model_scoring_unavailable: {type(exc).__name__}: {exc}"]
 
-    def _load_bars(self, *, market_date: str, symbols: list[str]) -> dict[str, list[Any]]:
-        by_symbol: dict[str, list[Any]] = {}
-        for symbol in sorted(set(symbols)):
-            rows = [
-                row
-                for row in fetch_historical_minute_bars(
-                    self.db_path,
-                    market_date=market_date,
-                    symbol=symbol,
-                )
-                if str(row["market_date"]) == market_date
-            ]
-            if rows:
-                by_symbol[symbol] = sorted(rows, key=lambda row: _parse_dt(row["bar_at"]))
-        missing = sorted(set(symbols) - set(by_symbol))
+    def _load_bars(self, *, market_date: str, symbols: list[str]) -> ReplayBarSeriesCache:
+        requested_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
+        rows = fetch_historical_minute_bars_for_symbols(
+            self.db_path,
+            market_date=market_date,
+            symbols=requested_symbols,
+        )
+        cache = ReplayBarSeriesCache.from_rows(rows)
+        missing = sorted(set(requested_symbols) - set(cache.symbols))
         if missing:
             self._coverage_warnings.append(
                 {
@@ -370,11 +433,7 @@ class PremktHistoricalReplayRunner:
                     "symbol_count": len(missing),
                 }
             )
-        if any(
-            row["bid_price"] is None or row["ask_price"] is None
-            for rows in by_symbol.values()
-            for row in rows
-        ):
+        if cache.has_missing_bid_ask:
             self._coverage_warnings.append(
                 {
                     "market_date": market_date,
@@ -384,7 +443,7 @@ class PremktHistoricalReplayRunner:
             self._data_quality_notes.append(
                 f"{market_date}: some bars lack bid/ask; FillModel may fall back to last price."
             )
-        return by_symbol
+        return cache
 
     def _replay_intraday(
         self,
@@ -393,7 +452,8 @@ class PremktHistoricalReplayRunner:
         cutoff_at: datetime,
         watchlist_rows: Iterable[Any],
         predictions: list[PremktPrediction],
-        bars: dict[str, list[Any]],
+        bars: ReplayBarSeriesCache,
+        simulated_times: list[datetime],
     ) -> list[dict[str, object]]:
         predictions_by_symbol = {row.symbol: row for row in predictions}
         watchlist_rank = {
@@ -409,25 +469,18 @@ class PremktHistoricalReplayRunner:
             bucket: _BucketState(bucket=bucket, cash=float(self.settings.paper_initial_capital))
             for bucket in REPLAY_BUCKETS
         }
-        all_times = sorted(
-            {
-                _parse_dt(row["bar_at"])
-                for symbol_rows in bars.values()
-                for row in symbol_rows
-                if _parse_dt(row["bar_at"]) >= cutoff_at
-            }
-        )
+        bar_cursor = bars.cursor()
         latest_activity_by_symbol: dict[str, MarketActivity] = {}
         date_trade_rows: list[dict[str, object]] = []
-        for simulated_time in all_times:
-            base_activity = self._activity_at(
-                market_date=market_date,
+        for simulated_time in simulated_times:
+            base_activity = bar_cursor.activity_at(
                 simulated_time=simulated_time,
-                bars=bars,
+                scanner=self.scanner,
                 watchlist_rank=watchlist_rank,
                 watchlist_score=watchlist_score,
                 predictions_by_symbol=predictions_by_symbol,
             )
+            self._apply_ranks(base_activity)
             for row in base_activity:
                 latest_activity_by_symbol[row.symbol] = row
             for bucket, state in states.items():
@@ -461,78 +514,6 @@ class PremktHistoricalReplayRunner:
                         )
                     )
         return date_trade_rows
-
-    def _activity_at(
-        self,
-        *,
-        market_date: str,
-        simulated_time: datetime,
-        bars: dict[str, list[Any]],
-        watchlist_rank: dict[str, int],
-        watchlist_score: dict[str, float],
-        predictions_by_symbol: dict[str, PremktPrediction],
-    ) -> list[MarketActivity]:
-        rows: list[MarketActivity] = []
-        for symbol, symbol_rows in bars.items():
-            visible = [row for row in symbol_rows if _parse_dt(row["bar_at"]) <= simulated_time]
-            if not visible:
-                continue
-            current = visible[-1]
-            first_open = _positive_float(visible[0]["open_price"])
-            last_price = _positive_float(current["close_price"])
-            volume = sum(float(row["volume"] or 0.0) for row in visible)
-            dollar_volume = sum(float(row["close_price"] or 0.0) * float(row["volume"] or 0.0) for row in visible)
-            bid = _positive_float(current["bid_price"])
-            ask = _positive_float(current["ask_price"])
-            bar_high = _positive_float(current["high_price"])
-            bar_low = _positive_float(current["low_price"])
-            spread_pct = _spread_pct(current, bid=bid, ask=ask, last_price=last_price)
-            pct_change = (
-                ((last_price / first_open) - 1.0) * 100.0
-                if first_open is not None and last_price is not None
-                else None
-            )
-            predicted = symbol in predictions_by_symbol
-            label, score, reasons = self.scanner._analysis(
-                market_phase=str(current["market_phase"] or "premarket"),
-                pct_change=pct_change,
-                dollar_volume=dollar_volume,
-                spread_pct=spread_pct,
-                predicted=predicted,
-                watchlist_score=watchlist_score.get(symbol),
-            )
-            rows.append(
-                MarketActivity(
-                    symbol=symbol,
-                    market_phase=str(current["market_phase"] or "premarket"),
-                    source="historical_minute_bars",
-                    last_price=last_price,
-                    bid_price=bid,
-                    ask_price=ask,
-                    bar_high_price=bar_high,
-                    bar_low_price=bar_low,
-                    previous_close=first_open,
-                    pct_change=pct_change,
-                    volume=volume,
-                    dollar_volume=dollar_volume,
-                    trade_size=int(current["volume"] or 0),
-                    spread_pct=spread_pct,
-                    market_status=None,
-                    market_data_at=_parse_dt(current["bar_at"]),
-                    data_age_seconds=0.0,
-                    has_live_trade=last_price is not None,
-                    has_live_quote=bid is not None and ask is not None and ask >= bid,
-                    watchlist_rank=watchlist_rank.get(symbol),
-                    watchlist_score=watchlist_score.get(symbol),
-                    predicted=predicted,
-                    analysis_label=label,
-                    analysis_score=score,
-                    reasons=reasons,
-                    created_at=simulated_time,
-                )
-            )
-        self._apply_ranks(rows)
-        return rows
 
     def _process_bucket_time(
         self,
@@ -1434,31 +1415,6 @@ def _date_range(start_date: str, end_date: str) -> Iterable[date]:
         current += timedelta(days=1)
 
 
-def _parse_dt(value: object) -> datetime:
-    parsed = datetime.fromisoformat(str(value))
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=EASTERN)
-    return parsed.astimezone(EASTERN)
-
-
-def _positive_float(value: object) -> float | None:
-    if value is None:
-        return None
-    number = float(value)
-    return number if number > 0 else None
-
-
-def _spread_pct(row: Any, *, bid: float | None, ask: float | None, last_price: float | None) -> float | None:
-    if row["spread_pct"] is not None:
-        return float(row["spread_pct"])
-    if bid is not None and ask is not None and ask >= bid:
-        midpoint = (bid + ask) / 2.0
-        return (ask - bid) / midpoint if midpoint > 0 else None
-    if last_price:
-        return None
-    return None
-
-
 def _predictor_weight(score: float | None) -> float:
     if score is None or score <= 40.0:
         return 0.0
@@ -1682,10 +1638,12 @@ def _round_optional(value: object, digits: int = 6) -> object:
 def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
+    seen_fieldnames: set[str] = set()
     for row in rows:
         for key in row:
-            if key not in fieldnames:
+            if key not in seen_fieldnames:
                 fieldnames.append(key)
+                seen_fieldnames.add(key)
     if not fieldnames:
         path.write_text("", encoding="utf-8")
         return
