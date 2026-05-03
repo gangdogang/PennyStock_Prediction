@@ -55,8 +55,7 @@ class SetupContext:
     opening_range_high: float | None
     opening_range_low: float | None
     pullback_depth_pct: float | None
-    volume_expansion_ratio: float | None
-    volume_dryup_ratio: float | None
+    volume_bar_ratio: float | None
     minutes_since_hod: float | None
     best_rank: int
     rank_persistence: float
@@ -111,8 +110,7 @@ class SetupContext:
             "opening_range_high": _round_optional(self.opening_range_high),
             "opening_range_low": _round_optional(self.opening_range_low),
             "pullback_depth_pct": _round_optional(self.pullback_depth_pct),
-            "volume_expansion_ratio": _round_optional(self.volume_expansion_ratio),
-            "volume_dryup_ratio": _round_optional(self.volume_dryup_ratio),
+            "volume_bar_ratio": _round_optional(self.volume_bar_ratio),
             "minutes_since_hod": _round_optional(self.minutes_since_hod),
             "best_rank": self.best_rank,
             "rank_persistence": round(self.rank_persistence, 6),
@@ -217,7 +215,7 @@ class SetupContextBuilder:
         self.max_spread_pct = float(max_spread_pct)
         self.opening_range_minutes = max(int(opening_range_minutes), 1)
         self.rank_window = max(int(rank_window), 1)
-        self._rank_history: dict[tuple[str, str], list[int]] = {}
+        self._rank_history: dict[tuple[str, str, str], list[int]] = {}
 
     def build(
         self,
@@ -268,7 +266,12 @@ class SetupContextBuilder:
             else None
         )
         best_rank = _best_rank(row)
-        rank_persistence = self._rank_persistence(bucket=bucket, symbol=row.symbol, best_rank=best_rank)
+        rank_persistence = self._rank_persistence(
+            market_date=market_date,
+            bucket=bucket,
+            symbol=row.symbol,
+            best_rank=best_rank,
+        )
         spread_pct = row.spread_pct
         spread_ok = spread_pct is None or spread_pct <= self.max_spread_pct
         dollar_volume = row.dollar_volume
@@ -335,10 +338,7 @@ class SetupContextBuilder:
             liquidity_ok=liquidity_ok,
         )
         dilution_risk_flag = _has_keyword(row.reasons, _DILUTION_KEYWORDS)
-        catalyst_risk_flag = (not row.predicted and (row.watchlist_score or 0.0) < 3.0) or _has_keyword(
-            row.reasons,
-            _CATALYST_RISK_KEYWORDS,
-        )
+        catalyst_risk_flag = _has_keyword(row.reasons, _CATALYST_RISK_KEYWORDS)
         position_age_minutes = (
             (observed_at - position_opened_at).total_seconds() / 60.0
             if position_opened_at is not None
@@ -367,8 +367,7 @@ class SetupContextBuilder:
             opening_range_high=opening_range_high,
             opening_range_low=opening_range_low,
             pullback_depth_pct=pullback_depth_pct,
-            volume_expansion_ratio=volume_ratio,
-            volume_dryup_ratio=volume_ratio,
+            volume_bar_ratio=volume_ratio,
             minutes_since_hod=minutes_since_hod,
             best_rank=best_rank,
             rank_persistence=rank_persistence,
@@ -397,8 +396,8 @@ class SetupContextBuilder:
             reasons=tuple(context_reasons),
         )
 
-    def _rank_persistence(self, *, bucket: str, symbol: str, best_rank: int) -> float:
-        key = (bucket, symbol)
+    def _rank_persistence(self, *, market_date: str, bucket: str, symbol: str, best_rank: int) -> float:
+        key = (market_date, bucket, symbol)
         history = self._rank_history.setdefault(key, [])
         history.append(best_rank)
         del history[:-self.rank_window]
@@ -585,7 +584,7 @@ def _confidence(context: SetupContext, reasons: Iterable[str]) -> float:
     confidence += min(len(list(reasons)) * 0.025, 0.18)
     if context.vwap is not None:
         confidence += 0.08
-    if context.volume_expansion_ratio is not None:
+    if context.volume_bar_ratio is not None:
         confidence += 0.06
     if context.has_l1_proxy:
         confidence += 0.04
@@ -641,7 +640,7 @@ def _extended(context: SetupContext) -> bool:
         distance >= 8.0
         and pullback_depth is not None
         and pullback_depth <= 1.5
-        and (context.volume_expansion or context.analysis_score >= 4.5)
+        and context.volume_expansion
     )
 
 
@@ -708,7 +707,14 @@ def _vwap(bars: list[PreparedMinuteBar]) -> float | None:
     volume = sum(bar.volume for bar in bars if bar.volume > 0)
     if volume <= 0:
         return None
-    return sum(bar.close_price * bar.volume for bar in bars if bar.volume > 0) / volume
+    return (
+        sum(
+            ((bar.high_price + bar.low_price + bar.close_price) / 3.0) * bar.volume
+            for bar in bars
+            if bar.volume > 0
+        )
+        / volume
+    )
 
 
 def _max_high(bars: list[PreparedMinuteBar]) -> float | None:

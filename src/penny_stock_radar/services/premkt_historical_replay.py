@@ -1425,6 +1425,35 @@ class PremktHistoricalReplayRunner:
                         for row in group
                         if row.get("exit_setup_risk") not in (None, "")
                     ),
+                    "avg_exit_setup_quality": _avg(
+                        _number(row.get("exit_setup_quality"))
+                        for row in group
+                        if row.get("exit_setup_quality") not in (None, "")
+                    ),
+                    "avg_max_r_multiple": _avg(
+                        _number(row.get("max_r_multiple"))
+                        for row in group
+                        if row.get("max_r_multiple") not in (None, "")
+                    ),
+                    "avg_min_r_multiple": _avg(
+                        _number(row.get("min_r_multiple"))
+                        for row in group
+                        if row.get("min_r_multiple") not in (None, "")
+                    ),
+                    "reached_1r_count": sum(1 for row in group if _truthy(row.get("reached_1r"))),
+                    "reached_1r_rate": round(
+                        sum(1 for row in group if _truthy(row.get("reached_1r"))) / len(group), 6
+                    ) if group else 0.0,
+                    "stop_after_1r_count": sum(
+                        1 for row in group
+                        if row.get("exit_reason") == "stop_loss" and _truthy(row.get("reached_1r"))
+                    ),
+                    "stop_after_1r_rate": round(
+                        sum(
+                            1 for row in group
+                            if row.get("exit_reason") == "stop_loss" and _truthy(row.get("reached_1r"))
+                        ) / len(group), 6
+                    ) if group else 0.0,
                 }
             )
         return rows
@@ -1490,10 +1519,10 @@ class PremktHistoricalReplayRunner:
                         for row in group
                         if row.get("distance_to_vwap_pct") not in (None, "")
                     ),
-                    "avg_volume_expansion_ratio": _avg(
-                        _number(row.get("volume_expansion_ratio"))
+                    "avg_volume_bar_ratio": _avg(
+                        _number(row.get("volume_bar_ratio"))
                         for row in group
-                        if row.get("volume_expansion_ratio") not in (None, "")
+                        if row.get("volume_bar_ratio") not in (None, "")
                     ),
                     "true_leader_observation_count": sum(
                         1 for row in group if _truthy(row.get("true_leader"))
@@ -1651,6 +1680,14 @@ class PremktHistoricalReplayRunner:
         self._prediction_rows = _read_csv(self.export_dir / "premkt_predictions_replay.csv")
         self._trade_rows = _read_csv(self.export_dir / "paper_trade_log.csv")
         self._setup_feature_rows = _read_csv(self.export_dir / "paper_setup_features.csv")
+        warnings_path = self.export_dir / "data_quality_warnings.json"
+        if warnings_path.exists():
+            try:
+                existing = json.loads(warnings_path.read_text(encoding="utf-8"))
+                self._coverage_warnings = list(existing.get("coverage_warnings", []))
+                self._data_quality_notes = list(existing.get("data_quality_notes", []))
+            except (json.JSONDecodeError, OSError):
+                pass
 
     def _write_json(self, path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
