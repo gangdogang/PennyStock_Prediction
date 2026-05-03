@@ -76,7 +76,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     export_dir = tmp_path / "replays" / "run_fixture"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
 
     result = CliRunner().invoke(
@@ -199,7 +199,7 @@ def test_replay_model_scoring_uses_only_pre_cutoff_and_not_future_dates(
     export_dir = tmp_path / "replays" / "run_cutoff"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
 
     result = CliRunner().invoke(
@@ -235,7 +235,7 @@ def test_replay_resume_skips_completed_dates(monkeypatch, tmp_path: Path) -> Non
     export_dir = tmp_path / "replays" / "run_resume"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
     base_args = [
         "run-premkt-model-replay",
@@ -279,7 +279,7 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
     export_dir = tmp_path / "replays" / "run_entry_label"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
 
     result = CliRunner().invoke(
@@ -392,7 +392,7 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
     export_dir = tmp_path / "replays" / "run_overrides"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
 
     result = CliRunner().invoke(
@@ -456,7 +456,7 @@ def test_replay_breakeven_stop_after_r_moves_stop_to_entry(
     export_dir = tmp_path / "replays" / "run_breakeven"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(db_path=tmp_path / "unused.sqlite3", live_market_provider="disabled"),
+        lambda: _replay_test_settings(tmp_path),
     )
 
     result = CliRunner().invoke(
@@ -514,11 +514,7 @@ def test_replay_exit_label_ablation_closes_on_label_transition(
     export_dir = tmp_path / "replays" / "run_label_exit"
     monkeypatch.setattr(
         "penny_stock_radar.cli.get_settings",
-        lambda: AppSettings(
-            db_path=tmp_path / "unused.sqlite3",
-            live_market_provider="disabled",
-            paper_stop_loss_pct=60.0,
-        ),
+        lambda: _replay_test_settings(tmp_path, paper_stop_loss_pct=60.0),
     )
 
     result = CliRunner().invoke(
@@ -551,6 +547,49 @@ def test_replay_exit_label_ablation_closes_on_label_transition(
     assert exit_row["exit_reason"] == "label_exit"
     assert exit_row["entry_analysis_label"] == "OPENING_RANGE_CANDIDATE"
     assert exit_row["exit_analysis_label"] == "WAIT_PULLBACK"
+
+
+def _replay_test_settings(tmp_path: Path, **overrides: object) -> AppSettings:
+    settings = {
+        "db_path": tmp_path / "unused.sqlite3",
+        "live_market_provider": "disabled",
+        "premarket_min_dollar_volume": 100_000.0,
+        "premarket_max_spread_pct": 0.08,
+        "paper_initial_capital": 10_000.0,
+        "paper_entry_score_min": 2.75,
+        "paper_entry_size_fraction": 0.20,
+        "paper_stop_loss_pct": 5.0,
+        "paper_adaptive_max_open_positions": 5,
+        "paper_adaptive_predicted_entry_size_fraction": 0.06,
+        "paper_adaptive_live_exception_entry_size_fraction": 0.04,
+        "paper_predictor_weight_k1": 1.0,
+        "paper_predictor_weight_k2": 1.0,
+        "paper_premarket_spread_slippage_multiplier": 1.50,
+        "paper_regular_spread_slippage_multiplier": 1.00,
+        "paper_halt_resume_spread_slippage_multiplier": 2.00,
+        "paper_halt_resume_decay_minutes": 3.0,
+        "paper_fill_slippage_pct": 0.15,
+        "paper_stop_gap_slippage_pct": 0.50,
+        "paper_min_trade_fee": 1.0,
+        "paper_notional_fee_rate_pct": 0.10,
+        "paper_volume_cap_large_dollar_volume": 10_000_000.0,
+        "paper_volume_cap_mid_dollar_volume": 2_000_000.0,
+        "paper_volume_cap_large_pct": 10.0,
+        "paper_volume_cap_mid_pct": 5.0,
+        "paper_volume_cap_small_pct": 2.0,
+        "paper_volume_cap_small_market_cap_threshold": 500_000_000,
+        "paper_volume_cap_small_market_cap_scale": 0.5,
+        "paper_capacity_limited_pct": 2.0,
+        "paper_participation_slippage_enabled": True,
+        "paper_participation_slippage_soft_pct": 1.0,
+        "paper_participation_slippage_mid_pct": 2.0,
+        "paper_participation_slippage_hard_pct": 5.0,
+        "paper_participation_slippage_mid_penalty_pct": 0.10,
+        "paper_participation_slippage_hard_penalty_pct": 0.75,
+        "paper_participation_slippage_extreme_penalty_pct": 2.75,
+    }
+    settings.update(overrides)
+    return AppSettings(_env_file=None, **settings)
 
 
 def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Path:
