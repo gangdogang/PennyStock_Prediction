@@ -69,6 +69,7 @@ class ReplayOptions:
     breakeven_stop_after_r: float | None = None
     max_entries_per_symbol_per_day: int | None = None
     cooldown_after_stop_minutes: float | None = None
+    require_entry_setup_states: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -94,6 +95,7 @@ class _Position:
     first_1r_at: datetime | None = None
     intrabar_stop_touched: bool = False
     intrabar_stop_first_at: datetime | None = None
+    stop_trigger: str = "none"
     breakeven_stop_active: bool = False
     breakeven_stop_after_r: float | None = None
     breakeven_stop_activated_at: datetime | None = None
@@ -129,6 +131,13 @@ class PremktHistoricalReplayRunner:
     def __init__(self, settings: AppSettings, *, options: ReplayOptions) -> None:
         self.settings = settings.model_copy(update={"db_path": Path(options.db_path)})
         self.options = options
+        if options.require_entry_setup_states is not None:
+            unknown_states = sorted(set(options.require_entry_setup_states) - set(SETUP_STATES))
+            if unknown_states:
+                raise ValueError(
+                    "Unknown entry setup states: "
+                    f"{', '.join(unknown_states)}. Allowed states: {', '.join(SETUP_STATES)}"
+                )
         self.db_path = Path(options.db_path)
         self.export_dir = self._resolve_export_dir(options.export_dir)
         self.run_id = self.export_dir.name
@@ -569,6 +578,11 @@ class PremktHistoricalReplayRunner:
         trades: list[dict[str, object]] = []
         allowed_entry_labels = set(self.options.entry_labels) - set(self.options.exclude_entry_labels)
         exit_labels = set(self.options.exit_labels)
+        required_entry_setup_states = (
+            set(self.options.require_entry_setup_states)
+            if self.options.require_entry_setup_states is not None
+            else None
+        )
         setup_by_symbol: dict[str, tuple[SetupContext, SetupJudgement]] = {}
         for row in activity:
             setup = self._setup_for_row(
@@ -590,7 +604,17 @@ class PremktHistoricalReplayRunner:
             if position is None:
                 continue
             self._update_position_path(position, row=row, simulated_time=simulated_time)
-            if row.last_price is not None and row.last_price <= position.stop_price:
+            stop_reference_price = row.bar_low_price if row.bar_low_price is not None else row.last_price
+            if stop_reference_price is not None and stop_reference_price <= position.stop_price:
+                if (
+                    row.bar_low_price is not None
+                    and row.last_price is not None
+                    and row.bar_low_price <= position.stop_price
+                    and row.last_price > position.stop_price
+                ):
+                    position.stop_trigger = "intrabar"
+                else:
+                    position.stop_trigger = "close"
                 trades.append(
                     self._close_position(
                         state,
@@ -661,6 +685,10 @@ class PremktHistoricalReplayRunner:
                 if entry_setup is not None:
                     context, judgement = entry_setup
                     self._setup_feature_rows.append(context.feature_row(judgement))
+            if required_entry_setup_states is not None and (
+                entry_setup is None or entry_setup[1].setup_state not in required_entry_setup_states
+            ):
+                continue
             entry = self._open_position(
                 state,
                 row=row,
@@ -837,6 +865,8 @@ class PremktHistoricalReplayRunner:
             requested_quantity=position.quantity,
         )
         exit_price = fill.fill_price or row.last_price or position.entry_price
+        if reason == "stop_loss" and exit_price > position.stop_price:
+            exit_price = position.stop_price
         gross_pnl = (exit_price - position.entry_price) * fill.quantity
         net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost
         state.cash += (exit_price * fill.quantity) - fill.transaction_cost
@@ -953,6 +983,9 @@ class PremktHistoricalReplayRunner:
                 "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
                 "max_entries_per_symbol_per_day": self.options.max_entries_per_symbol_per_day,
                 "cooldown_after_stop_minutes": self.options.cooldown_after_stop_minutes,
+                "require_entry_setup_states": list(self.options.require_entry_setup_states)
+                if self.options.require_entry_setup_states is not None
+                else None,
             },
             "db_path": str(self.db_path),
             "export_dir": str(self.export_dir),
@@ -1002,11 +1035,17 @@ class PremktHistoricalReplayRunner:
                 "breakeven_stop_after_r": self.options.breakeven_stop_after_r,
                 "max_entries_per_symbol_per_day": self.options.max_entries_per_symbol_per_day,
                 "cooldown_after_stop_minutes": self.options.cooldown_after_stop_minutes,
+                "require_entry_setup_states": list(self.options.require_entry_setup_states)
+                if self.options.require_entry_setup_states is not None
+                else None,
             },
             "setup_state_policy": {
                 "version": "deterministic_rule_backed_v1",
                 "order_control": "diagnostic_only_risk_rule_engine_still_controls_orders",
                 "states": list(SETUP_STATES),
+                "required_entry_states_for_entries": list(self.options.require_entry_setup_states)
+                if self.options.require_entry_setup_states is not None
+                else None,
                 "outputs": [
                     "paper_setup_features.csv",
                     "paper_setup_state_kpis.csv",
@@ -1906,7 +1945,7 @@ def _position_path_metrics(
 
 def _stop_trigger_basis(position: _Position, *, exit_reason: str) -> str:
     if exit_reason == "stop_loss":
-        return "close"
+        return position.stop_trigger
     if position.intrabar_stop_touched:
         return "intrabar_low_only"
     return "none"

@@ -55,6 +55,17 @@ def _parse_optional_time(value: str | None, option_name: str):
         raise ValueError(f"{option_name} must be in HH:MM format.") from exc
 
 
+def _normalize_entry_setup_states(value: str | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    states: list[str] = []
+    for part in value.split(","):
+        normalized = part.strip().upper()
+        if normalized and normalized not in states:
+            states.append(normalized)
+    return tuple(states) if states else None
+
+
 def _resolve_l1_capture_symbols(
     settings,
     *,
@@ -366,6 +377,11 @@ def run_premkt_model_replay(
         min=0.0,
         help="Replay-only ablation: block same-symbol re-entry for this many minutes after a stop loss.",
     ),
+    entry_setup_states: str | None = typer.Option(
+        None,
+        "--entry-setup-states",
+        help="Comma-separated setup_state allowlist for entries, e.g. STARTER_VALID,ORB_BREAKOUT.",
+    ),
     predictor_k1: float | None = typer.Option(
         None,
         "--predictor-k1",
@@ -387,10 +403,14 @@ def run_premkt_model_replay(
         min_entry = _parse_optional_time(min_entry_time, "--min-entry-time")
         settings = root_cli.get_settings()
         settings_overrides = {}
+        options_overrides = {}
         if predictor_k1 is not None:
             settings_overrides["paper_predictor_weight_k1"] = predictor_k1
         if predictor_k2 is not None:
             settings_overrides["paper_predictor_weight_k2"] = predictor_k2
+        parsed_entry_setup_states = _normalize_entry_setup_states(entry_setup_states)
+        if parsed_entry_setup_states is not None:
+            options_overrides["require_entry_setup_states"] = parsed_entry_setup_states
         if settings_overrides:
             settings = settings.model_copy(update=settings_overrides)
         runner = PremktHistoricalReplayRunner(
@@ -416,6 +436,7 @@ def run_premkt_model_replay(
                 breakeven_stop_after_r=breakeven_stop_after_r,
                 max_entries_per_symbol_per_day=max_entries_per_symbol_per_day,
                 cooldown_after_stop_minutes=cooldown_after_stop_minutes,
+                **options_overrides,
             ),
         )
         result = runner.run()

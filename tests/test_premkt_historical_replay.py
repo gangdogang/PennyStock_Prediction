@@ -166,8 +166,8 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert session_exit["entry_action_bias"] in {"starter_ok", "watch", "no_trade"}
     assert session_exit["exit_setup_state"]
     assert float(session_exit["net_pnl"]) == pytest.approx(32.68255)
-    assert session_exit["intrabar_stop_touched"] == "1"
-    assert session_exit["stop_trigger_basis"] == "intrabar_low_only"
+    assert session_exit["intrabar_stop_touched"] == "0"
+    assert session_exit["stop_trigger_basis"] == "none"
     assert any(
         row["bucket"] == "predictor_weighted"
         and row["symbol"] == "AAA"
@@ -384,6 +384,132 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
     )
 
 
+def test_intrabar_stop_triggers_when_low_breaks_stop_but_close_does_not(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_stop_trigger_fixture_db(tmp_path, stop_bar_low=0.97, stop_close=1.04)
+    export_dir = tmp_path / "replays" / "run_intrabar_stop"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: _stop_trigger_test_settings(tmp_path),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    exit_row = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+
+    assert float(exit_row["entry_price"]) == pytest.approx(1.10)
+    assert float(exit_row["entry_stop_price"]) == pytest.approx(1.00)
+    assert exit_row["exit_reason"] == "stop_loss"
+    assert exit_row["stop_trigger_basis"] == "intrabar"
+    assert float(exit_row["exit_price"]) <= 1.00
+
+
+def test_close_based_stop_fires_when_bar_low_unavailable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_stop_trigger_fixture_db(tmp_path, stop_bar_low=0.0, stop_close=0.95)
+    export_dir = tmp_path / "replays" / "run_close_stop"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: _stop_trigger_test_settings(tmp_path),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    exit_row = next(
+        row
+        for row in trade_rows
+        if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
+    )
+
+    assert exit_row["exit_reason"] == "stop_loss"
+    assert exit_row["stop_trigger_basis"] == "close"
+    assert float(exit_row["exit_price"]) == pytest.approx(0.95)
+
+
+def test_entry_setup_state_filter_blocks_watch_leader_entries(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = _build_entry_setup_filter_fixture_db(tmp_path)
+    export_dir = tmp_path / "replays" / "run_setup_filter"
+    monkeypatch.setattr(
+        "penny_stock_radar.cli.get_settings",
+        lambda: _replay_test_settings(tmp_path),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-premkt-model-replay",
+            "--start-date",
+            "2026-04-10",
+            "--end-date",
+            "2026-04-10",
+            "--db-path",
+            str(db_path),
+            "--score-mode",
+            "rule",
+            "--export-dir",
+            str(export_dir),
+            "--entry-setup-states",
+            "STARTER_VALID",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
+    setup_rows = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
+    entry_rows = [row for row in trade_rows if row["event"] == "ENTRY"]
+
+    assert entry_rows
+    assert {row["symbol"] for row in entry_rows} == {"STRT"}
+    assert {row["entry_setup_state"] for row in entry_rows} == {"STARTER_VALID"}
+    assert any(row["symbol"] == "WATC" and row["setup_state"] == "WATCH_LEADER" for row in setup_rows)
+    assert any(row["symbol"] == "STRT" and row["setup_state"] == "STARTER_VALID" for row in setup_rows)
+
+
 def test_replay_cli_supports_label_and_predictor_effect_overrides(
     monkeypatch,
     tmp_path: Path,
@@ -592,6 +718,18 @@ def _replay_test_settings(tmp_path: Path, **overrides: object) -> AppSettings:
     return AppSettings(_env_file=None, **settings)
 
 
+def _stop_trigger_test_settings(tmp_path: Path) -> AppSettings:
+    return _replay_test_settings(
+        tmp_path,
+        paper_stop_loss_pct=100.0 * (1.0 - (1.00 / 1.10)),
+        paper_fill_slippage_pct=0.000001,
+        paper_stop_gap_slippage_pct=0.000001,
+        paper_min_trade_fee=0.000001,
+        paper_notional_fee_rate_pct=0.000001,
+        paper_participation_slippage_enabled=False,
+    )
+
+
 def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Path:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
@@ -658,8 +796,116 @@ def _build_replay_fixture_db(tmp_path: Path, *, exit_close: float = 2.00) -> Pat
             _bar("AAA", "2026-04-10T07:58:00-04:00", 1.00, 1.08, 0.99, 1.05, 100),
             _bar("AAA", "2026-04-10T07:59:00-04:00", 1.05, 1.12, 1.04, 1.10, 200),
             _bar("AAA", "2026-04-10T08:00:00-04:00", 1.10, 2.00, 1.09, 1.90, 100_000),
-            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.10, min(exit_close, 1.80), exit_close, 50_000),
+            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.90, 2.10, min(exit_close, 1.82), exit_close, 50_000),
             _bar("FUTR", "2026-04-11T07:59:00-04:00", 1.00, 4.00, 1.00, 4.00, 900_000),
+        ],
+    )
+    return db_path
+
+
+def _build_stop_trigger_fixture_db(
+    tmp_path: Path,
+    *,
+    stop_bar_low: float,
+    stop_close: float,
+) -> Path:
+    db_path = tmp_path / "stop_trigger.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=1,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="stop_trigger_fixture",
+    )
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [_candidate("AAA", price=1.0)],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="AAA",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                market_context_score=0.0,
+                low_float_bonus=1.0,
+                reasons=["fixture_watchlist"],
+            )
+        ],
+    )
+    insert_historical_minute_bars(
+        db_path,
+        [
+            _bar("AAA", "2026-04-10T07:58:00-04:00", 1.00, 1.04, 0.99, 1.02, 10_000),
+            _bar("AAA", "2026-04-10T07:59:00-04:00", 1.02, 1.09, 1.01, 1.08, 10_000),
+            _bar("AAA", "2026-04-10T08:00:00-04:00", 1.08, 1.12, 1.07, 1.10, 500_000),
+            _bar("AAA", "2026-04-10T08:01:00-04:00", 1.10, 1.11, stop_bar_low, stop_close, 500_000),
+        ],
+    )
+    return db_path
+
+
+def _build_entry_setup_filter_fixture_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "setup_filter.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=2,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="setup_filter_fixture",
+    )
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            _candidate("STRT", price=1.0),
+            _candidate("WATC", price=1.0),
+        ],
+    )
+    insert_watchlist(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            WatchlistEntry(
+                symbol="STRT",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                market_context_score=0.0,
+                low_float_bonus=1.0,
+                reasons=["fixture_watchlist"],
+            ),
+            WatchlistEntry(
+                symbol="WATC",
+                total_score=4.0,
+                catalyst_score=1.0,
+                technical_score=1.0,
+                sympathy_score=0.5,
+                market_context_score=0.0,
+                low_float_bonus=1.0,
+                reasons=["fixture_watchlist"],
+            ),
+        ],
+    )
+    insert_historical_minute_bars(
+        db_path,
+        [
+            _bar("STRT", "2026-04-10T07:58:00-04:00", 1.00, 1.06, 0.99, 1.02, 100_000),
+            _bar("STRT", "2026-04-10T07:59:00-04:00", 1.02, 1.10, 1.01, 1.08, 100_000),
+            _bar("STRT", "2026-04-10T08:00:00-04:00", 1.08, 1.28, 1.07, 1.26, 500_000),
+            _bar("WATC", "2026-04-10T07:58:00-04:00", 1.00, 1.16, 1.00, 1.14, 100_000),
+            _bar("WATC", "2026-04-10T07:59:00-04:00", 1.14, 1.30, 1.12, 1.24, 100_000),
+            _bar("WATC", "2026-04-10T08:00:00-04:00", 1.24, 1.30, 1.10, 1.26, 500_000),
         ],
     )
     return db_path
