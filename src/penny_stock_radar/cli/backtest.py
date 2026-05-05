@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import csv
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import time
 from zoneinfo import ZoneInfo
 
+import httpx
 import typer
 from rich.table import Table
 
@@ -19,6 +21,18 @@ from ..db import (
 )
 from ..services.backtest_data import BacktestDataManager
 from ..services.kis_historical import KISHistoricalDataService
+from ..services.alpaca_historical import (
+    ALPACA_DIAGNOSTIC_WARNING,
+    AlpacaHistoricalDataService,
+    build_quote_windows,
+    build_quote_windows_from_strategy_run_dir,
+    build_quote_windows_from_trade_log,
+)
+from ..services.nasdaq_symbol_directory import NasdaqSymbolDirectoryArchiver
+from ..services.sec_edgar_pit import (
+    SecEdgarPitBackfillOptions,
+    SecEdgarPitBackfillService,
+)
 from ..services.premkt_entry_signal_audit import (
     DEFAULT_SIGNAL_ENTRY_LABELS,
     DEFAULT_SIGNAL_SETUP_STATES,
@@ -28,6 +42,10 @@ from ..services.market_activity import MarketActivityScanner
 from ..services.falsification_research import (
     FalsificationAuditOptions,
     FalsificationResearchAuditor,
+)
+from ..services.finra_otc_daily_list import (
+    FinraOTCDailyListImporter,
+    records_to_corporate_actions_hook,
 )
 from ..services.point_in_time_universe_audit import (
     PointInTimeUniverseAuditOptions,
@@ -43,6 +61,10 @@ from ..services.premkt_historical_replay import (
 from ..services.premkt_replay_validation import PremktReplayValidationEvaluator
 from ..services.premkt_model_training import PremktModelTrainer
 from ..services.premkt_training_dataset import PremktTrainingDatasetBuilder
+from ..services.research_data_coverage import (
+    ResearchDataCoverageAuditor,
+    ResearchDataCoverageOptions,
+)
 from .common import console, format_optional_number, format_optional_percent, trade_call_label
 
 app = typer.Typer()
@@ -106,6 +128,120 @@ def _normalize_optional_csv_filter(value: str | None) -> tuple[str, ...] | None:
         if normalized and normalized not in values:
             values.append(normalized)
     return tuple(values)
+
+
+def _normalize_symbol_list(
+    values: list[str] | None,
+    *,
+    symbols_file: Path | None = None,
+    symbol_limit: int | None = None,
+) -> list[str]:
+    symbols: list[str] = []
+    for value in values or []:
+        for part in str(value).split(","):
+            normalized = part.strip().upper()
+            if normalized and normalized not in symbols:
+                symbols.append(normalized)
+    if symbols_file is not None:
+        for line in symbols_file.read_text(encoding="utf-8").splitlines():
+            normalized = line.strip().split(",", 1)[0].strip().upper()
+            if normalized and not normalized.startswith("#") and normalized not in symbols:
+                symbols.append(normalized)
+    if symbol_limit is not None:
+        return symbols[:symbol_limit]
+    return symbols
+
+
+def _date_strings(start_date: str, end_date: str) -> list[str]:
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("--end-date must be greater than or equal to --start-date.")
+    days: list[str] = []
+    current = start
+    while current <= end:
+        days.append(current.isoformat())
+        current += timedelta(days=1)
+    return days
+
+
+def _write_run_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _alpaca_window_payload(window) -> dict[str, object]:
+    return {
+        "symbols": list(window.symbols),
+        "market_date": window.market_date,
+        "start_at": window.start_at.isoformat(),
+        "end_at": window.end_at.isoformat(),
+    }
+
+
+def _insert_corporate_action_rows(db_path: Path, rows: list[dict[str, object]]) -> int:
+    if not rows:
+        return 0
+    created_at = datetime.now().isoformat()
+    before_count: int
+    after_count: int
+    with get_connection(db_path) as connection:
+        before_count = int(
+            connection.execute("SELECT COUNT(*) AS count FROM corporate_actions").fetchone()[
+                "count"
+            ]
+            or 0
+        )
+        connection.executemany(
+            """
+            INSERT OR IGNORE INTO corporate_actions (
+                source,
+                source_record_id,
+                action_category,
+                action_subtype,
+                symbol,
+                old_symbol,
+                new_symbol,
+                old_name,
+                new_name,
+                effective_date,
+                event_code,
+                event_reason,
+                raw_payload,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row.get("source"),
+                    row.get("source_record_id"),
+                    row.get("action_category"),
+                    row.get("action_subtype"),
+                    row.get("symbol"),
+                    row.get("old_symbol"),
+                    row.get("new_symbol"),
+                    row.get("old_name"),
+                    row.get("new_name"),
+                    row.get("effective_date"),
+                    row.get("event_code"),
+                    row.get("event_reason"),
+                    json.dumps(row.get("raw_row") or {}, ensure_ascii=True, sort_keys=True),
+                    created_at,
+                )
+                for row in rows
+            ],
+        )
+        after_count = int(
+            connection.execute("SELECT COUNT(*) AS count FROM corporate_actions").fetchone()[
+                "count"
+            ]
+            or 0
+        )
+    return max(0, after_count - before_count)
 
 
 def _resolve_l1_capture_symbols(
@@ -595,6 +731,543 @@ def audit_premkt_entry_signal(
         console.print(f"CSV outputs: [bold]{next(iter(result.csv_paths.values())).parent}[/bold]")
     for warning in report.get("warnings", [])[:8]:
         console.print(f"- {warning}")
+
+
+@app.command("backfill-alpaca-iex-quotes")
+def backfill_alpaca_iex_quotes(
+    strategy_run_dir: Path | None = typer.Option(
+        None,
+        "--strategy-run-dir",
+        help="Replay output directory containing paper_trade_log.csv entry schedule.",
+    ),
+    strategy_trade_log: Path | None = typer.Option(
+        None,
+        "--strategy-trade-log",
+        help="Explicit paper_trade_log.csv path for entry-schedule quote windows.",
+    ),
+    strategy_bucket: str | None = typer.Option(
+        None,
+        "--strategy-bucket",
+        help="Optional bucket filter for strategy entry schedule.",
+    ),
+    market_date: str | None = typer.Option(
+        None,
+        "--market-date",
+        help="Single market date in YYYY-MM-DD for general symbol backfill.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Inclusive start date in YYYY-MM-DD for general symbol backfill.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Inclusive end date in YYYY-MM-DD for general symbol backfill.",
+    ),
+    symbol: list[str] | None = typer.Option(
+        None,
+        "--symbol",
+        "-s",
+        help="Symbol to request. Repeat or pass comma-separated values.",
+    ),
+    symbols_file: Path | None = typer.Option(
+        None,
+        "--symbols-file",
+        help="Text/CSV file with one symbol per line or first CSV column.",
+    ),
+    symbol_limit: int | None = typer.Option(
+        None,
+        "--symbol-limit",
+        min=1,
+        help="Maximum symbols to request after normalization.",
+    ),
+    start_time: str = typer.Option(
+        "09:25",
+        "--start-time",
+        help="ET start time for general backfill windows, HH:MM.",
+    ),
+    end_time: str = typer.Option(
+        "10:00",
+        "--end-time",
+        help="ET end time for general backfill windows, HH:MM.",
+    ),
+    entry_window_before_minutes: float = typer.Option(
+        5.0,
+        "--entry-window-before-minutes",
+        min=0.0,
+        help="Minutes before each strategy entry to request.",
+    ),
+    entry_window_after_minutes: float = typer.Option(
+        30.0,
+        "--entry-window-after-minutes",
+        min=0.0,
+        help="Minutes after each strategy entry to request.",
+    ),
+    limit: int = typer.Option(
+        10000,
+        "--limit",
+        min=1,
+        max=10000,
+        help="Alpaca historical quotes page limit.",
+    ),
+    max_pages: int = typer.Option(
+        100,
+        "--max-pages",
+        min=1,
+        help="Maximum pages per request window.",
+    ),
+    rate_limit_sleep: float = typer.Option(
+        0.0,
+        "--rate-limit-sleep",
+        min=0.0,
+        help="Seconds to sleep between request windows.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Build windows and write summary without calling Alpaca or inserting rows.",
+    ),
+    export_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--export-root",
+        help="Directory where the backfill summary run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to alpaca_iex_<timestamp>.",
+    ),
+) -> None:
+    """Backfill Alpaca IEX historical quotes as diagnostic-only L1 rows."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    run_name = run_id or datetime.now().strftime("alpaca_iex_%Y%m%d_%H%M%S")
+    export_dir = export_root / run_name
+    export_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if strategy_run_dir is not None:
+            windows = build_quote_windows_from_strategy_run_dir(
+                strategy_run_dir,
+                bucket=strategy_bucket,
+                minutes_before=entry_window_before_minutes,
+                minutes_after=entry_window_after_minutes,
+                symbols_per_window=symbol_limit,
+            )
+            input_mode = "strategy_run_dir"
+        elif strategy_trade_log is not None:
+            windows = build_quote_windows_from_trade_log(
+                strategy_trade_log,
+                bucket=strategy_bucket,
+                minutes_before=entry_window_before_minutes,
+                minutes_after=entry_window_after_minutes,
+                symbols_per_window=symbol_limit,
+            )
+            input_mode = "strategy_trade_log"
+        else:
+            symbols = _normalize_symbol_list(
+                symbol,
+                symbols_file=symbols_file,
+                symbol_limit=symbol_limit,
+            )
+            if not symbols:
+                raise ValueError("Provide --symbol/--symbols-file or a strategy trade log.")
+            if market_date is not None:
+                dates = [market_date]
+            elif start_date is not None and end_date is not None:
+                dates = _date_strings(start_date, end_date)
+            else:
+                raise ValueError("Provide --market-date or --start-date/--end-date.")
+            windows = [
+                window
+                for current_date in dates
+                for window in build_quote_windows(
+                    symbols,
+                    current_date,
+                    start_time,
+                    end_time,
+                    symbols_per_window=symbol_limit,
+                )
+            ]
+            input_mode = "general_symbol_date"
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    manifest = {
+        "command": "backfill-alpaca-iex-quotes",
+        "created_at": datetime.now().isoformat(),
+        "input_mode": input_mode,
+        "diagnostic_only": True,
+        "source": "alpaca_iex_historical_quotes",
+        "warning": ALPACA_DIAGNOSTIC_WARNING,
+        "window_count": len(windows),
+        "windows_preview": [_alpaca_window_payload(window) for window in windows[:20]],
+        "dry_run": dry_run,
+    }
+    _write_run_json(export_dir / "run_manifest.json", manifest)
+    if dry_run:
+        summary_payload = {
+            **manifest,
+            "inserted_rows": 0,
+            "requested_symbols": len({symbol for window in windows for symbol in window.symbols}),
+        }
+        _write_run_json(export_dir / "alpaca_iex_quote_summary.json", summary_payload)
+        (export_dir / "alpaca_iex_quote_summary.md").write_text(
+            "# Alpaca IEX Diagnostic Quote Backfill\n\n"
+            f"- Dry run: true\n- Windows: {len(windows)}\n- Warning: {ALPACA_DIAGNOSTIC_WARNING}\n",
+            encoding="utf-8",
+        )
+        console.print(f"Dry run wrote Alpaca IEX diagnostic summary to [bold]{export_dir}[/bold].")
+        return
+
+    if not settings.alpaca_api_key or not settings.alpaca_secret_key:
+        console.print("Missing PENNY_STOCK_ALPACA_API_KEY or PENNY_STOCK_ALPACA_SECRET_KEY.")
+        raise typer.Exit(code=1)
+
+    root_cli.init_database(settings.database_path)
+    service = AlpacaHistoricalDataService(settings)
+    try:
+        summaries = []
+        for index, window in enumerate(windows):
+            summaries.append(
+                service.import_historical_quotes(
+                    [window],
+                    feed=settings.alpaca_market_data_feed,
+                    limit=limit,
+                    max_pages_per_window=max_pages,
+                )
+            )
+            if rate_limit_sleep > 0 and index + 1 < len(windows):
+                time.sleep(rate_limit_sleep)
+    finally:
+        service.close()
+    summary_payload = {
+        **manifest,
+        "feed": settings.alpaca_market_data_feed,
+        "requested_symbols": len({symbol for window in windows for symbol in window.symbols}),
+        "inserted_rows": sum(summary.inserted_rows for summary in summaries),
+        "rows": sum(summary.rows for summary in summaries),
+        "pages": sum(summary.pages for summary in summaries),
+        "skipped_rows": sum(summary.skipped_rows for summary in summaries),
+        "duplicate_rows": sum(summary.duplicate_rows for summary in summaries),
+        "summary_by_window": [asdict(summary) for summary in summaries],
+    }
+    _write_run_json(export_dir / "alpaca_iex_quote_summary.json", summary_payload)
+    (export_dir / "alpaca_iex_quote_summary.md").write_text(
+        "# Alpaca IEX Diagnostic Quote Backfill\n\n"
+        f"- Inserted rows: {summary_payload['inserted_rows']}\n"
+        f"- Requested symbols: {summary_payload['requested_symbols']}\n"
+        f"- Pages: {summary_payload['pages']}\n"
+        f"- Source: `alpaca_iex_historical_quotes`\n"
+        f"- Warning: {ALPACA_DIAGNOSTIC_WARNING}\n",
+        encoding="utf-8",
+    )
+    console.print(
+        "Alpaca IEX diagnostic quotes inserted "
+        f"[bold]{summary_payload['inserted_rows']}[/bold] rows. Summary: [bold]{export_dir}[/bold]"
+    )
+    console.print(ALPACA_DIAGNOSTIC_WARNING)
+
+
+@app.command("archive-nasdaq-symbol-directory")
+def archive_nasdaq_symbol_directory(
+    market_date: str | None = typer.Option(
+        None,
+        "--market-date",
+        help="Forward PIT market date to tag. Defaults to current ET date.",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Output directory. Defaults to data/backtest_lab/reference_snapshots/<run_id>.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print target paths without fetching or writing.",
+    ),
+    allow_current_date: bool = typer.Option(
+        False,
+        "--allow-current-date",
+        help="Also write scan_runs/universe as forward PIT for the current/future date.",
+    ),
+) -> None:
+    """Archive current Nasdaq Symbol Directory files for forward-only PIT use."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    run_name = f"nasdaq_symbol_directory_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    target_dir = output_dir or Path("data/backtest_lab/reference_snapshots") / run_name
+    if dry_run:
+        console.print(f"Would archive Nasdaq Symbol Directory to [bold]{target_dir}[/bold].")
+        console.print("Forward PIT only; this does not backfill past replay dates.")
+        return
+    archiver = NasdaqSymbolDirectoryArchiver(target_dir)
+    try:
+        result = archiver.archive_current(
+            db_path=settings.database_path,
+            allow_current_date=allow_current_date,
+            market_date=market_date,
+        )
+    except httpx.HTTPError as exc:
+        console.print(f"Failed to fetch Nasdaq Symbol Directory: {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"Archived [bold]{len(result.records)}[/bold] Nasdaq directory rows to "
+        f"[bold]{result.output_dir}[/bold]."
+    )
+    console.print(f"Report: [bold]{result.report_path}[/bold]")
+    if result.scan_id:
+        console.print(f"Forward PIT scan_id: [bold]{result.scan_id}[/bold] date={result.market_date}")
+    else:
+        console.print("DB PIT write skipped. Pass --allow-current-date to write forward PIT rows.")
+
+
+@app.command("backfill-sec-filings-pit")
+def backfill_sec_filings_pit(
+    start_date: str = typer.Option(..., "--start-date", help="Inclusive YYYY-MM-DD."),
+    end_date: str | None = typer.Option(None, "--end-date", help="Inclusive YYYY-MM-DD."),
+    symbol: list[str] | None = typer.Option(
+        None,
+        "--symbol",
+        "-s",
+        help="Symbol to backfill. Repeat or pass comma-separated values.",
+    ),
+    symbols_file: Path | None = typer.Option(
+        None,
+        "--symbols-file",
+        help="Optional symbol file with one symbol per line or first CSV column.",
+    ),
+    cik: list[str] | None = typer.Option(
+        None,
+        "--cik",
+        help="CIK to backfill. Repeat or pass comma-separated values.",
+    ),
+    form: list[str] | None = typer.Option(
+        None,
+        "--form",
+        help="SEC form allowlist. Repeat or pass comma-separated values.",
+    ),
+    cutoff_time: str = typer.Option(
+        "08:00",
+        "--cutoff-time",
+        help="ET cutoff for D eligibility, HH:MM.",
+    ),
+    scan_id: str | None = typer.Option(
+        None,
+        "--scan-id",
+        help="Optional existing/supplied PIT scan id. Single market date only.",
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--output-root",
+        help="Directory where the SEC PIT backfill run is written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id", help="Optional stable run id."),
+    rate_limit_sleep: float = typer.Option(
+        0.0,
+        "--rate-limit-sleep",
+        min=0.0,
+        help="Accepted for runbook symmetry; SEC service still relies on provider-level pacing.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Fetch and report but do not write filings/scan rows.",
+    ),
+) -> None:
+    """Backfill SEC EDGAR filings with acceptance-time PIT cutoff semantics."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    root_cli.init_database(settings.database_path)
+    try:
+        cutoff = _parse_optional_time(cutoff_time, "--cutoff-time")
+        assert cutoff is not None
+        symbols = tuple(_normalize_symbol_list(symbol, symbols_file=symbols_file))
+        ciks = tuple(_normalize_symbol_list(cik))
+        forms = tuple(_normalize_symbol_list(form)) or ("8-K", "S-1", "S-3", "424B5", "RW")
+        if rate_limit_sleep > 0:
+            console.print(
+                "--rate-limit-sleep is recorded for operator intent; current SEC backfill "
+                "uses the SEC provider request path without per-CIK sleep injection."
+            )
+        result = SecEdgarPitBackfillService(settings).run(
+            SecEdgarPitBackfillOptions(
+                db_path=settings.database_path,
+                output_root=output_root,
+                run_id=run_id,
+                start_date=start_date,
+                end_date=end_date,
+                symbols=symbols,
+                ciks=ciks,
+                forms=forms,
+                scan_id=scan_id,
+                write_database=not dry_run,
+                cutoff_time=cutoff,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    console.print(
+        f"SEC EDGAR PIT backfill wrote report to [bold]{result.export_dir}[/bold]: "
+        f"eligible={result.eligible_count} diagnostic={result.diagnostic_count} "
+        f"written={result.written_count}."
+    )
+    console.print(f"Report: [bold]{result.report_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    if result.scan_ids_by_market_date:
+        console.print(f"PIT scan ids: {json.dumps(result.scan_ids_by_market_date, sort_keys=True)}")
+
+
+@app.command("backfill-finra-otc-daily-list")
+def backfill_finra_otc_daily_list(
+    input_csv: Path | None = typer.Option(
+        None,
+        "--input-csv",
+        help="Optional FINRA OTC Daily List CSV to stage instead of calling the FINRA API.",
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--output-root",
+        help="Directory where the FINRA staging run is written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id", help="Optional stable run id."),
+    limit: int = typer.Option(
+        1000,
+        "--limit",
+        min=1,
+        help="Maximum rows requested from FINRA API when --input-csv is not provided.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print the target path without fetching or staging rows.",
+    ),
+    write_database: bool = typer.Option(
+        False,
+        "--write-database",
+        help="Insert READY staging rows into the minimal corporate_actions inventory.",
+    ),
+) -> None:
+    """Stage FINRA OTC Daily List corporate-action rows for survivorship audit."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    run_name = run_id or datetime.now().strftime("finra_otc_daily_list_%Y%m%d_%H%M%S")
+    output_dir = output_root / run_name
+    if dry_run:
+        console.print(f"Would stage FINRA OTC Daily List output under [bold]{output_dir}[/bold].")
+        console.print("No DB write; corporate-action coverage remains unresolved.")
+        return
+
+    importer = FinraOTCDailyListImporter(output_dir)
+    try:
+        if input_csv is not None:
+            with input_csv.open(encoding="utf-8-sig", newline="") as handle:
+                result = importer.stage_rows(csv.DictReader(handle))
+        else:
+            result = importer.fetch_and_stage(limit=limit)
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    inserted_rows = 0
+    if write_database and not result.blocked:
+        root_cli.init_database(settings.database_path)
+        inserted_rows = _insert_corporate_action_rows(
+            settings.database_path,
+            records_to_corporate_actions_hook(result.records),
+        )
+
+    console.print(
+        f"FINRA OTC Daily List staging status=[bold]{result.status}[/bold] "
+        f"records=[bold]{len(result.records)}[/bold] output=[bold]{result.output_dir}[/bold]."
+    )
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.markdown_path}[/bold]")
+    if write_database:
+        console.print(
+            f"Inserted [bold]{inserted_rows}[/bold] corporate_actions rows. "
+            "Current FINRA rows are not sufficient historical survivorship proof by themselves."
+        )
+
+
+@app.command("audit-research-data-coverage")
+def audit_research_data_coverage(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to audit. Defaults to data/backtest_lab/.",
+    ),
+    export_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--export-root",
+        help="Directory where the coverage audit run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to coverage_<timestamp>.",
+    ),
+    start_date: str | None = typer.Option(None, "--start-date", help="Optional YYYY-MM-DD."),
+    end_date: str | None = typer.Option(None, "--end-date", help="Optional YYYY-MM-DD."),
+    strategy_run_dir: Path | None = typer.Option(
+        None,
+        "--strategy-run-dir",
+        help="Replay output directory containing paper_trade_log.csv.",
+    ),
+    strategy_trade_log: Path | None = typer.Option(
+        None,
+        "--strategy-trade-log",
+        help="Explicit paper_trade_log.csv path for strategy date overlap.",
+    ),
+    strategy_bucket: str | None = typer.Option(
+        None,
+        "--strategy-bucket",
+        help="Optional bucket filter for strategy entry schedule.",
+    ),
+    sec_cutoff_time: str = typer.Option(
+        "08:00",
+        "--sec-cutoff-time",
+        help="SEC filing cutoff in ET, HH:MM.",
+    ),
+) -> None:
+    """Write a coverage report before running the falsification audit."""
+    try:
+        cutoff = _parse_optional_time(sec_cutoff_time, "--sec-cutoff-time")
+        assert cutoff is not None
+        result = ResearchDataCoverageAuditor().run(
+            ResearchDataCoverageOptions(
+                db_path=db_path,
+                output_root=export_root,
+                run_id=run_id,
+                start_date=start_date,
+                end_date=end_date,
+                strategy_run_dir=strategy_run_dir,
+                strategy_trade_log=strategy_trade_log,
+                strategy_bucket=strategy_bucket,
+                sec_cutoff_time=cutoff,
+            )
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    summary = result.report.get("summary", {})
+    blockers = summary.get("blockers", [])
+    console.print(f"Coverage audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(f"CSV: [bold]{result.csv_path}[/bold]")
+    if blockers:
+        console.print("Blockers:")
+        for blocker in blockers:
+            console.print(f"- {blocker}")
+    else:
+        console.print("No coverage blockers in this report. Run falsification audit next.")
 
 
 @app.command("run-falsification-audit")

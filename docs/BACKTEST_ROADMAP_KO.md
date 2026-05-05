@@ -71,7 +71,14 @@ strategy entry timing 을 보존한 random-entry null 을 포함할 때:
 ./scripts/psradar run-falsification-audit --run-id matched_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
-`same_universe_random_entry` 는 trade log 의 entry timing 만 가져온다. random replacement universe 는 exact PIT same-date universe 여야 하며, 같은 분봉 bar overlap 과 cost sample 이 없으면 blocked 처리한다.
+`same_universe_random_entry` 는 trade log 의 entry timing 만 가져온다. random replacement universe 는 exact PIT same-date universe 여야 하며, 같은 분봉 bar overlap 과 strategy market_date 와 겹치는 cost sample 이 없으면 blocked 처리한다. 다른 날짜의 L1/minute spread 를 current-cost fallback 으로 써서 matched benchmark 를 통과시키지 않는다.
+
+Cost source policy:
+
+- cost evidence 는 `kis_l1_snapshot` 또는 명시적 full NBBO/SIP 계열 source 만 허용한다.
+- Alpaca IEX (`alpaca_iex_historical_quotes`, `alpaca_iex_diagnostic`, `alpaca_iex_*`) 는 무료 diagnostic proxy 이며, `l1_spread.count`, minute spread cost distribution, matched random-entry cost overlap 을 해소하지 않는다.
+- strategy date 에 Alpaca IEX quote 만 있으면 `cost_distribution_eligible_source_missing` 또는 date overlap missing 계열 blocker 가 정상이다.
+- current-only 또는 diagnostic-only cost proxy 로 Phase 0 gate 를 통과시키지 않는다.
 
 필수 산출물:
 
@@ -192,6 +199,12 @@ PIT universe 복구 원칙:
   - 현재 저장소에는 `psradar backfill-kis-minute`, `psradar capture-kis-l1`, `psradar capture-kis-l1-window`, `psradar report-backtest-coverage` 경로가 추가되었다. `capture-kis-l1-window` 는 반복 capture 후 latest coverage report/gate 를 갱신한다. 다음 단계는 이 경로로 실제 coverage 를 채워 60% 기준을 검증하는 것이다.
   - L1 `snapshot_date` mismatch 또는 120분 초과 timestamp drift 는 coverage report note 와 gate failure 로 반영한다.
   - 커버리지 60% 미만이면 전략 백테스트 이전에 소스 보강이 우선이다.
+- **무료 데이터 blocker 보강 MVP**
+  - `backfill-alpaca-iex-quotes` 는 Alpaca historical IEX quote 를 diagnostic-only 로 저장한다. IEX 는 NBBO/SIP 가 아니므로 cost PASS 근거가 아니다.
+  - `archive-nasdaq-symbol-directory` 는 오늘부터의 Nasdaq Symbol Directory 를 forward PIT archive 로 남긴다. 과거 2025 PIT 복원으로 쓰지 않는다.
+  - `backfill-sec-filings-pit` 는 SEC EDGAR filing acceptance time 을 D 08:00 ET cutoff 로 나눠 catalyst leakage 를 줄인다.
+  - `backfill-finra-otc-daily-list` 는 OTC Daily List corporate-action staging 을 남긴다. current-only FINRA rows 는 historical survivorship proof 가 아니며, date range mismatch 는 blocker 로 남긴다.
+  - `audit-research-data-coverage` 는 falsification audit 전에 minute/PIT/cost/corporate-action/SEC cutoff coverage 를 JSON/CSV/MD 로 확인한다.
 - **Halt / LULD 이벤트 기록**
   - 페니 종목은 halt 가 잦다. 과거 halt 이벤트(시각, 사유, 재개가)를 수집한다.
   - 소스가 없으면 최소한 minute bar gap + 거래량 0 구간으로 halt 를 추정하는 fallback 을 둔다.

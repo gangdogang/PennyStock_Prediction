@@ -41,6 +41,7 @@ def test_initialize_database_creates_expected_tables(tmp_path: Path) -> None:
         "historical_minute_bars",
         "historical_halt_events",
         "historical_coverage_reports",
+        "corporate_actions",
         "execution_orders",
         "execution_positions",
         "execution_accounts",

@@ -232,7 +232,7 @@ def test_run_falsification_audit_writes_research_artifacts(tmp_path: Path) -> No
                 bid_price=0.99,
                 ask_price=1.01,
                 last_price=1.00,
-                source="fixture",
+                source="kis_l1_snapshot",
             )
         ],
     )
@@ -337,6 +337,20 @@ def test_run_falsification_audit_builds_matched_random_entry_benchmark(
                 )
             )
     insert_historical_minute_bars(db_path, bars)
+    insert_historical_l1_quotes(
+        db_path,
+        [
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-10",
+                timestamp=datetime(2026, 4, 10, 9, 31, tzinfo=EASTERN),
+                bid_price=1.02,
+                ask_price=1.04,
+                last_price=1.03,
+                source="kis_l1_snapshot",
+            )
+        ],
+    )
     trade_log = tmp_path / "paper_trade_log.csv"
     trade_log.write_text(
         "\n".join(
@@ -382,6 +396,314 @@ def test_run_falsification_audit_builds_matched_random_entry_benchmark(
     assert "same_universe_random_entry" in matched_csv
     assert "BBB" in matched_csv
     assert "AAA" in matched_csv
+
+
+def test_run_falsification_audit_blocks_matched_without_strategy_date_cost_overlap(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=2,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="fixture",
+    )
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol=symbol,
+                company_name=f"{symbol} Corp",
+                exchange="Q",
+                price=1.0,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+            for symbol in ("AAA", "BBB")
+        ],
+    )
+    bars = []
+    for symbol in ("AAA", "BBB"):
+        for minute, close_price in enumerate([1.00, 1.03, 1.06, 1.02]):
+            bars.append(
+                HistoricalMinuteBar(
+                    symbol=symbol,
+                    market_date="2026-04-10",
+                    market_phase="regular",
+                    timestamp=datetime(2026, 4, 10, 9, 30 + minute, tzinfo=EASTERN),
+                    open_price=close_price,
+                    high_price=close_price * 1.03,
+                    low_price=close_price * 0.97,
+                    close_price=close_price,
+                    volume=10000 + minute,
+                    source="fixture",
+                )
+            )
+    insert_historical_minute_bars(db_path, bars)
+    insert_historical_l1_quotes(
+        db_path,
+        [
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-09",
+                timestamp=datetime(2026, 4, 9, 9, 30, tzinfo=EASTERN),
+                bid_price=0.99,
+                ask_price=1.01,
+                last_price=1.00,
+                source="kis_l1_snapshot",
+            )
+        ],
+    )
+    trade_log = tmp_path / "paper_trade_log.csv"
+    trade_log.write_text(
+        "\n".join(
+            [
+                "event,bucket,symbol,market_date,entry_at,entry_price",
+                "ENTRY,predictor_weighted,AAA,2026-04-10,2026-04-10T09:31:00-04:00,1.03",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run-falsification-audit",
+            "--db-path",
+            str(db_path),
+            "--export-root",
+            str(tmp_path / "research_runs"),
+            "--run-id",
+            "matched_cost_no_overlap",
+            "--strategy-trade-log",
+            str(trade_log),
+            "--strategy-bucket",
+            "predictor_weighted",
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = json.loads(
+        (
+            tmp_path
+            / "research_runs"
+            / "matched_cost_no_overlap"
+            / "research_audit_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    matched = report["matched_random_entry_benchmark"]
+    assert matched["status"] == "blocked"
+    assert matched["reason"] == "cost_distribution_date_overlap_missing"
+    assert matched["total_cost_sample_count"] > 0
+
+
+def test_run_falsification_audit_cost_source_policy_excludes_alpaca_iex(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    insert_historical_l1_quotes(
+        db_path,
+        [
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-10",
+                timestamp=datetime(2026, 4, 10, 9, 30, tzinfo=EASTERN),
+                bid_price=0.50,
+                ask_price=1.50,
+                last_price=None,
+                source="alpaca_iex_historical_quotes",
+            ),
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-10",
+                timestamp=datetime(2026, 4, 10, 9, 31, tzinfo=EASTERN),
+                bid_price=0.99,
+                ask_price=1.01,
+                last_price=1.00,
+                source="kis_l1_snapshot",
+            ),
+        ],
+    )
+    insert_historical_minute_bars(
+        db_path,
+        [
+            HistoricalMinuteBar(
+                symbol="AAA",
+                market_date="2026-04-10",
+                market_phase="regular",
+                timestamp=datetime(2026, 4, 10, 9, 30, tzinfo=EASTERN),
+                open_price=1.0,
+                high_price=1.1,
+                low_price=0.9,
+                close_price=1.0,
+                volume=1000,
+                spread_pct=0.75,
+                source="alpaca_iex_diagnostic",
+            )
+        ],
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run-falsification-audit",
+            "--db-path",
+            str(db_path),
+            "--export-root",
+            str(tmp_path / "research_runs"),
+            "--run-id",
+            "cost_policy",
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = json.loads(
+        (tmp_path / "research_runs" / "cost_policy" / "research_audit_report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    cost = report["cost_audit"]
+    assert cost["l1_spread"]["count"] == 1
+    assert round(cost["l1_spread"]["p50_pct"], 3) == 2.0
+    assert cost["minute_spread"]["count"] == 0
+    assert cost["l1_source_counts"] == {
+        "alpaca_iex_historical_quotes": 1,
+        "kis_l1_snapshot": 1,
+    }
+    assert cost["l1_cost_eligible_source_counts"] == {"kis_l1_snapshot": 1}
+    assert cost["l1_diagnostic_only_source_counts"] == {
+        "alpaca_iex_historical_quotes": 1
+    }
+    assert cost["minute_spread_diagnostic_only_source_counts"] == {
+        "alpaca_iex_diagnostic": 1
+    }
+    assert "alpaca_iex_historical_quotes" in cost["excluded_l1_sources"]
+    assert "alpaca_iex_diagnostic" in cost["excluded_minute_spread_sources"]
+
+
+def test_run_falsification_audit_blocks_matched_when_strategy_date_has_only_alpaca_cost(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    snapshot = create_snapshot_run(
+        db_path,
+        source="historical",
+        symbol_count=2,
+        market_date="2026-04-10",
+        snapshot_role="point_in_time",
+        point_in_time_tag="fixture",
+    )
+    insert_universe_candidates(
+        db_path,
+        snapshot.snapshot_id,
+        [
+            UniverseCandidate(
+                symbol=symbol,
+                company_name=f"{symbol} Corp",
+                exchange="Q",
+                price=1.0,
+                passed_filters=True,
+                filter_reasons=[],
+            )
+            for symbol in ("AAA", "BBB")
+        ],
+    )
+    bars = []
+    for symbol in ("AAA", "BBB"):
+        for minute, close_price in enumerate([1.00, 1.03, 1.06, 1.02]):
+            bars.append(
+                HistoricalMinuteBar(
+                    symbol=symbol,
+                    market_date="2026-04-10",
+                    market_phase="regular",
+                    timestamp=datetime(2026, 4, 10, 9, 30 + minute, tzinfo=EASTERN),
+                    open_price=close_price,
+                    high_price=close_price * 1.03,
+                    low_price=close_price * 0.97,
+                    close_price=close_price,
+                    volume=10000 + minute,
+                    source="fixture",
+                )
+            )
+    insert_historical_minute_bars(db_path, bars)
+    insert_historical_l1_quotes(
+        db_path,
+        [
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-09",
+                timestamp=datetime(2026, 4, 9, 9, 30, tzinfo=EASTERN),
+                bid_price=0.99,
+                ask_price=1.01,
+                last_price=1.00,
+                source="kis_l1_snapshot",
+            ),
+            HistoricalL1Quote(
+                symbol="AAA",
+                market_date="2026-04-10",
+                timestamp=datetime(2026, 4, 10, 9, 30, tzinfo=EASTERN),
+                bid_price=0.50,
+                ask_price=1.50,
+                last_price=None,
+                source="alpaca_iex_historical_quotes",
+            ),
+        ],
+    )
+    trade_log = tmp_path / "paper_trade_log.csv"
+    trade_log.write_text(
+        "\n".join(
+            [
+                "event,bucket,symbol,market_date,entry_at,entry_price",
+                "ENTRY,predictor_weighted,AAA,2026-04-10,2026-04-10T09:31:00-04:00,1.03",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run-falsification-audit",
+            "--db-path",
+            str(db_path),
+            "--export-root",
+            str(tmp_path / "research_runs"),
+            "--run-id",
+            "matched_alpaca_only_cost",
+            "--strategy-trade-log",
+            str(trade_log),
+            "--strategy-bucket",
+            "predictor_weighted",
+        ],
+    )
+
+    assert result.exit_code == 0
+    report = json.loads(
+        (
+            tmp_path
+            / "research_runs"
+            / "matched_alpaca_only_cost"
+            / "research_audit_report.json"
+        ).read_text(encoding="utf-8")
+    )
+    matched = report["matched_random_entry_benchmark"]
+    assert matched["status"] == "blocked"
+    assert matched["reason"] == "cost_distribution_eligible_source_missing"
+    assert matched["strategy_cost_audit"]["l1_spread"]["count"] == 0
+    assert matched["strategy_cost_audit"]["l1_diagnostic_only_source_counts"] == {
+        "alpaca_iex_historical_quotes": 1
+    }
 
 
 def test_run_falsification_audit_blocks_null_without_point_in_time_universe(

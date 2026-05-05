@@ -188,6 +188,170 @@ Blocker 처리:
 - `BLOCKED` 이면 feature tuning 이 아니라 데이터 보강, universe 재현, L1/spread cost 보강, benchmark 구현을 먼저 한다.
 - `PASS` 후에만 frozen hypothesis 를 정의하고, 그 다음 1개월 calibration 과 3개월 이상 OOS 로 이동한다.
 
+## Phase 0 무료 데이터 MVP runbook
+
+목적은 edge 를 찾는 것이 아니라 falsification audit 이 왜 막히는지 더 정확히 보는 것이다. Alpaca IEX 는 diagnostic-only 이며, cost gate 를 풀면 안 된다.
+
+Alpaca key smoke 는 키 값을 출력하지 않는다. HTTP status, feed, quote count 만 본다.
+
+```powershell
+cd C:\Dev\Penny_Stock
+$Symbol = "AAPL"
+$StartUtc = "2026-05-01T13:30:00Z"
+$EndUtc = "2026-05-01T13:35:00Z"
+$Headers = @{
+  "APCA-API-KEY-ID" = $env:PENNY_STOCK_ALPACA_API_KEY
+  "APCA-API-SECRET-KEY" = $env:PENNY_STOCK_ALPACA_SECRET_KEY
+}
+$Uri = "https://data.alpaca.markets/v2/stocks/quotes?symbols=$Symbol&start=$StartUtc&end=$EndUtc&feed=iex&limit=100&sort=asc"
+$Resp = Invoke-RestMethod -Method Get -Headers $Headers -Uri $Uri
+$QuoteCount = ($Resp.quotes.PSObject.Properties.Value | ForEach-Object { @($_).Count } | Measure-Object -Sum).Sum
+[pscustomobject]@{ http_status = "ok"; feed = "iex"; quote_count = [int]$QuoteCount }
+```
+
+Expected output:
+
+```text
+http_status feed quote_count
+----------- ---- -----------
+ok          iex  <0 or more>
+```
+
+strategy run entry schedule 주변 Alpaca IEX diagnostic quote backfill:
+
+```powershell
+cd C:\Dev\Penny_Stock
+.\scripts\psradar backfill-alpaca-iex-quotes `
+  --run-id alpaca_iex_YYYYMMDD `
+  --strategy-run-dir data\backtest_lab\replays\<run_id> `
+  --strategy-bucket predictor_weighted `
+  --entry-window-before-minutes 5 `
+  --entry-window-after-minutes 30 `
+  --limit 10000 `
+  --max-pages 100 `
+  --rate-limit-sleep 0.25
+```
+
+일반 symbol/date diagnostic backfill:
+
+```powershell
+.\scripts\psradar backfill-alpaca-iex-quotes `
+  --run-id alpaca_iex_20260501_ABCD `
+  --market-date 2026-05-01 `
+  --symbol ABCD `
+  --start-time 09:25 `
+  --end-time 10:00
+```
+
+Nasdaq Symbol Directory forward PIT archive:
+
+```powershell
+.\scripts\psradar archive-nasdaq-symbol-directory --output-dir data\backtest_lab\reference_snapshots\nasdaq_symbol_directory_YYYYMMDD
+```
+
+`--allow-current-date` 를 붙이면 오늘 이후 forward PIT `scan_runs/universe` 를 기록할 수 있다. 이 snapshot 은 과거 2025 replay 의 PIT 가 아니다.
+
+SEC EDGAR PIT filing backfill:
+
+```powershell
+.\scripts\psradar backfill-sec-filings-pit `
+  --run-id sec_pit_YYYYMMDD `
+  --start-date 2025-06-02 `
+  --end-date 2025-06-30 `
+  --symbols-file data\backtest_lab\symbols.txt `
+  --form 8-K `
+  --form S-1 `
+  --form S-3 `
+  --cutoff-time 08:00
+```
+
+FINRA OTC Daily List staging:
+
+```powershell
+.\scripts\psradar backfill-finra-otc-daily-list --run-id finra_otc_YYYYMMDD --limit 1000
+```
+
+FINRA API 가 인증/제한으로 막히면 공식/수동 CSV 를 staging 한다.
+
+```powershell
+.\scripts\psradar backfill-finra-otc-daily-list `
+  --run-id finra_otc_csv_YYYYMMDD `
+  --input-csv data\backtest_lab\reference_snapshots\finra_otc_daily_list.csv `
+  --write-database
+```
+
+coverage audit:
+
+```powershell
+.\scripts\psradar audit-research-data-coverage `
+  --run-id coverage_YYYYMMDD `
+  --strategy-run-dir data\backtest_lab\replays\<run_id> `
+  --strategy-bucket predictor_weighted
+Get-Content data\backtest_lab\research_runs\coverage_YYYYMMDD\research_data_coverage_summary.md
+```
+
+falsification audit rerun:
+
+```powershell
+.\scripts\psradar run-falsification-audit `
+  --run-id falsification_YYYYMMDD `
+  --strategy-run-dir data\backtest_lab\replays\<run_id> `
+  --strategy-bucket predictor_weighted
+Get-Content data\backtest_lab\research_runs\falsification_YYYYMMDD\research_audit_summary.md
+```
+
+SQLite check query:
+
+```sql
+SELECT source, COUNT(*) AS total_l1_rows
+FROM historical_l1_quotes
+GROUP BY source
+ORDER BY source;
+
+SELECT COUNT(*) AS alpaca_diagnostic_l1_rows
+FROM historical_l1_quotes
+WHERE source = 'alpaca_iex_historical_quotes'
+   OR source = 'alpaca_iex_diagnostic'
+   OR source LIKE 'alpaca_iex_%';
+
+SELECT COUNT(*) AS cost_eligible_l1_rows
+FROM historical_l1_quotes
+WHERE source IN ('kis_l1_snapshot', 'full_nbbo', 'full_sip', 'nbbo_sip', 'cta_utp_sip')
+   OR source LIKE 'full_nbbo_%'
+   OR source LIKE 'full_sip_%'
+   OR source LIKE 'nbbo_sip_%'
+   OR source LIKE 'vendor_nbbo_%'
+   OR source LIKE 'vendor_sip_%';
+
+SELECT h.market_date,
+       SUM(CASE WHEN h.source IN ('kis_l1_snapshot', 'full_nbbo', 'full_sip', 'nbbo_sip', 'cta_utp_sip')
+                  OR h.source LIKE 'full_nbbo_%'
+                  OR h.source LIKE 'full_sip_%'
+                  OR h.source LIKE 'nbbo_sip_%'
+                  OR h.source LIKE 'vendor_nbbo_%'
+                  OR h.source LIKE 'vendor_sip_%'
+                THEN 1 ELSE 0 END) AS cost_eligible_rows,
+       SUM(CASE WHEN h.source = 'alpaca_iex_historical_quotes'
+                  OR h.source = 'alpaca_iex_diagnostic'
+                  OR h.source LIKE 'alpaca_iex_%'
+                THEN 1 ELSE 0 END) AS alpaca_diagnostic_rows
+FROM historical_l1_quotes h
+GROUP BY h.market_date
+ORDER BY h.market_date;
+```
+
+PowerShell 에서 sqlite3 가 있으면:
+
+```powershell
+sqlite3 data\backtest_lab\penny_stock_radar.sqlite3 ".read .\tmp\phase0_cost_checks.sql"
+```
+
+Expected result:
+
+- Alpaca rows 가 생겨도 `research_audit_report.json.cost_audit.l1_spread.count` 에 들어가지 않아야 정상이다.
+- strategy date 에 cost-eligible `kis_l1_snapshot` 또는 full NBBO/SIP source 가 없으면 `same_universe_random_entry` 는 `cost_distribution_eligible_source_missing` 또는 overlap missing 계열 reason 으로 `BLOCKED` 여야 정상이다.
+- `audit-research-data-coverage` 에 diagnostic-only Alpaca count 가 표시되더라도 next allowed action 은 eligible cost/PIT/survivorship blocker 해소 전까지 falsification 보강이다.
+
 ## Windows paper 실행과 중간 archive
 
 Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.

@@ -142,6 +142,23 @@ Backtest L1 coverage report:
 ./scripts/psradar report-backtest-coverage --market-date 2026-04-17 --session premarket
 ```
 
+Phase 0 falsification data coverage audit:
+
+```bash
+./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
+```
+
+무료 데이터 blocker 보강 CLI:
+
+```bash
+./scripts/psradar backfill-alpaca-iex-quotes --market-date 2026-05-01 --symbol ABCD --start-time 09:25 --end-time 10:00
+./scripts/psradar archive-nasdaq-symbol-directory --output-dir data/backtest_lab/reference_snapshots/nasdaq_symbol_directory_$(date +%Y%m%d)
+./scripts/psradar backfill-sec-filings-pit --start-date 2025-06-02 --end-date 2025-06-30 --symbol ABCD --form 8-K --cutoff-time 08:00
+./scripts/psradar backfill-finra-otc-daily-list --run-id finra_otc_$(date +%Y%m%d) --limit 1000
+```
+
+Alpaca IEX 는 diagnostic-only 이며 NBBO/SIP cost evidence 가 아니다. Nasdaq Symbol Directory 는 forward PIT archive 이고 과거 PIT 복원이 아니다. 상세 Windows runbook 은 `docs/OPERATIONS_KO.md` 의 "Phase 0 무료 데이터 MVP runbook" 을 본다.
+
 Replay entry-signal audit:
 
 ```bash

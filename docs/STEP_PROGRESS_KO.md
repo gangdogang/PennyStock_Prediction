@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-05-05
+최종 갱신일: 2026-05-06
 
 ## 운영 원칙
 
@@ -73,6 +73,8 @@
 - 2026-05-05: `tag-pit-universe-scan` 를 추가했다. 명시적 scan_id 만 PIT 로 태그할 수 있고, scan 생성 시각이 D 08:00 ET 이후이면 기본 거부한다. 이 경로는 forward archive salvage 용도이며 과거 2025 replay 의 PIT 를 날조하지 않는다.
 - 2026-05-05: PIT audit smoke 는 현재 DB에서 `diagnostic_reconstruction_possible` 을 반환했다. exact PIT 는 0건이고, 2026-04-17 bar-derived diagnostic universe 만 가능하다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `272 passed, 1 skipped` 를 확인했다.
 - 2026-05-05: `run-falsification-audit` 에 `--strategy-run-dir` / `--strategy-trade-log` / `--strategy-bucket` 를 추가하고, strategy entry schedule 기반 `same_universe_random_entry` benchmark 를 구현했다. exact PIT universe, same-minute bar overlap, cost sample 이 없으면 current universe fallback 없이 machine-readable `blocked` reason 을 남긴다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `273 passed, 1 skipped` 를 확인했다.
+- 2026-05-06: Windows `matched_june_2025_sec_universe` 산출물에서 2025년 6월 DB 의 L1/minute spread 관측치가 0개임을 확인했다. `same_universe_random_entry` 는 전체 DB 비용 샘플이 있더라도 strategy market_date 와 겹치지 않으면 `cost_distribution_date_overlap_missing` 으로 blocked 되게 강화했다. `./scripts/check_quality.sh` 기준 `274 passed, 1 skipped`.
+- 2026-05-06: Phase 0 falsification blocker 보강 MVP 를 추가했다. Cost source policy 는 Alpaca IEX 를 diagnostic-only 로 차단하고, Alpaca IEX quote importer / Nasdaq forward PIT archiver / SEC EDGAR PIT filing backfill / FINRA OTC Daily List staging / `audit-research-data-coverage` CLI 를 구현했다. 이 변경은 데이터 coverage, PIT, survivorship, cost realism, benchmark plumbing 만 다루며 setup_state/entry label/score cutoff/stop/sizing/add/trim tuning 은 건드리지 않았다. 전체 테스트는 `.venv/bin/python -m pytest -q tests` 기준 `292 passed, 1 skipped`.
 - 다음 우선순위는 overnight falsification runbook 실행과 gate 판정이다. `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.

@@ -275,6 +275,47 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 ON historical_minute_bars(market_date, symbol, bar_at)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS corporate_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source TEXT NOT NULL,
+                    source_record_id TEXT,
+                    action_category TEXT NOT NULL,
+                    action_subtype TEXT NOT NULL,
+                    symbol TEXT,
+                    old_symbol TEXT,
+                    new_symbol TEXT,
+                    old_name TEXT,
+                    new_name TEXT,
+                    effective_date TEXT,
+                    event_code TEXT,
+                    event_reason TEXT,
+                    raw_payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(
+                        source,
+                        source_record_id,
+                        action_category,
+                        action_subtype,
+                        symbol,
+                        effective_date
+                    )
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_corporate_actions_effective_symbol
+                ON corporate_actions(effective_date, symbol, action_category)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_corporate_actions_source_record
+                ON corporate_actions(source, source_record_id)
+                """
+            )
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

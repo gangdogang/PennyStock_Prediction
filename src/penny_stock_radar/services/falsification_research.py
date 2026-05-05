@@ -15,6 +15,25 @@ from ..db import get_connection
 from .paper_runtime import write_csv
 
 
+COST_ELIGIBLE_EXACT_SOURCES = frozenset(
+    {
+        "kis_l1_snapshot",
+        "full_nbbo",
+        "full_sip",
+        "nbbo_sip",
+        "cta_utp_sip",
+    }
+)
+COST_ELIGIBLE_SOURCE_PREFIXES = ("full_nbbo_", "full_sip_", "nbbo_sip_", "vendor_nbbo_", "vendor_sip_")
+DIAGNOSTIC_ONLY_EXACT_SOURCES = frozenset(
+    {
+        "alpaca_iex_historical_quotes",
+        "alpaca_iex_diagnostic",
+    }
+)
+DIAGNOSTIC_ONLY_SOURCE_PREFIXES = ("alpaca_iex_",)
+
+
 @dataclass(frozen=True, slots=True)
 class FalsificationAuditOptions:
     db_path: Path
@@ -199,6 +218,7 @@ class FalsificationResearchAuditor:
             "universe": (None, "symbol"),
             "watchlist": (None, "symbol"),
             "premkt_predictions": ("market_date", "symbol"),
+            "corporate_actions": ("effective_date", "symbol"),
         }
         if not db_path.exists():
             return {
@@ -305,9 +325,24 @@ class FalsificationResearchAuditor:
     def _cost_audit(self, options: FalsificationAuditOptions) -> dict[str, Any]:
         db_path = options.db_path
         if not db_path.exists():
-            return {"l1_spread": _empty_distribution(), "minute_spread": _empty_distribution()}
+            return _empty_cost_audit(
+                cost_rule=(
+                    "Only cost-eligible sources are allowed in cost distributions. "
+                    "Alpaca IEX is diagnostic-only and cannot clear the cost gate."
+                )
+            )
         with get_connection(db_path) as connection:
             table_names = self._table_names(connection)
+            l1_source_counts = (
+                self._l1_spread_source_counts(connection)
+                if "historical_l1_quotes" in table_names
+                else {}
+            )
+            minute_spread_source_counts = (
+                self._minute_spread_source_counts(connection)
+                if "historical_minute_bars" in table_names
+                else {}
+            )
             l1_spreads = (
                 self._l1_spread_values(
                     connection,
@@ -329,11 +364,113 @@ class FalsificationResearchAuditor:
         return {
             "l1_spread": _distribution(l1_spreads),
             "minute_spread": _distribution(minute_spreads),
+            **_cost_source_policy_fields(
+                l1_source_counts=l1_source_counts,
+                minute_spread_source_counts=minute_spread_source_counts,
+            ),
             "cost_rule": (
                 "round_trip_cross_spread_cost_pct approximates (ask-bid)/midpoint. "
-                "If no spread is available, null baseline net expectancy is under-costed."
+                "Only cost-eligible sources are included. Alpaca IEX and alpaca_iex_* "
+                "sources are diagnostic-only and cannot clear the cost gate."
             ),
         }
+
+    def _cost_audit_for_market_dates(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        table_names: set[str],
+        market_dates: list[str],
+        options: FalsificationAuditOptions,
+    ) -> dict[str, Any]:
+        if not market_dates:
+            return _empty_cost_audit(cost_rule="Cost samples restricted to strategy market_date overlap.")
+        l1_source_counts = (
+            self._l1_spread_source_counts(connection, market_dates=market_dates)
+            if "historical_l1_quotes" in table_names
+            else {}
+        )
+        minute_spread_source_counts = (
+            self._minute_spread_source_counts(connection, market_dates=market_dates)
+            if "historical_minute_bars" in table_names
+            else {}
+        )
+        l1_spreads = (
+            self._l1_spread_values(
+                connection,
+                limit=options.spread_sample_limit,
+                seed=options.seed,
+                market_dates=market_dates,
+            )
+            if "historical_l1_quotes" in table_names
+            else []
+        )
+        minute_spreads = (
+            self._minute_spread_values(
+                connection,
+                limit=options.spread_sample_limit,
+                seed=options.seed,
+                market_dates=market_dates,
+            )
+            if "historical_minute_bars" in table_names
+            else []
+        )
+        return {
+            "l1_spread": _distribution(l1_spreads),
+            "minute_spread": _distribution(minute_spreads),
+            **_cost_source_policy_fields(
+                l1_source_counts=l1_source_counts,
+                minute_spread_source_counts=minute_spread_source_counts,
+            ),
+            "cost_rule": (
+                "Cost samples restricted to strategy market_date overlap and cost-eligible sources. "
+                "Diagnostic-only sources cannot satisfy matched random-entry cost overlap."
+            ),
+        }
+
+    def _l1_spread_source_counts(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        market_dates: list[str] | None = None,
+    ) -> dict[str, int]:
+        date_clause, date_params = _market_date_filter_sql(market_dates)
+        rows = connection.execute(
+            f"""
+            SELECT source, COUNT(*) AS row_count
+            FROM historical_l1_quotes
+            WHERE bid_price IS NOT NULL
+              AND ask_price IS NOT NULL
+              AND bid_price > 0
+              AND ask_price >= bid_price
+              {date_clause}
+            GROUP BY source
+            ORDER BY source ASC
+            """,
+            date_params,
+        ).fetchall()
+        return {str(row["source"] or ""): int(row["row_count"] or 0) for row in rows}
+
+    def _minute_spread_source_counts(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        market_dates: list[str] | None = None,
+    ) -> dict[str, int]:
+        date_clause, date_params = _market_date_filter_sql(market_dates)
+        rows = connection.execute(
+            f"""
+            SELECT source, COUNT(*) AS row_count
+            FROM historical_minute_bars
+            WHERE spread_pct IS NOT NULL
+              AND spread_pct >= 0
+              {date_clause}
+            GROUP BY source
+            ORDER BY source ASC
+            """,
+            date_params,
+        ).fetchall()
+        return {str(row["source"] or ""): int(row["row_count"] or 0) for row in rows}
 
     def _l1_spread_values(
         self,
@@ -341,9 +478,12 @@ class FalsificationResearchAuditor:
         *,
         limit: int,
         seed: int,
+        market_dates: list[str] | None = None,
     ) -> list[float]:
+        date_clause, date_params = _market_date_filter_sql(market_dates)
+        source_clause, source_params = _cost_eligible_source_filter_sql("source")
         rows = connection.execute(
-            """
+            f"""
             WITH eligible AS (
                 SELECT
                     bid_price,
@@ -355,6 +495,8 @@ class FalsificationResearchAuditor:
                   AND ask_price IS NOT NULL
                   AND bid_price > 0
                   AND ask_price >= bid_price
+                  {date_clause}
+                  AND {source_clause}
             )
             SELECT bid_price, ask_price
             FROM eligible
@@ -364,7 +506,7 @@ class FalsificationResearchAuditor:
             LIMIT ?
             """
             ,
-            (limit, seed, limit, limit),
+            (*date_params, *source_params, limit, seed, limit, limit),
         ).fetchall()
         spreads: list[float] = []
         for row in rows:
@@ -381,9 +523,12 @@ class FalsificationResearchAuditor:
         *,
         limit: int,
         seed: int,
+        market_dates: list[str] | None = None,
     ) -> list[float]:
+        date_clause, date_params = _market_date_filter_sql(market_dates)
+        source_clause, source_params = _cost_eligible_source_filter_sql("source")
         rows = connection.execute(
-            """
+            f"""
             WITH eligible AS (
                 SELECT
                     spread_pct,
@@ -392,6 +537,8 @@ class FalsificationResearchAuditor:
                 FROM historical_minute_bars
                 WHERE spread_pct IS NOT NULL
                   AND spread_pct >= 0
+                  {date_clause}
+                  AND {source_clause}
             )
             SELECT spread_pct
             FROM eligible
@@ -401,7 +548,7 @@ class FalsificationResearchAuditor:
             LIMIT ?
             """
             ,
-            (limit, seed, limit, limit),
+            (*date_params, *source_params, limit, seed, limit, limit),
         ).fetchall()
         return [float(row["spread_pct"]) for row in rows]
 
@@ -416,8 +563,31 @@ class FalsificationResearchAuditor:
         warnings: list[str] = []
         if not bool(pit.get("row_count")):
             warnings.append("No point-in-time scan_runs found; survivorship/adverse-selection audit is blocked.")
-        if not self._has_table(db_path, "corporate_actions"):
+        corporate_actions = tables.get("corporate_actions", {})
+        if not bool(corporate_actions.get("exists")):
             warnings.append("No corporate_actions table found for delisting/reverse-split/ticker-change handling.")
+        elif not bool(corporate_actions.get("row_count")):
+            warnings.append("No corporate_actions rows found for delisting/reverse-split/ticker-change handling.")
+        else:
+            minute_table = tables.get("historical_minute_bars", {})
+            minute_min = minute_table.get("min_market_date")
+            minute_max = minute_table.get("max_market_date")
+            action_min = corporate_actions.get("min_market_date")
+            action_max = corporate_actions.get("max_market_date")
+            if (
+                minute_min
+                and minute_max
+                and (
+                    not action_min
+                    or not action_max
+                    or str(action_min) > str(minute_min)
+                    or str(action_max) < str(minute_max)
+                )
+            ):
+                warnings.append(
+                    "corporate_actions rows do not span the historical minute-bar date range; "
+                    "current-only FINRA rows cannot clear survivorship/corporate-action risk."
+                )
         return {
             "status": "blocked" if warnings else "review_required",
             "warnings": warnings,
@@ -510,7 +680,7 @@ class FalsificationResearchAuditor:
                     bars_cache[key] = connection.execute(
                         """
                         SELECT symbol, market_date, market_phase, bar_at, open_price,
-                               high_price, low_price, close_price, volume, spread_pct
+                               high_price, low_price, close_price, volume, spread_pct, source
                         FROM historical_minute_bars
                         WHERE market_date = ?
                           AND symbol = ?
@@ -560,12 +730,6 @@ class FalsificationResearchAuditor:
                 "reason": "strategy_trade_log_missing",
                 "trade_log_path": str(trade_log_path),
             }
-        if _cost_sample_count(cost_audit) <= 0:
-            return [], {
-                "status": "blocked",
-                "reason": "cost_distribution_missing",
-                "trade_log_path": str(trade_log_path),
-            }
         schedules = self._strategy_entry_schedule(
             trade_log_path,
             bucket=options.strategy_bucket,
@@ -577,12 +741,47 @@ class FalsificationResearchAuditor:
                 "trade_log_path": str(trade_log_path),
                 "strategy_bucket": options.strategy_bucket,
             }
+        if _cost_sample_count(cost_audit) <= 0:
+            reason = (
+                "cost_distribution_eligible_source_missing"
+                if _source_count_total(cost_audit.get("l1_source_counts", {}))
+                or _source_count_total(cost_audit.get("minute_spread_source_counts", {}))
+                else "cost_distribution_missing"
+            )
+            return [], {
+                "status": "blocked",
+                "reason": reason,
+                "trade_log_path": str(trade_log_path),
+            }
         if not options.db_path.exists():
             return [], {"status": "blocked", "reason": "db_missing"}
         with get_connection(options.db_path) as connection:
             table_names = self._table_names(connection)
             if "historical_minute_bars" not in table_names:
                 return [], {"status": "blocked", "reason": "historical_minute_bars_missing"}
+            strategy_dates = sorted({str(schedule["market_date"]) for schedule in schedules})
+            strategy_cost_audit = self._cost_audit_for_market_dates(
+                connection,
+                table_names=table_names,
+                market_dates=strategy_dates,
+                options=options,
+            )
+            if _cost_sample_count(strategy_cost_audit) <= 0:
+                reason = (
+                    "cost_distribution_eligible_source_missing"
+                    if _source_count_total(strategy_cost_audit.get("l1_source_counts", {}))
+                    or _source_count_total(strategy_cost_audit.get("minute_spread_source_counts", {}))
+                    else "cost_distribution_date_overlap_missing"
+                )
+                return [], {
+                    "status": "blocked",
+                    "reason": reason,
+                    "trade_log_path": str(trade_log_path),
+                    "strategy_market_date_count": len(strategy_dates),
+                    "strategy_market_dates_preview": strategy_dates[:10],
+                    "total_cost_sample_count": _cost_sample_count(cost_audit),
+                    "strategy_cost_audit": strategy_cost_audit,
+                }
             eligible_by_date = self._eligible_symbols_by_market_date(
                 connection,
                 table_names=table_names,
@@ -600,7 +799,7 @@ class FalsificationResearchAuditor:
                 schedules=schedules,
                 sample_size=min(options.null_sample_count, len(schedules)),
             )
-            fallback_cost = _percentile_source(cost_audit)
+            fallback_cost = _percentile_source(strategy_cost_audit)
             bars_cache: dict[tuple[str, str], list[sqlite3.Row]] = {}
             output_rows: list[dict[str, Any]] = []
             skipped: list[dict[str, Any]] = []
@@ -753,7 +952,7 @@ class FalsificationResearchAuditor:
         return connection.execute(
             """
             SELECT symbol, market_date, market_phase, bar_at, open_price,
-                   high_price, low_price, close_price, volume, spread_pct
+                   high_price, low_price, close_price, volume, spread_pct, source
             FROM historical_minute_bars
             WHERE market_date = ?
               AND symbol = ?
@@ -936,7 +1135,12 @@ class FalsificationResearchAuditor:
         rows: list[dict[str, Any]] = []
         entry_price = float(entry["close_price"])
         entry_spread = _none_or_float(entry["spread_pct"])
-        cost_pct = entry_spread if entry_spread is not None else fallback_cost
+        entry_spread_source = str(entry["source"] or "") if "source" in entry.keys() else ""
+        cost_pct = (
+            entry_spread
+            if entry_spread is not None and _is_cost_eligible_source(entry_spread_source)
+            else fallback_cost
+        )
         for geometry, stop_pct, enough_data in stop_specs:
             if stop_pct is None or stop_pct <= 0:
                 rows.append(
@@ -969,6 +1173,11 @@ class FalsificationResearchAuditor:
                     "entry_price": entry_price,
                     "stop_pct": stop_pct,
                     "spread_cost_pct": cost_pct,
+                    "spread_cost_source": (
+                        entry_spread_source
+                        if entry_spread is not None and _is_cost_eligible_source(entry_spread_source)
+                        else "fallback_cost_distribution"
+                    ),
                     **result,
                 }
             )
@@ -1300,6 +1509,64 @@ def _distribution(values: list[float]) -> dict[str, Any]:
     }
 
 
+def _empty_cost_audit(*, cost_rule: str) -> dict[str, Any]:
+    return {
+        "l1_spread": _empty_distribution(),
+        "minute_spread": _empty_distribution(),
+        **_cost_source_policy_fields(
+            l1_source_counts={},
+            minute_spread_source_counts={},
+        ),
+        "cost_rule": cost_rule,
+    }
+
+
+def _cost_source_policy_fields(
+    *,
+    l1_source_counts: dict[str, int],
+    minute_spread_source_counts: dict[str, int],
+) -> dict[str, Any]:
+    l1_cost_eligible = _filter_source_counts(l1_source_counts, _is_cost_eligible_source)
+    minute_cost_eligible = _filter_source_counts(minute_spread_source_counts, _is_cost_eligible_source)
+    l1_diagnostic = _filter_source_counts(l1_source_counts, _is_diagnostic_only_source)
+    minute_diagnostic = _filter_source_counts(minute_spread_source_counts, _is_diagnostic_only_source)
+    return {
+        "cost_source_policy": {
+            "cost_eligible_exact_sources": sorted(COST_ELIGIBLE_EXACT_SOURCES),
+            "cost_eligible_source_prefixes": list(COST_ELIGIBLE_SOURCE_PREFIXES),
+            "diagnostic_only_exact_sources": sorted(DIAGNOSTIC_ONLY_EXACT_SOURCES),
+            "diagnostic_only_source_prefixes": list(DIAGNOSTIC_ONLY_SOURCE_PREFIXES),
+            "diagnostic_only_warning": (
+                "Alpaca IEX is a single-exchange diagnostic feed. It is excluded from "
+                "cost distributions, matched random-entry cost overlap, and edge approval evidence."
+            ),
+        },
+        "l1_source_counts": dict(sorted(l1_source_counts.items())),
+        "l1_cost_eligible_source_counts": l1_cost_eligible,
+        "l1_diagnostic_only_source_counts": l1_diagnostic,
+        "minute_spread_source_counts": dict(sorted(minute_spread_source_counts.items())),
+        "minute_spread_cost_eligible_source_counts": minute_cost_eligible,
+        "minute_spread_diagnostic_only_source_counts": minute_diagnostic,
+        "excluded_l1_sources": _excluded_sources(l1_source_counts),
+        "excluded_minute_spread_sources": _excluded_sources(minute_spread_source_counts),
+    }
+
+
+def _filter_source_counts(
+    counts: dict[str, int],
+    predicate,
+) -> dict[str, int]:
+    return {
+        source: count
+        for source, count in sorted(counts.items())
+        if predicate(source)
+    }
+
+
+def _excluded_sources(counts: dict[str, int]) -> list[str]:
+    return sorted(source for source in counts if not _is_cost_eligible_source(source))
+
+
 def _empty_distribution() -> dict[str, Any]:
     return {
         "count": 0,
@@ -1336,6 +1603,56 @@ def _cost_sample_count(cost_audit: dict[str, Any]) -> int:
     return int(cost_audit.get("l1_spread", {}).get("count") or 0) + int(
         cost_audit.get("minute_spread", {}).get("count") or 0
     )
+
+
+def _market_date_filter_sql(market_dates: list[str] | None) -> tuple[str, tuple[str, ...]]:
+    if not market_dates:
+        return "", ()
+    dates = tuple(sorted(set(market_dates)))
+    placeholders = ", ".join("?" for _ in dates)
+    return f"AND market_date IN ({placeholders})", dates
+
+
+def _cost_eligible_source_filter_sql(column_name: str) -> tuple[str, tuple[str, ...]]:
+    exact_sources = tuple(sorted(COST_ELIGIBLE_EXACT_SOURCES))
+    clauses: list[str] = []
+    params: list[str] = []
+    if exact_sources:
+        placeholders = ", ".join("?" for _ in exact_sources)
+        clauses.append(f"{column_name} IN ({placeholders})")
+        params.extend(exact_sources)
+    for prefix in COST_ELIGIBLE_SOURCE_PREFIXES:
+        clauses.append(f"{column_name} LIKE ?")
+        params.append(f"{prefix}%")
+    return "(" + " OR ".join(clauses) + ")", tuple(params)
+
+
+def _is_cost_eligible_source(source: str | None) -> bool:
+    normalized = str(source or "").strip().lower()
+    if not normalized or _is_diagnostic_only_source(normalized):
+        return False
+    if normalized in COST_ELIGIBLE_EXACT_SOURCES:
+        return True
+    return any(normalized.startswith(prefix) for prefix in COST_ELIGIBLE_SOURCE_PREFIXES)
+
+
+def _is_diagnostic_only_source(source: str | None) -> bool:
+    normalized = str(source or "").strip().lower()
+    if normalized in DIAGNOSTIC_ONLY_EXACT_SOURCES:
+        return True
+    return any(normalized.startswith(prefix) for prefix in DIAGNOSTIC_ONLY_SOURCE_PREFIXES)
+
+
+def _source_count_total(counts: Any) -> int:
+    if not isinstance(counts, dict):
+        return 0
+    total = 0
+    for value in counts.values():
+        try:
+            total += int(value or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 def _none_or_float(value: Any) -> float | None:

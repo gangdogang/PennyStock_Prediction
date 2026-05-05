@@ -166,6 +166,10 @@ class AppSettings(BaseSettings):
 
     kis_app_key: str | None = Field(default=None, repr=False)
     kis_app_secret: str | None = Field(default=None, repr=False)
+    alpaca_api_key: str | None = Field(default=None, repr=False)
+    alpaca_secret_key: str | None = Field(default=None, repr=False)
+    alpaca_data_base_url: str = "https://data.alpaca.markets"
+    alpaca_market_data_feed: str = "iex"
     kis_mock_app_key: str | None = Field(default=None, repr=False)
     kis_mock_app_secret: str | None = Field(default=None, repr=False)
     reddit_client_id: str | None = Field(default=None, repr=False)

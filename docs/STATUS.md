@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-05-05
+최종 정리일: 2026-05-06
 
 ## 현재 capabilities
 
@@ -42,8 +42,14 @@
 - `run-premkt-model-replay` 는 setup_state 진단 산출물 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 추가로 남긴다. trade log 에도 entry/exit setup state, quality, risk, action_bias 를 붙여 setup 판단이 손익/stop-out 을 분리하는지 볼 수 있다.
 - `audit-premkt-entry-signal` CLI 는 여러 replay output directory 의 `paper_trade_log.csv` 와 `paper_setup_features.csv` 를 읽어 특정 entry label/setup_state 조합의 월별/심볼별/일별 손익, top symbol/date 제거 후 손익, 1R 도달 feature bucket 을 JSON/CSV 로 산출할 수 있다. 기본 감사 대상은 `OPENING_RANGE_CANDIDATE + STARTER_VALID` 이다.
 - `run-falsification-audit` CLI 는 feature tuning 전에 governance/budget, data inventory, point-in-time/survivorship blocker, L1/minute spread cost audit, same-universe random-time null benchmark, strategy trade-log 기반 same-universe random-entry null benchmark, fixed/ATR/structure stop geometry, benchmark suite status, final gate summary 를 `data/backtest_lab/research_runs/<run_id>/` 에 남긴다. 이 gate 가 `PASS` 되기 전에는 entry/setup/score/filter/stop/sizing tuning 을 금지한다.
+- `run-falsification-audit` 의 cost audit 는 source policy 를 적용한다. cost evidence 는 `kis_l1_snapshot` 또는 명시적 full NBBO/SIP 계열 source 만 허용하고, `alpaca_iex_historical_quotes` / `alpaca_iex_diagnostic` / `alpaca_iex_*` 는 diagnostic-only 로 분리한다. report 는 source별 전체/eligible/diagnostic count 와 excluded source 목록을 machine-readable 로 남긴다.
 - `audit-pit-universe-reconstruction` CLI 는 historical minute bar 날짜별로 exact point-in-time universe 가 있는지, 없으면 bar-derived diagnostic universe 정도만 가능한지 JSON/MD/CSV 로 판정한다. diagnostic bar universe 는 lookahead/adverse-selection 위험 때문에 edge 판단 blocker 를 해소하지 않는다.
 - `tag-pit-universe-scan` CLI 는 명시적 기존 scan 을 point-in-time 으로 태그하고 PIT-vs-current diff 를 남길 수 있다. D 08:00 ET cutoff 이후 생성 scan 은 기본 거부하며, override 는 diagnostic plumbing 용도에 한정한다.
+- `backfill-alpaca-iex-quotes` CLI 는 Alpaca historical IEX quote 를 `historical_l1_quotes.source='alpaca_iex_historical_quotes'` 로 저장한다. 이 경로는 strategy entry schedule 주변 window 또는 symbol/date range 를 지원하지만 cost PASS 근거로 쓰지 않는다.
+- `archive-nasdaq-symbol-directory` CLI 는 현재 Nasdaq Symbol Directory(`nasdaqlisted.txt`, `otherlisted.txt`)를 raw/report artifact 로 저장하고, 명시적 `--allow-current-date` 일 때만 forward PIT `scan_runs/universe` 를 기록한다. 2025년 과거 PIT 복원으로 취급하지 않는다.
+- `backfill-sec-filings-pit` CLI 는 SEC EDGAR submissions 를 D 08:00 ET cutoff 기준으로 eligible/diagnostic-after-cutoff 로 나누고, PIT scan/filings artifact 를 남긴다.
+- `backfill-finra-otc-daily-list` CLI 는 FINRA OTC Daily List JSON/CSV 를 symbol change/name change/deleted/split/dividend/corporate action staging artifact 로 저장한다. `--write-database` 는 최소 `corporate_actions` inventory 에만 insert 하며, current-only rows 는 historical survivorship blocker 를 자동 해소하지 않는다.
+- `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약한다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - historical replay 는 날짜별 minute bar 와 모델 scoring feature 를 symbol별 반복 조회하지 않고 `market_date + symbol IN (...)` bulk load 로 읽은 뒤, prepared bar cursor 와 누적 volume/dollar volume 으로 simulated time 을 진행한다. model scorer 는 run 안에서 재사용하고, ML/blend scoring 은 replay bar cache 를 재사용해 같은 날짜의 minute bar 재조회 비용을 줄인다. setup_state 는 VWAP/HOD/opening-range 누적 지표를 prepared series prefix 값으로 계산해 반복 과거 봉 스캔을 피한다. non-blind bucket 은 activity deep-copy 를 생략하고, 전략 entry/exit/stop/sizing 규칙은 변경하지 않는다. `progress.json` 에 날짜별 elapsed, loaded bar rows, loaded symbols, simulated time count 를 남긴다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
@@ -80,10 +86,13 @@
 - 2026-04-30 이전 historical replay CSV 의 `analysis_label` 은 EXIT row 에서 청산 시점 label 로 기록됐을 수 있다. `WAIT_PULLBACK` 등 entry label attribution 은 새 replay 산출물의 `entry_analysis_label` / `exit_analysis_label` 기준으로 다시 봐야 한다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 - 현재 최우선 blocker 는 overnight falsification gate 미통과 상태다. 결과가 `FAIL` 이면 hypothesis 를 폐기하고, `BLOCKED` 이면 데이터/coverage/survivorship/L1 cost/benchmark 보강만 허용한다.
+- 2026-05-06 Phase 0 falsification blocker 보강 MVP 로 Polygon 제외 무료 데이터 배선을 추가했다. Cost source policy, Alpaca IEX diagnostic quote importer, Nasdaq forward PIT archiver, SEC EDGAR PIT backfill, FINRA OTC Daily List staging, coverage audit CLI 가 들어갔지만 이는 edge 승인 근거가 아니라 blocker 를 더 명확하게 드러내는 배선이다.
+- strategy trade-log 기반 `same_universe_random_entry` 는 비용 관측치가 strategy market_date 와 겹칠 때만 실행한다. 다른 날짜의 L1/minute spread 를 current-cost fallback 으로 써서 2025 replay 를 통과시키지 않는다.
 - 2026-05-05 로컬 smoke `run-falsification-audit --run-id smoke_local --null-sample-count 20` 결과는 `BLOCKED` 다. 현재 `data/backtest_lab/` DB 기준 blocker 는 6개월 minute bar 부족, point-in-time scan 부재, corporate_actions 부재, same-universe null 불가, benchmark suite 미완성, spread sample <1000 이다.
 - point-in-time universe blocker 의 첫 실행 단계는 `audit-pit-universe-reconstruction` 으로 날짜별 복구 가능성을 분리하는 것이다. exact PIT 없는 날짜를 bar-derived diagnostic 으로 임시 통과시키지 않는다.
 - 2026-05-05 `audit-pit-universe-reconstruction --run-id pit_smoke_local --min-bars-per-symbol 30` smoke 결과는 `diagnostic_reconstruction_possible` 이다. 현재 DB에는 exact PIT 가 없고, 2026-04-17 historical bar 기반 diagnostic universe 1건만 가능하다.
 - 2026-05-05 `run-falsification-audit --strategy-trade-log sample_outputs/paper_trading/paper_trade_log.csv --strategy-bucket momentum_only` smoke 결과에서 `same_universe_random_entry` 는 `point_in_time_universe_missing` 으로 blocked 됐다. trade log parser/CLI 는 동작하지만 exact PIT 전에는 benchmark blocker 를 해소하지 않는다.
+- 2026-05-06 Windows `matched_june_2025_sec_universe` 확인 결과 `historical_minute_bars=2,284,272` 이지만 `minute_spread_rows=0`, `minute_bid_ask_rows=0`, `historical_l1_quotes=0` 이다. 따라서 2025년 6월 matched random-entry 는 `cost_distribution_missing` 이 정상 blocker 이며, 이 DB로는 net expectancy 또는 live feasibility 를 판정하지 않는다.
 
 ## OneDrive 기존 run 인벤토리
 
