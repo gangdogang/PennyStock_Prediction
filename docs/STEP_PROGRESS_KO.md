@@ -12,6 +12,7 @@
 - 기본 문서 읽기 범위는 `AGENTS.md`, `README.md`, `docs/STATUS.md`, `docs/STEP_PROGRESS_KO.md` 로 제한하고, `BACKTEST_ROADMAP_KO.md` 등은 작업 종류가 맞을 때만 추가로 연다.
 - 병렬화 가능한 조사와 구현은 토큰 비용을 신경 쓰지 말고 서브에이전트를 최대한 적극적으로 사용한다.
 - 서브에이전트는 읽기 전용 조사, 경로 확인, 테스트 범위 분리, 구현 분리처럼 책임이 명확한 단위로 나눠 쓴다.
+- Overnight falsification gate 가 `PASS` 되기 전에는 feature/parameter tuning 을 하지 않는다. 허용되는 작업은 runbook 실행, 산출물 해석, blocker 문서화, 데이터 coverage/point-in-time/survivorship/L1 cost/benchmark 보강뿐이다.
 - active 경로인 intraday paper engine 과 KIS mock broker execution 경로는 의도 없이 흔들지 않는다.
 - `tests/test_regression_golden.py`, `tests/golden/` 은 의도된 diff 가 아니면 변경하지 않는다.
 
@@ -65,8 +66,15 @@
 - 2026-05-02: threshold/parameter ablation 을 계속 늘리지 않고 `setup_state` v1 진단 레이어를 추가했다. `SetupContextBuilder` 는 minute bar 로 VWAP/reclaim/HOD/ORH/pullback/volume/rank/liquidity feature 를 만들고, deterministic `AISetupJudgeV1` 은 taxonomy/action_bias JSON 판단을 기록한다. replay 는 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 남긴다.
 - 2026-05-05: `STARTER_VALID` + `min-entry-time 09:00` + `CONDITIONAL_ENTRY` 제외 조합으로 June 2025 +$2,448 수익 전환을 확인했으나, April-May 2025 에서 -$6,984 로 실패해 3개월 합산 -$4,536. 시장 레짐 의존성이 확인됐으며 이 가설은 robust 하지 않음. `breakeven_stop` 단독 사용은 재진입 반복으로 역효과 확인. 1R 도달 여부가 손익을 결정하는 구조는 전 기간 일관됨.
 - 2026-05-05: `audit-premkt-entry-signal` 을 추가했다. 여러 replay output directory 를 받아 기본 `OPENING_RANGE_CANDIDATE + STARTER_VALID` 조합의 월별/심볼별/일별 손익, top symbol/date 제거 후 손익, 1R 도달 feature bucket 을 JSON/CSV 로 감사한다. 목적은 June 양수 조합이 심볼/날짜 집중 착시인지 먼저 확인하는 것이다.
-- 다음 우선순위는 setup_state 진단 CSV가 포함된 1개월 baseline 을 재생성해 `STARTER_VALID`/`FAILED_BREAKOUT`/`TRIM_EXTENSION`/`EXIT_FAIL` 등이 손익과 stop-out 을 실제로 분리하는지 보고, `audit-premkt-entry-signal` 로 `OPENING_RANGE_CANDIDATE + STARTER_VALID` 집중도를 확인하는 것이다. 분리력이 확인되기 전에는 fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
-- 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 archive 적재다.
+- 2026-05-05: 전략/성과 분석 기준을 structural-edge-first 로 상향했다. `STARTER_VALID + ORC`, `STARTER_VALID + 09:00 + no_conditional`, `breakeven_stop` 단독은 strategy 후보가 아니라 `rejected / regime-dependent / diagnostic-only` 로 취급한다.
+- 2026-05-05: `run-falsification-audit` 를 추가했다. 이 runner 는 feature tuning 없이 governance/budget, data inventory, point-in-time/survivorship/L1 cost blocker, same-universe random-time null benchmark, fixed/ATR/structure stop geometry, benchmark suite status, final gate summary 를 `data/backtest_lab/research_runs/<run_id>/` 에 기록한다.
+- 2026-05-05: 로컬 smoke `run-falsification-audit --run-id smoke_local --null-sample-count 20` 는 `BLOCKED` 를 반환했다. 이는 현재 DB 상태에서 정상 결과이며, edge 판단은 금지된다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `268 passed, 1 skipped` 를 확인했다.
+- 2026-05-05: `audit-pit-universe-reconstruction` 를 추가했다. 이 명령은 날짜별 exact PIT universe 존재 여부와 bar-derived diagnostic universe 가능성을 분리해 기록한다. bar-derived diagnostic 은 null 배선 smoke 용도일 뿐 survivorship/adverse-selection blocker 를 해소하지 않는다.
+- 2026-05-05: `tag-pit-universe-scan` 를 추가했다. 명시적 scan_id 만 PIT 로 태그할 수 있고, scan 생성 시각이 D 08:00 ET 이후이면 기본 거부한다. 이 경로는 forward archive salvage 용도이며 과거 2025 replay 의 PIT 를 날조하지 않는다.
+- 2026-05-05: PIT audit smoke 는 현재 DB에서 `diagnostic_reconstruction_possible` 을 반환했다. exact PIT 는 0건이고, 2026-04-17 bar-derived diagnostic universe 만 가능하다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `272 passed, 1 skipped` 를 확인했다.
+- 2026-05-05: `run-falsification-audit` 에 `--strategy-run-dir` / `--strategy-trade-log` / `--strategy-bucket` 를 추가하고, strategy entry schedule 기반 `same_universe_random_entry` benchmark 를 구현했다. exact PIT universe, same-minute bar overlap, cost sample 이 없으면 current universe fallback 없이 machine-readable `blocked` reason 을 남긴다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `273 passed, 1 skipped` 를 확인했다.
+- 다음 우선순위는 overnight falsification runbook 실행과 gate 판정이다. `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
+- 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.
 

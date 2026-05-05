@@ -135,6 +135,59 @@ cd C:\Dev\Penny_Stock
 
 이 명령은 가장 최근 `paper_runs\<run_id>\` 또는 legacy `paper_24h_runs\<run_id>\` 폴더를 찾아 현재까지의 `paper_trading\`, `logs\`, `pipeline_outputs\`, `launcher_manifest.json`, 가능한 경우 SQLite DB 사본을 `archives\<run_id>-snapshot-YYYYMMDD_HHMMSS.zip` 으로 묶는다. 실행 중인 paper process 는 건드리지 않는다. `snapshot_manifest.json` 의 `database.included=true` 는 실제 zip 안에 DB 파일이 있을 때만 기록된다.
 
+## Overnight falsification runbook
+
+목적은 좋은 feature 를 찾는 것이 아니라 전략 가정이 먼저 깨지는지 확인하는 것이다. 이 run 이 `PASS` 되기 전에는 `setup_state`, entry label, score cutoff, stop, sizing, add/trim 같은 feature/parameter tuning 을 금지한다.
+
+Preflight:
+
+- Windows 기준 `C:\Dev\Penny_Stock` 에서 실행하고, 최신 코드를 `git pull --ff-only origin main` 으로 받은 상태여야 한다.
+- `.env` 와 `data/backtest_lab/` DB 사본이 존재해야 한다.
+- run id 는 날짜가 들어간 고유값으로 정한다. 예: `overnight_20260505`.
+- 기존 replay/ablation 결과는 pass 근거로 재사용하지 않는다. 이 run 의 판단은 `data/backtest_lab/research_runs/<run_id>/` 산출물만 기준으로 한다.
+- L1/minute coverage 부족, point-in-time universe 재현 불가, survivorship inventory 공백, benchmark suite 미완성은 실패가 아니라 `BLOCKED` 로 기록한다.
+
+Command:
+
+```powershell
+cd C:\Dev\Penny_Stock
+.\scripts\psradar run-falsification-audit --run-id overnight_YYYYMMDD
+```
+
+strategy replay trade log 를 matched null 에 포함할 때:
+
+```powershell
+.\scripts\psradar run-falsification-audit --run-id matched_YYYYMMDD --strategy-run-dir data\backtest_lab\replays\<run_id> --strategy-bucket predictor_weighted
+```
+
+`same_universe_random_entry` 는 trade log 의 실제 entry schedule 을 읽되, universe 는 반드시 같은 `market_date` 의 exact PIT universe 에서만 뽑는다. PIT, 같은 분봉 bar overlap, cost sample 이 부족하면 current universe fallback 없이 `BLOCKED` 로 남긴다.
+
+macOS 에서 짧게 확인할 때만:
+
+```bash
+cd /Users/wondokyeong/Desktop/Penny_Stock
+./scripts/psradar run-falsification-audit --run-id overnight_$(date +%Y%m%d)
+```
+
+Artifacts:
+
+- `data/backtest_lab/research_runs/<run_id>/run_manifest.json`
+- `research_audit_report.json`: governance/budget, data inventory, cost audit, survivorship blocker, benchmark suite status, stop geometry, decision gate
+- `research_audit_summary.md`: 사람이 보는 blocker/gate 요약
+- `null_baseline_trades.csv`: same-universe random-time path sample
+
+Decision gate:
+
+- `PASS`: Phase 0 data/bias/cost/null/benchmark blocker 가 해소돼 Phase 1 stop-out 분석으로 넘어갈 수 있는 상태다. edge 승인이나 live 승인으로 해석하지 않는다.
+- `FAIL`: matched strategy-vs-null 비교에서 cost-adjusted expectancy 가 음수이거나 null 대비 초과 성과가 없거나, 특정 월/심볼/날짜 제거 후 무너지는 경우다.
+- `BLOCKED`: 데이터 coverage, L1/spread, survivorship, point-in-time 재현, benchmark suite 중 하나라도 부족해 edge 판단을 할 수 없는 경우다.
+
+Blocker 처리:
+
+- `FAIL` 이면 해당 hypothesis 는 폐기하고 tuning 으로 복구하지 않는다.
+- `BLOCKED` 이면 feature tuning 이 아니라 데이터 보강, universe 재현, L1/spread cost 보강, benchmark 구현을 먼저 한다.
+- `PASS` 후에만 frozen hypothesis 를 정의하고, 그 다음 1개월 calibration 과 3개월 이상 OOS 로 이동한다.
+
 ## Windows paper 실행과 중간 archive
 
 Windows 에서 장시간 실행하고 맥북에서 검토할 때는 root `sample_outputs/paper_trading/` 을 직접 동기화하지 않는다. 아래 런처를 사용한다.
@@ -333,6 +386,30 @@ Step 0 L1 archive 적재:
 `capture-kis-l1-window` 는 iteration 마다 stderr 로 `iteration=<i> symbols=<N> new_rows=<N> distinct_minutes=<N>` 진단 라인을 남긴다.
 `snapshot_date mismatch`, `duplicate minute bucket`, `stale timestamp fallback` 은 0건이 아닐 때만 별도 한 줄로 출력된다.
 반복 capture 가 끝나면 기본적으로 `automation/state/backtest_coverage/` 와 `automation/state/backtest_coverage_gate_status.json` 을 갱신한다. L1 `snapshot_date` mismatch 또는 120분 초과 timestamp drift 는 coverage gate failure 로 남긴다.
+
+Falsification-first overnight audit:
+
+```bash
+./scripts/psradar run-falsification-audit --run-id overnight_YYYYMMDD
+```
+
+이 명령은 feature tuning 을 하지 않는다. `data/backtest_lab/research_runs/<run_id>/` 아래에 `run_manifest.json`, `research_audit_report.json`, `research_audit_summary.md`, `null_baseline_trades.csv` 를 쓰고, point-in-time/survivorship/L1 cost/null baseline/stop geometry blocker 를 먼저 기록한다.
+
+PIT universe reconstruction audit:
+
+```bash
+./scripts/psradar audit-pit-universe-reconstruction --run-id pit_audit_YYYYMMDD
+```
+
+이 명령은 historical minute bar 날짜별로 exact point-in-time universe 가 있는지 확인하고, 없으면 bar-derived diagnostic universe 가능성만 분리 기록한다. diagnostic universe 는 lookahead/adverse-selection 위험 때문에 edge 판단 blocker 를 해소하지 않는다.
+
+기존 scan 을 명시적으로 PIT 로 태그할 때:
+
+```bash
+./scripts/psradar tag-pit-universe-scan --scan-id <scan_id> --market-date YYYY-MM-DD --diff-output data/backtest_lab/research_runs/pit_diff_YYYYMMDD.json
+```
+
+이 명령은 scan `created_at` 이 D 08:00 ET cutoff 이후이면 기본 거부한다. `--allow-after-cutoff` 는 diagnostic replay plumbing 일 때만 사용하고, edge 판단 blocker 해소 근거로 쓰지 않는다.
 
 수동 주문/정정/취소:
 

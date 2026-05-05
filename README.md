@@ -148,6 +148,38 @@ Replay entry-signal audit:
 ./scripts/psradar audit-premkt-entry-signal --run-dir data/replay_outputs/no_conditional_june --csv-dir data/replay_outputs/entry_signal_audit
 ```
 
+Falsification-first overnight audit:
+
+```bash
+./scripts/psradar run-falsification-audit --run-id overnight_$(date +%Y%m%d)
+```
+
+목적: 이 명령은 feature tuning 전 필수 반증 게이트다. preflight, 산출물, pass/fail 판단은 `docs/OPERATIONS_KO.md` 의 "Overnight falsification runbook" 과 `docs/BACKTEST_ROADMAP_KO.md` 의 falsification gate 를 기준으로 본다. 이 gate 가 `PASS` 되기 전에는 entry/setup/score/filter/stop/sizing tuning 을 하지 않는다.
+
+Strategy trade-log matched null:
+
+```bash
+./scripts/psradar run-falsification-audit --run-id matched_$(date +%Y%m%d) --strategy-trade-log <paper_trade_log.csv> --strategy-bucket predictor_weighted
+```
+
+`same_universe_random_entry` 는 실제 strategy entry timing 을 유지하고 exact PIT universe 안에서 replacement symbol 을 뽑는 null benchmark 다. exact PIT, 같은 분봉 bar overlap, cost sample 이 없으면 blocked 로 남긴다.
+
+PIT universe reconstruction audit:
+
+```bash
+./scripts/psradar audit-pit-universe-reconstruction --run-id pit_audit_$(date +%Y%m%d)
+```
+
+이 명령은 exact point-in-time universe 와 bar-derived diagnostic universe 가능성을 분리한다. diagnostic universe 는 edge 판단 blocker 를 해소하지 않는다.
+
+Explicit PIT scan tagging:
+
+```bash
+./scripts/psradar tag-pit-universe-scan --scan-id <scan_id> --market-date YYYY-MM-DD
+```
+
+기존 scan 을 PIT 로 태그할 때만 사용한다. D 08:00 ET 이후 scan 은 기본 거부된다.
+
 품질 게이트 실행:
 
 ```bash

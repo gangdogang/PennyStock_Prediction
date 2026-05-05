@@ -41,6 +41,9 @@
 - `setup_state` v1 은 historical replay 안에서 minute bar 기반 setup_context 를 만들고 deterministic/rule-backed `AISetupJudgeV1` JSON 판단을 기록한다. 출력 state 는 `DEAD_PUMP`, `WATCH_LEADER`, `VWAP_RECLAIM`, `ORB_BREAKOUT`, `PULLBACK_HOLD`, `FAILED_BREAKOUT`, `STARTER_VALID`, `ADD_VALID`, `TRIM_EXTENSION`, `RUNNER_HOLD`, `EXIT_FAIL` 이며 action bias 는 진단용이다.
 - `run-premkt-model-replay` 는 setup_state 진단 산출물 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 추가로 남긴다. trade log 에도 entry/exit setup state, quality, risk, action_bias 를 붙여 setup 판단이 손익/stop-out 을 분리하는지 볼 수 있다.
 - `audit-premkt-entry-signal` CLI 는 여러 replay output directory 의 `paper_trade_log.csv` 와 `paper_setup_features.csv` 를 읽어 특정 entry label/setup_state 조합의 월별/심볼별/일별 손익, top symbol/date 제거 후 손익, 1R 도달 feature bucket 을 JSON/CSV 로 산출할 수 있다. 기본 감사 대상은 `OPENING_RANGE_CANDIDATE + STARTER_VALID` 이다.
+- `run-falsification-audit` CLI 는 feature tuning 전에 governance/budget, data inventory, point-in-time/survivorship blocker, L1/minute spread cost audit, same-universe random-time null benchmark, strategy trade-log 기반 same-universe random-entry null benchmark, fixed/ATR/structure stop geometry, benchmark suite status, final gate summary 를 `data/backtest_lab/research_runs/<run_id>/` 에 남긴다. 이 gate 가 `PASS` 되기 전에는 entry/setup/score/filter/stop/sizing tuning 을 금지한다.
+- `audit-pit-universe-reconstruction` CLI 는 historical minute bar 날짜별로 exact point-in-time universe 가 있는지, 없으면 bar-derived diagnostic universe 정도만 가능한지 JSON/MD/CSV 로 판정한다. diagnostic bar universe 는 lookahead/adverse-selection 위험 때문에 edge 판단 blocker 를 해소하지 않는다.
+- `tag-pit-universe-scan` CLI 는 명시적 기존 scan 을 point-in-time 으로 태그하고 PIT-vs-current diff 를 남길 수 있다. D 08:00 ET cutoff 이후 생성 scan 은 기본 거부하며, override 는 diagnostic plumbing 용도에 한정한다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - historical replay 는 날짜별 minute bar 와 모델 scoring feature 를 symbol별 반복 조회하지 않고 `market_date + symbol IN (...)` bulk load 로 읽은 뒤, prepared bar cursor 와 누적 volume/dollar volume 으로 simulated time 을 진행한다. model scorer 는 run 안에서 재사용하고, ML/blend scoring 은 replay bar cache 를 재사용해 같은 날짜의 minute bar 재조회 비용을 줄인다. setup_state 는 VWAP/HOD/opening-range 누적 지표를 prepared series prefix 값으로 계산해 반복 과거 봉 스캔을 피한다. non-blind bucket 은 activity deep-copy 를 생략하고, 전략 entry/exit/stop/sizing 규칙은 변경하지 않는다. `progress.json` 에 날짜별 elapsed, loaded bar rows, loaded symbols, simulated time count 를 남긴다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
@@ -72,8 +75,15 @@
 - `score_lt45` 는 live strategy 가 아니라 2025년 6월 sanity replay 와 2025년 4~5월 backward robustness 에서 손실 감소 가능성을 본 frozen hypothesis 다. Step 0 coverage, 고정 파라미터 OOS, shadow 검증 전에는 실매매 진입 필터로 해석하지 않는다.
 - `setup_state` v1 도 live strategy 가 아니다. AI/setup judge 는 상황 해석만 하며 주문은 계속 risk/rule engine 이 통제한다. 현재 구현은 L1 부재와 minute-only replay 한계 때문에 setup state 의 손익 분리력 검증용 진단 배선으로만 해석한다.
 - `audit-premkt-entry-signal` 결과도 strategy approval 이 아니다. 이 리포트는 특정 조합이 심볼/날짜 집중 착시인지, 1R 도달 조건이 분리되는지 보는 감사 산출물이며 L1 없는 replay 에서는 계속 sanity evidence 로만 본다.
+- fixed 5% stop 기준의 `reached_1r` / `stop_before_1r` 는 ATR/volatility/spread 에 오염될 수 있다. trade-path 분석은 ATR-normalized R, structure-stop R, spread-adjusted R 을 병기하기 전까지 edge label 로 해석하지 않는다.
+- 페니스탁 intraday 모멘텀의 기본 prior 는 음수다. structural edge, universe adverse selection, survivorship, L1/spread cost, execution latency, holding horizon, null benchmark 를 통과하지 못하면 feature 탐색 결과를 strategy 후보로 승격하지 않는다.
 - 2026-04-30 이전 historical replay CSV 의 `analysis_label` 은 EXIT row 에서 청산 시점 label 로 기록됐을 수 있다. `WAIT_PULLBACK` 등 entry label attribution 은 새 replay 산출물의 `entry_analysis_label` / `exit_analysis_label` 기준으로 다시 봐야 한다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
+- 현재 최우선 blocker 는 overnight falsification gate 미통과 상태다. 결과가 `FAIL` 이면 hypothesis 를 폐기하고, `BLOCKED` 이면 데이터/coverage/survivorship/L1 cost/benchmark 보강만 허용한다.
+- 2026-05-05 로컬 smoke `run-falsification-audit --run-id smoke_local --null-sample-count 20` 결과는 `BLOCKED` 다. 현재 `data/backtest_lab/` DB 기준 blocker 는 6개월 minute bar 부족, point-in-time scan 부재, corporate_actions 부재, same-universe null 불가, benchmark suite 미완성, spread sample <1000 이다.
+- point-in-time universe blocker 의 첫 실행 단계는 `audit-pit-universe-reconstruction` 으로 날짜별 복구 가능성을 분리하는 것이다. exact PIT 없는 날짜를 bar-derived diagnostic 으로 임시 통과시키지 않는다.
+- 2026-05-05 `audit-pit-universe-reconstruction --run-id pit_smoke_local --min-bars-per-symbol 30` smoke 결과는 `diagnostic_reconstruction_possible` 이다. 현재 DB에는 exact PIT 가 없고, 2026-04-17 historical bar 기반 diagnostic universe 1건만 가능하다.
+- 2026-05-05 `run-falsification-audit --strategy-trade-log sample_outputs/paper_trading/paper_trade_log.csv --strategy-bucket momentum_only` smoke 결과에서 `same_universe_random_entry` 는 `point_in_time_universe_missing` 으로 blocked 됐다. trade log parser/CLI 는 동작하지만 exact PIT 전에는 benchmark blocker 를 해소하지 않는다.
 
 ## OneDrive 기존 run 인벤토리
 
@@ -140,12 +150,13 @@
 - entry_label별 1R 도달율(June 기준): `OPENING_RANGE_CANDIDATE` 50%, `NEWS_CHECK_FIRST` 45%, `CONDITIONAL_ENTRY` 39%.
 - exit_setup_state 기준 `TRIM_EXTENSION` 청산 시 수익, `RUNNER_HOLD` 청산 시 손실 패턴 확인.
 - 현재 backtest_lab DB 범위(2025-04-01~06-30)에서 이 가설은 통계적으로 robust 하지 않음.
+- `STARTER_VALID + ORC`, `STARTER_VALID + 09:00 + no_conditional`, `breakeven_stop` 단독 가설은 현재 기준 strategy 후보가 아니라 `rejected / regime-dependent / diagnostic-only` 로 취급한다.
 
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
-- 즉시 순서는 `setup_state 진단 CSV가 포함된 1개월 baseline 재생성 -> setup_state별 손익/stop-out 분리력 확인 -> OPENING_RANGE_CANDIDATE + STARTER_VALID 집중도 감사 -> label/quick-stop 손실 원인 분해 -> entry filter ablation -> stop/exit 구조 ablation -> 고정 파라미터 3개월 이상 OOS` 다.
+- 즉시 순서는 `audit-pit-universe-reconstruction` 으로 exact PIT 가능 날짜와 diagnostic-only 날짜를 분리한 뒤, `run-falsification-audit` overnight run 으로 governance/data-bias-cost/null/stop-geometry/benchmark blocker 를 산출하고, 결과를 `PASS / FAIL / BLOCKED` 로 판정하는 것이다. `PASS` 전에는 setup_state, entry label, score cutoff, stop, sizing, add/trim tuning 을 하지 않는다.
 - Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
 - 장시간 historical replay/backtest 는 Windows 24시간 서버에서 실행하고, 맥북은 코드 수정과 짧은 smoke/quality gate 용도로 쓴다.
 - `k2` size amplification 과 winner add/scaling-in 은 entry/stop 구조가 음수 expectancy 를 벗어난 뒤에만 켠다. 현재는 손실을 키우는지 줄이는지 평가할 KPI 배선부터 먼저 만든다.

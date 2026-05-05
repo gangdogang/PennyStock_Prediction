@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import sqlite3
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 import time
+from zoneinfo import ZoneInfo
 
 import typer
 from rich.table import Table
@@ -11,6 +15,7 @@ from ..db import (
     fetch_latest_passed_universe,
     fetch_latest_premkt_predictions,
     fetch_latest_watchlist,
+    get_connection,
 )
 from ..services.backtest_data import BacktestDataManager
 from ..services.kis_historical import KISHistoricalDataService
@@ -20,6 +25,14 @@ from ..services.premkt_entry_signal_audit import (
     PremktEntrySignalAuditor,
 )
 from ..services.market_activity import MarketActivityScanner
+from ..services.falsification_research import (
+    FalsificationAuditOptions,
+    FalsificationResearchAuditor,
+)
+from ..services.point_in_time_universe_audit import (
+    PointInTimeUniverseAuditOptions,
+    PointInTimeUniverseAuditor,
+)
 from ..services.premkt_historical_replay import (
     DEFAULT_ENTRY_LABELS,
     DEFAULT_REPLAY_DB,
@@ -33,6 +46,7 @@ from ..services.premkt_training_dataset import PremktTrainingDatasetBuilder
 from .common import console, format_optional_number, format_optional_percent, trade_call_label
 
 app = typer.Typer()
+EASTERN = ZoneInfo("America/New_York")
 
 
 def _normalize_label_options(
@@ -58,6 +72,16 @@ def _parse_optional_time(value: str | None, option_name: str):
         return datetime.strptime(value, "%H:%M").time()
     except ValueError as exc:
         raise ValueError(f"{option_name} must be in HH:MM format.") from exc
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=EASTERN)
+    return parsed
 
 
 def _normalize_entry_setup_states(value: str | None) -> tuple[str, ...] | None:
@@ -571,6 +595,301 @@ def audit_premkt_entry_signal(
         console.print(f"CSV outputs: [bold]{next(iter(result.csv_paths.values())).parent}[/bold]")
     for warning in report.get("warnings", [])[:8]:
         console.print(f"- {warning}")
+
+
+@app.command("run-falsification-audit")
+def run_falsification_audit(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to audit. Defaults to data/backtest_lab/.",
+    ),
+    export_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--export-root",
+        help="Directory where a timestamped falsification audit run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to falsification_<timestamp>.",
+    ),
+    strategy_run_dir: Path | None = typer.Option(
+        None,
+        "--strategy-run-dir",
+        help="Replay output directory containing paper_trade_log.csv for matched-entry null.",
+    ),
+    strategy_trade_log: Path | None = typer.Option(
+        None,
+        "--strategy-trade-log",
+        help="Explicit paper_trade_log.csv path for matched-entry null.",
+    ),
+    strategy_bucket: str | None = typer.Option(
+        None,
+        "--strategy-bucket",
+        help="Optional bucket filter for strategy entry schedule, e.g. predictor_weighted.",
+    ),
+    seed: int = typer.Option(
+        20260505,
+        "--seed",
+        help="Deterministic random seed for the null baseline sample.",
+    ),
+    null_sample_count: int = typer.Option(
+        1500,
+        "--null-sample-count",
+        min=1,
+        help="Maximum same-universe random-time entries for the null baseline.",
+    ),
+    fixed_stop_pct: float = typer.Option(
+        0.05,
+        "--fixed-stop-pct",
+        min=1e-9,
+        help="Fixed stop distance for the baseline stop geometry, as a decimal ratio.",
+    ),
+    atr_window: int = typer.Option(
+        14,
+        "--atr-window",
+        min=1,
+        help="Prior bar count for ATR-normalized stop geometry.",
+    ),
+    structure_window: int = typer.Option(
+        10,
+        "--structure-window",
+        min=1,
+        help="Prior bar count for structure-stop geometry.",
+    ),
+    spread_sample_limit: int = typer.Option(
+        10000,
+        "--spread-sample-limit",
+        min=1,
+        help="Maximum deterministic spread rows to sample for cost audit.",
+    ),
+    max_pit_universe_staleness_days: int = typer.Option(
+        0,
+        "--max-pit-universe-staleness-days",
+        min=0,
+        help="Maximum allowed point-in-time universe staleness. Zero requires same market date.",
+    ),
+    live_loss_cap_usd: float = typer.Option(
+        5000.0,
+        "--live-loss-cap-usd",
+        min=0.0,
+        help="Research governance live loss cap to record before any future live phase.",
+    ),
+    hard_cap_months: int = typer.Option(
+        9,
+        "--hard-cap-months",
+        min=1,
+        help="Research governance hard time cap.",
+    ),
+    weekly_hour_cap: int = typer.Option(
+        20,
+        "--weekly-hour-cap",
+        min=1,
+        help="Research governance weekly cognitive/time budget.",
+    ),
+) -> None:
+    """Write a falsification-first data/bias/cost/null benchmark audit."""
+    try:
+        result = FalsificationResearchAuditor().run(
+            FalsificationAuditOptions(
+                db_path=db_path,
+                export_root=export_root,
+                run_id=run_id,
+                strategy_run_dir=strategy_run_dir,
+                strategy_trade_log=strategy_trade_log,
+                strategy_bucket=strategy_bucket,
+                seed=seed,
+                null_sample_count=null_sample_count,
+                fixed_stop_pct=fixed_stop_pct,
+                atr_window=atr_window,
+                structure_window=structure_window,
+                spread_sample_limit=spread_sample_limit,
+                max_pit_universe_staleness_days=max_pit_universe_staleness_days,
+                live_loss_cap_usd=live_loss_cap_usd,
+                hard_cap_months=hard_cap_months,
+                weekly_hour_cap=weekly_hour_cap,
+            )
+        )
+    except sqlite3.Error as exc:
+        console.print(f"Failed to audit research database: {exc}")
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Failed to write falsification audit: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"Falsification audit [bold]{result.status}[/bold] at [bold]{result.export_dir}[/bold]."
+    )
+    console.print(f"Report: [bold]{result.report_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(f"Null baseline CSV: [bold]{result.null_baseline_path}[/bold]")
+    console.print(f"Matched random-entry CSV: [bold]{result.matched_random_entry_path}[/bold]")
+
+
+@app.command("audit-pit-universe-reconstruction")
+def audit_pit_universe_reconstruction(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to audit. Defaults to data/backtest_lab/.",
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--output-root",
+        help="Directory where the PIT universe audit run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to pit_universe_<timestamp>.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Optional inclusive first market date in YYYY-MM-DD.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Optional inclusive last market date in YYYY-MM-DD.",
+    ),
+    min_bars_per_symbol: int = typer.Option(
+        30,
+        "--min-bars-per-symbol",
+        min=1,
+        help="Minimum valid minute bars required to count a symbol as diagnostic bar-universe input.",
+    ),
+) -> None:
+    """Audit whether historical dates can support exact or diagnostic PIT universes."""
+    try:
+        result = PointInTimeUniverseAuditor().run(
+            PointInTimeUniverseAuditOptions(
+                db_path=db_path,
+                output_root=output_root,
+                run_id=run_id,
+                start_date=start_date,
+                end_date=end_date,
+                min_bars_per_symbol=min_bars_per_symbol,
+            )
+        )
+    except sqlite3.Error as exc:
+        console.print(f"Failed to audit point-in-time universe inputs: {exc}")
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Failed to write point-in-time universe audit: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"PIT universe audit [bold]{result.status}[/bold] at [bold]{result.export_dir}[/bold]."
+    )
+    console.print(f"Report: [bold]{result.report_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(f"Dates CSV: [bold]{result.csv_path}[/bold]")
+
+
+@app.command("tag-pit-universe-scan")
+def tag_pit_universe_scan(
+    scan_id: str = typer.Option(..., "--scan-id", help="Existing scan_runs.scan_id to tag."),
+    market_date: str = typer.Option(..., "--market-date", help="Point-in-time market date in YYYY-MM-DD."),
+    point_in_time_tag: str = typer.Option(
+        "retro_scan_created_at",
+        "--point-in-time-tag",
+        help="Provenance label to store on scan_runs.point_in_time_tag.",
+    ),
+    cutoff_time: str = typer.Option(
+        "08:00",
+        "--cutoff-time",
+        help="ET cutoff that the scan must not be later than unless --allow-after-cutoff is set.",
+    ),
+    allow_after_cutoff: bool = typer.Option(
+        False,
+        "--allow-after-cutoff",
+        help="Allow tagging scans created after the cutoff. Use only for diagnostic replay plumbing.",
+    ),
+    diff_output: Path | None = typer.Option(
+        None,
+        "--diff-output",
+        help="Optional JSON path for the PIT-vs-current universe difference report.",
+    ),
+) -> None:
+    """Tag an explicit existing scan as point-in-time with cutoff guardrails."""
+    import penny_stock_radar.cli as root_cli
+
+    settings = root_cli.get_settings()
+    root_cli.init_database(settings.database_path)
+    try:
+        cutoff = _parse_optional_time(cutoff_time, "--cutoff-time")
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    assert cutoff is not None
+
+    with get_connection(settings.database_path) as connection:
+        scan = connection.execute(
+            """
+            SELECT scan_id, source, symbol_count, market_date, snapshot_role,
+                   point_in_time_tag, created_at
+            FROM scan_runs
+            WHERE scan_id = ?
+            """,
+            (scan_id,),
+        ).fetchone()
+        if scan is None:
+            console.print(f"No scan found for scan_id={scan_id}")
+            raise typer.Exit(code=1)
+        counts = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total_count,
+                SUM(CASE WHEN passed_filters = 1 THEN 1 ELSE 0 END) AS passed_count
+            FROM universe
+            WHERE scan_id = ?
+            """,
+            (scan_id,),
+        ).fetchone()
+
+    created_at = _parse_datetime(str(scan["created_at"]))
+    if created_at is None:
+        console.print(f"Cannot parse scan created_at={scan['created_at']!r}")
+        raise typer.Exit(code=1)
+    cutoff_at = datetime.combine(datetime.fromisoformat(market_date).date(), cutoff, tzinfo=EASTERN)
+    created_at_et = created_at.astimezone(EASTERN)
+    if created_at_et > cutoff_at and not allow_after_cutoff:
+        console.print(
+            "Refusing to tag scan after cutoff: "
+            f"created_at_et={created_at_et.isoformat()} cutoff_at={cutoff_at.isoformat()}. "
+            "Pass --allow-after-cutoff only for diagnostic replay plumbing."
+        )
+        raise typer.Exit(code=1)
+
+    manager = BacktestDataManager(settings)
+    manager.tag_universe_snapshot(
+        scan_id,
+        market_date=market_date,
+        point_in_time_tag=point_in_time_tag,
+    )
+    diff = manager.build_universe_difference_report(market_date)
+    if diff_output is not None:
+        diff_output.parent.mkdir(parents=True, exist_ok=True)
+        diff_output.write_text(
+            json.dumps(asdict(diff), indent=2, ensure_ascii=True) + "\n",
+            encoding="utf-8",
+        )
+
+    console.print(
+        "Tagged PIT scan "
+        f"[bold]{scan_id}[/bold] for [bold]{market_date}[/bold] "
+        f"source={scan['source']} created_at_et={created_at_et.isoformat()} "
+        f"total={int(counts['total_count'] or 0)} passed={int(counts['passed_count'] or 0)}."
+    )
+    console.print(
+        "PIT/current diff: "
+        f"pit={diff.point_in_time_count} current={diff.current_count} "
+        f"common={diff.common_symbols} added={len(diff.added_symbols)} removed={len(diff.removed_symbols)}."
+    )
+    if diff_output is not None:
+        console.print(f"Diff JSON: [bold]{diff_output}[/bold]")
 
 
 @app.command("run-premkt-validation-plan")

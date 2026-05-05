@@ -36,6 +36,16 @@
 - 별도 handoff 문서는 유지하지 않고 이 문서와 `README.md`를 진입 기준으로 사용한다.
 - 새 에이전트가 매번 모든 `.md` 를 읽어야 하는 구조를 만들지 않는다. 핵심 상태는 `README.md`, `docs/STATUS.md`, `docs/STEP_PROGRESS_KO.md` 에서 끝나야 한다.
 
+## 전략/성과 분석 원칙
+
+- 전략 개선 요청에서는 기존 문서와 현재 엔진을 truth 가 아니라 hypothesis 로 본다.
+- feature tuning 전에 structural edge, universe adverse selection, survivorship bias, L1/spread cost, execution latency, trade horizon 을 먼저 의심한다.
+- 페니스탁 intraday 전략의 기본 prior 는 음수로 둔다. 정보 우위, 실행 우위, 보유 우위 중 하나가 설명되지 않으면 edge 가정을 보수적으로 본다.
+- `reached_1r`, `stop_before_1r` 같은 라벨은 fixed stop, volatility, spread 에 오염될 수 있으므로 ATR/structure/spread-adjusted 기준을 병기한다.
+- 좋은 feature 를 찾기 전에 null benchmark 를 먼저 만든다: same-universe random entry, random time, naive top-gainer, opposite-side diagnostic, cash/no-trade baseline.
+- 좋은 결과보다 reject criteria 를 먼저 정의한다. 월별 일관성, top symbol/date 제거, cost-adjusted expectancy 를 통과하지 못하면 strategy 후보로 승격하지 않는다.
+- feature 탐색이 아니라 universe/cost/horizon 문제가 드러나면 intraday entry filter 튜닝을 멈추고 vehicle 또는 holding horizon 전환을 검토한다.
+
 ## 문서 규칙
 
 - `README.md`: 사람이 바로 실행하고 구조를 이해하는 진입점

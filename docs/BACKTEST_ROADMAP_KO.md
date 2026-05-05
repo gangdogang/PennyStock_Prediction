@@ -14,6 +14,91 @@ LIVE_TRADING 계획(실매매 전환)은 이 로드맵이 완료되고 백테스
 - 파라미터 튜닝 구간과 검증 구간은 반드시 분리(out-of-sample)한다.
 - 이 3개월 기준은 실제 시간을 기다리자는 뜻이 아니다. 과거 데이터를 모아 재생 백테스트로 빠르게 돌리는 검증 단위다.
 
+## Structural Edge / Bias / Benchmark Gate
+
+전략 개선은 "좋은 feature" 를 찾기 전에 이 시장에서 돈을 벌 구조적 이유가 있는지 먼저 반증한다. 페니스탁 intraday 모멘텀은 정보 우위, 실행 우위, 보유 우위가 없으면 기본 prior 를 음수로 둔다.
+
+### 먼저 의심할 것
+
+- **Universe adverse selection**: watchlist 가 이미 retail breakout 꼭대기 종목을 모으는 구조인지 확인한다. 같은 universe 에서 random entry / random time benchmark 를 같이 돌리지 않으면 entry engine 문제인지 universe 문제인지 구분하지 않는다.
+- **Survivorship bias**: delisting, 합병, reverse split, ticker change 종목이 historical universe 에 포함되는지 확인한다. 살아남은 티커만으로 만든 DB 는 stop rate 와 tail risk 를 과소평가할 수 있다.
+- **Cost realism**: L1 bid/ask, spread, fee, participation penalty 를 반영한 cost-adjusted expectancy 를 먼저 본다. spread 가 큰 페니스탁에서는 1R 도달률 몇 퍼센트 개선이 round-trip cost 에 먹힐 수 있다.
+- **Stop geometry**: fixed 5% stop 기준의 `reached_1r` / `stop_before_1r` 는 setup quality 가 아니라 ATR/volatility/spread 함수일 수 있다. ATR-normalized R, structure-stop R, spread-adjusted R 을 병기하기 전에는 edge label 로 쓰지 않는다.
+- **Trade horizon**: intraday 당일 청산만 보지 않는다. 같은 universe/signal 에 대해 D+1~D+5 catalyst-aware hold ablation 을 병행해 edge 가 horizon 문제인지 확인한다.
+
+### 필수 null / diagnostic benchmark
+
+- same-universe random entry
+- same-universe random time
+- naive top-gainer / volume-leader baseline
+- cash/no-trade baseline
+- opposite-side diagnostic
+
+`opposite-side diagnostic` 은 페니스탁 short 의 borrow/locate/SSR 제약 때문에 실거래 가능 전략으로 해석하지 않는다. 같은 신호가 retail crowding/fade 신호인지 확인하는 진단으로만 쓴다.
+
+### Reject 기준
+
+- 월별 일관성 없이 특정 달, 특정 심볼, 특정 날짜 제거 후 무너지는 feature 는 폐기한다.
+- cost-adjusted expectancy 가 음수이면 gross PnL 또는 1R 도달률이 좋아도 strategy 후보로 승격하지 않는다.
+- null benchmark 대비 초과 성과가 없으면 entry label 또는 setup_state 개선으로 해석하지 않는다.
+- universe/cost/horizon 문제가 확인되면 intraday filter tuning 을 멈추고 universe construction, execution model, holding horizon 전환을 먼저 검토한다.
+
+### Overnight falsification gate
+
+이 gate 는 feature tuning 전 필수 단계다. 목적은 전략을 개선하는 것이 아니라 전략 가정이 먼저 깨지는지 확인하는 것이다.
+
+Preflight:
+
+- `data/backtest_lab/` DB 사본과 `run_manifest.json` 을 남길 수 있는 쓰기 경로가 있어야 한다.
+- point-in-time universe, SEC cutoff, L1/minute coverage, survivorship inventory 상태를 먼저 기록한다.
+- 기존 ablation 결과를 pass 근거로 재사용하지 않는다.
+
+Command:
+
+```bash
+./scripts/psradar run-falsification-audit --run-id overnight_$(date +%Y%m%d)
+```
+
+point-in-time universe blocker 를 먼저 분리할 때:
+
+```bash
+./scripts/psradar audit-pit-universe-reconstruction --run-id pit_audit_$(date +%Y%m%d)
+```
+
+strategy entry timing 을 보존한 random-entry null 을 포함할 때:
+
+```bash
+./scripts/psradar run-falsification-audit --run-id matched_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
+```
+
+`same_universe_random_entry` 는 trade log 의 entry timing 만 가져온다. random replacement universe 는 exact PIT same-date universe 여야 하며, 같은 분봉 bar overlap 과 cost sample 이 없으면 blocked 처리한다.
+
+필수 산출물:
+
+- governance/budget
+- data inventory
+- point-in-time / survivorship blocker
+- L1/minute spread cost audit
+- same-universe random-time null benchmark
+- fixed / ATR / structure stop geometry
+- benchmark suite status
+- final `PASS / FAIL / BLOCKED` gate summary
+
+판정:
+
+- `PASS`: Phase 0 blocker 가 없고, 필수 benchmark suite 가 준비돼 Phase 1 stop-out 분석으로 넘어갈 수 있는 상태다. edge 승인이나 live 승인으로 해석하지 않는다.
+- `FAIL`: matched strategy-vs-null 비교에서 cost-adjusted expectancy 가 음수이거나 null 대비 초과 성과가 없거나 집중도 제거 후 무너진다.
+- `BLOCKED`: coverage, survivorship, point-in-time, L1/spread cost, benchmark suite 중 하나라도 부족해 판단 불가다.
+
+`PASS` 전에는 entry/setup/score/filter/stop/sizing tuning 을 금지한다. `FAIL` 은 hypothesis 폐기, `BLOCKED` 는 데이터/benchmark 보강만 허용한다.
+
+PIT universe 복구 원칙:
+
+- exact `snapshot_role=point_in_time` + same `market_date` universe 만 edge 판단용 PIT 로 본다.
+- historical minute bars 에서 만든 bar-derived universe 는 diagnostic-only 다. 이는 null plumbing smoke 에는 쓸 수 있지만, intraday 전체 바를 본 결과라 lookahead/adverse-selection 위험이 있으므로 blocker 를 해소하지 않는다.
+- stale prior PIT snapshot 을 날짜 D에 자동 재사용하지 않는다. 재사용하려면 staleness 정책과 missing/new symbol impact 를 별도 리포트로 먼저 검증한다.
+- 이미 존재하는 scan 을 PIT 로 승격할 때는 `tag-pit-universe-scan --scan-id ... --market-date ...` 를 쓰고, scan `created_at` 이 D 08:00 ET cutoff 이후이면 기본적으로 거부한다. `--allow-after-cutoff` 는 diagnostic plumbing 용도일 때만 사용한다.
+
 ## 실행 원칙 — 기다리지 않는 백테스트 루프
 
 성능 개선은 "실시간으로 3개월 기다리기"가 아니라 아래 루프로 진행한다.
