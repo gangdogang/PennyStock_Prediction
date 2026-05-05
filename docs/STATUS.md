@@ -117,6 +117,28 @@
 - `score_lt45` 는 `analysis_score < 4.5` 과열 진입 회피 가설로 고정한다. 현재 해석은 손실 감소 ablation 후보이며, predictor edge 또는 live 전략 승인 신호가 아니다.
 - stop/exit path diagnostics 는 stop 발생 전후의 MFE/MAE, R multiple, intrabar low stop touch, session_end giveback 을 보기 위한 원인 분해 산출물이다. 성능 판정이 아니라 `entry filter -> stop/exit structure -> OOS` 순서의 다음 실험 우선순위 결정에만 사용한다.
 
+## 2026-05-05 ablation 결과 (Windows replay_outputs)
+
+`STARTER_VALID` + `--min-entry-time 09:00` + `k1=0,k2=0` 조건 기준:
+
+| run | 기간 | 거래수 | 총손익 | 1R도달 |
+| --- | --- | ---: | --- | --- |
+| `validation_min0900_jun` | 2025-06-02~06-30 | 550 | -$1,836 | 42% |
+| `breakeven_jun` | 2025-06-02~06-30 | 1,031 | -$12,246 | 41% |
+| `no_conditional_jun` | 2025-06-02~06-30 | 164 | **+$2,448** | 47% |
+| `no_conditional_aprmay` | 2025-04-01~05-31 | 636 | -$6,984 | 41% |
+| `no_conditional_may` | 2025-05-01~05-31 | 314 | -$1,618 | 39% |
+
+핵심 발견:
+
+- `1R 도달 여부가 손익을 결정`한다. 1R 도달 시 수익, 미달 시 손실 구조가 전 기간 일관됨.
+- `CONDITIONAL_ENTRY` 를 제외(no_conditional)하면 June 2025 기준 +$2,448 로 수익 전환됐으나 April-May 에서 -$6,984 로 실패. 3개월 합산 -$4,536.
+- `breakeven_stop` 단독 사용은 역효과. 1R 도달 후 포지션 청산 → 같은 종목 당일 재진입 반복으로 거래 수 2배, 손실 급증.
+- June 플러스는 시장 레짐 효과로 판단. April 트럼프 관세 급락 구간에서 전략 붕괴 확인.
+- entry_label별 1R 도달율(June 기준): `OPENING_RANGE_CANDIDATE` 50%, `NEWS_CHECK_FIRST` 45%, `CONDITIONAL_ENTRY` 39%.
+- exit_setup_state 기준 `TRIM_EXTENSION` 청산 시 수익, `RUNNER_HOLD` 청산 시 손실 패턴 확인.
+- 현재 backtest_lab DB 범위(2025-04-01~06-30)에서 이 가설은 통계적으로 robust 하지 않음.
+
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
