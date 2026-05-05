@@ -142,6 +142,12 @@ Backtest L1 coverage report:
 ./scripts/psradar report-backtest-coverage --market-date 2026-04-17 --session premarket
 ```
 
+Replay entry-signal audit:
+
+```bash
+./scripts/psradar audit-premkt-entry-signal --run-dir data/replay_outputs/no_conditional_june --csv-dir data/replay_outputs/entry_signal_audit
+```
+
 품질 게이트 실행:
 
 ```bash

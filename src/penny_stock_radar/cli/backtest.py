@@ -14,6 +14,11 @@ from ..db import (
 )
 from ..services.backtest_data import BacktestDataManager
 from ..services.kis_historical import KISHistoricalDataService
+from ..services.premkt_entry_signal_audit import (
+    DEFAULT_SIGNAL_ENTRY_LABELS,
+    DEFAULT_SIGNAL_SETUP_STATES,
+    PremktEntrySignalAuditor,
+)
 from ..services.market_activity import MarketActivityScanner
 from ..services.premkt_historical_replay import (
     DEFAULT_ENTRY_LABELS,
@@ -64,6 +69,19 @@ def _normalize_entry_setup_states(value: str | None) -> tuple[str, ...] | None:
         if normalized and normalized not in states:
             states.append(normalized)
     return tuple(states) if states else None
+
+
+def _normalize_optional_csv_filter(value: str | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    values: list[str] = []
+    for part in value.split(","):
+        normalized = part.strip().upper()
+        if normalized == "ALL":
+            return None
+        if normalized and normalized not in values:
+            values.append(normalized)
+    return tuple(values)
 
 
 def _resolve_l1_capture_symbols(
@@ -488,6 +506,71 @@ def evaluate_premkt_replay(
     )
     for reason in gate.get("reasons", []):
         console.print(f"- {reason}")
+
+
+@app.command("audit-premkt-entry-signal")
+def audit_premkt_entry_signal(
+    run_dir: list[Path] = typer.Option(
+        ...,
+        "--run-dir",
+        help="Replay output directory. Repeat for April/May/June runs.",
+    ),
+    output: Path = typer.Option(
+        Path("data/backtest_lab/replays/entry_signal_audit.json"),
+        "--output",
+        help="JSON audit report output path.",
+    ),
+    csv_dir: Path | None = typer.Option(
+        None,
+        "--csv-dir",
+        help="Optional directory for audit CSV outputs.",
+    ),
+    entry_label: str = typer.Option(
+        ",".join(DEFAULT_SIGNAL_ENTRY_LABELS),
+        "--entry-label",
+        help="Comma-separated entry label allowlist. Use ALL to disable this filter.",
+    ),
+    entry_setup_state: str = typer.Option(
+        ",".join(DEFAULT_SIGNAL_SETUP_STATES),
+        "--entry-setup-state",
+        help="Comma-separated entry setup_state allowlist. Use ALL to disable this filter.",
+    ),
+    bucket: str | None = typer.Option(
+        None,
+        "--bucket",
+        help="Comma-separated bucket allowlist, e.g. predictor_weighted,momentum_only.",
+    ),
+    top_n: int = typer.Option(
+        5,
+        "--top-n",
+        min=1,
+        help="Number of top symbols/dates to include in concentration stress tests.",
+    ),
+) -> None:
+    """Audit replay entry-signal robustness, concentration, and 1R feature separation."""
+    try:
+        result = PremktEntrySignalAuditor().audit(
+            run_dirs=run_dir,
+            output_path=output,
+            csv_dir=csv_dir,
+            entry_labels=_normalize_optional_csv_filter(entry_label),
+            entry_setup_states=_normalize_optional_csv_filter(entry_setup_state),
+            buckets=_normalize_optional_csv_filter(bucket),
+            top_n=top_n,
+        )
+    except OSError as exc:
+        console.print(f"Failed to write entry signal audit: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    report = result.report
+    console.print(
+        f"Entry signal audit wrote [bold]{output}[/bold] "
+        f"for [bold]{report['selected_trade_count']}[/bold] matching closed trades."
+    )
+    if result.csv_paths:
+        console.print(f"CSV outputs: [bold]{next(iter(result.csv_paths.values())).parent}[/bold]")
+    for warning in report.get("warnings", [])[:8]:
+        console.print(f"- {warning}")
 
 
 @app.command("run-premkt-validation-plan")

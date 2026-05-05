@@ -40,6 +40,7 @@
 - `run-premkt-model-replay` 는 stop/exit path diagnostics 를 산출해 stop 전후 MFE/MAE, R multiple, intrabar stop touch, 1R 도달 여부, giveback 을 bucket/label/exit reason/hold bucket 기준으로 분해할 수 있다. replay-only `--breakeven-stop-after-r` 는 close 기준 R multiple 도달 후 stop 을 entry 가격으로 올리는 profit-protection ablation 이며, `--max-entries-per-symbol-per-day` / `--cooldown-after-stop-minutes` 는 stop 이후 재진입 반복을 분리 검증하는 ablation 이다. minute-only 한계 때문에 실전 stop 체결 보장으로 해석하지 않는다.
 - `setup_state` v1 은 historical replay 안에서 minute bar 기반 setup_context 를 만들고 deterministic/rule-backed `AISetupJudgeV1` JSON 판단을 기록한다. 출력 state 는 `DEAD_PUMP`, `WATCH_LEADER`, `VWAP_RECLAIM`, `ORB_BREAKOUT`, `PULLBACK_HOLD`, `FAILED_BREAKOUT`, `STARTER_VALID`, `ADD_VALID`, `TRIM_EXTENSION`, `RUNNER_HOLD`, `EXIT_FAIL` 이며 action bias 는 진단용이다.
 - `run-premkt-model-replay` 는 setup_state 진단 산출물 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 추가로 남긴다. trade log 에도 entry/exit setup state, quality, risk, action_bias 를 붙여 setup 판단이 손익/stop-out 을 분리하는지 볼 수 있다.
+- `audit-premkt-entry-signal` CLI 는 여러 replay output directory 의 `paper_trade_log.csv` 와 `paper_setup_features.csv` 를 읽어 특정 entry label/setup_state 조합의 월별/심볼별/일별 손익, top symbol/date 제거 후 손익, 1R 도달 feature bucket 을 JSON/CSV 로 산출할 수 있다. 기본 감사 대상은 `OPENING_RANGE_CANDIDATE + STARTER_VALID` 이다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
 - historical replay 는 날짜별 minute bar 와 모델 scoring feature 를 symbol별 반복 조회하지 않고 `market_date + symbol IN (...)` bulk load 로 읽은 뒤, prepared bar cursor 와 누적 volume/dollar volume 으로 simulated time 을 진행한다. model scorer 는 run 안에서 재사용하고, ML/blend scoring 은 replay bar cache 를 재사용해 같은 날짜의 minute bar 재조회 비용을 줄인다. setup_state 는 VWAP/HOD/opening-range 누적 지표를 prepared series prefix 값으로 계산해 반복 과거 봉 스캔을 피한다. non-blind bucket 은 activity deep-copy 를 생략하고, 전략 entry/exit/stop/sizing 규칙은 변경하지 않는다. `progress.json` 에 날짜별 elapsed, loaded bar rows, loaded symbols, simulated time count 를 남긴다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
@@ -70,6 +71,7 @@
 - historical replay smoke 또는 calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
 - `score_lt45` 는 live strategy 가 아니라 2025년 6월 sanity replay 와 2025년 4~5월 backward robustness 에서 손실 감소 가능성을 본 frozen hypothesis 다. Step 0 coverage, 고정 파라미터 OOS, shadow 검증 전에는 실매매 진입 필터로 해석하지 않는다.
 - `setup_state` v1 도 live strategy 가 아니다. AI/setup judge 는 상황 해석만 하며 주문은 계속 risk/rule engine 이 통제한다. 현재 구현은 L1 부재와 minute-only replay 한계 때문에 setup state 의 손익 분리력 검증용 진단 배선으로만 해석한다.
+- `audit-premkt-entry-signal` 결과도 strategy approval 이 아니다. 이 리포트는 특정 조합이 심볼/날짜 집중 착시인지, 1R 도달 조건이 분리되는지 보는 감사 산출물이며 L1 없는 replay 에서는 계속 sanity evidence 로만 본다.
 - 2026-04-30 이전 historical replay CSV 의 `analysis_label` 은 EXIT row 에서 청산 시점 label 로 기록됐을 수 있다. `WAIT_PULLBACK` 등 entry label attribution 은 새 replay 산출물의 `entry_analysis_label` / `exit_analysis_label` 기준으로 다시 봐야 한다.
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 
@@ -143,7 +145,7 @@
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
-- 즉시 순서는 `setup_state 진단 CSV가 포함된 1개월 baseline 재생성 -> setup_state별 손익/stop-out 분리력 확인 -> label/quick-stop 손실 원인 분해 -> entry filter ablation -> stop/exit 구조 ablation -> 고정 파라미터 3개월 이상 OOS` 다.
+- 즉시 순서는 `setup_state 진단 CSV가 포함된 1개월 baseline 재생성 -> setup_state별 손익/stop-out 분리력 확인 -> OPENING_RANGE_CANDIDATE + STARTER_VALID 집중도 감사 -> label/quick-stop 손실 원인 분해 -> entry filter ablation -> stop/exit 구조 ablation -> 고정 파라미터 3개월 이상 OOS` 다.
 - Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
 - 장시간 historical replay/backtest 는 Windows 24시간 서버에서 실행하고, 맥북은 코드 수정과 짧은 smoke/quality gate 용도로 쓴다.
 - `k2` size amplification 과 winner add/scaling-in 은 entry/stop 구조가 음수 expectancy 를 벗어난 뒤에만 켠다. 현재는 손실을 키우는지 줄이는지 평가할 KPI 배선부터 먼저 만든다.
