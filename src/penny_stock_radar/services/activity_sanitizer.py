@@ -45,7 +45,6 @@ def _sanitize_watchlist_blind(
         ]
     )
     return row.model_copy(
-        deep=True,
         update={
             "predicted": False,
             "watchlist_rank": None,

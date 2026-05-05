@@ -4,18 +4,18 @@
 
 ## macOS
 
-The repository root keeps Finder-friendly `.command` files:
+Finder-friendly `.command` files live under `launchers/macos/`:
 
-- `launch_dashboard.command`
-- `launch_snapshot.command`
-- `launch_ai_supervisor.command`
-- `launch_paper_trader.command`
-- `live_api_setup.command`
-- `start_paper_trader_background.command`
-- `paper_trader_status.command`
-- `stop_paper_trader_background.command`
+- `macos/launch_dashboard.command`
+- `macos/launch_snapshot.command`
+- `macos/launch_ai_supervisor.command`
+- `macos/launch_paper_trader.command`
+- `macos/live_api_setup.command`
+- `macos/start_paper_trader_background.command`
+- `macos/paper_trader_status.command`
+- `macos/stop_paper_trader_background.command`
 
-`scripts/stop_paper_trader_background.command` is kept as the implementation helper behind the root stop launcher.
+The repository root should stay limited to core docs, project configuration, and package metadata.
 
 ## Windows
 

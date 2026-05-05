@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+ROOT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
+
+if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+  PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+else
+  PYTHON_BIN="${PYTHON:-python3}"
+fi
+
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$ROOT_DIR/src:$PYTHONPATH"
+else
+  export PYTHONPATH="$ROOT_DIR/src"
+fi
+
+exec "$PYTHON_BIN" -m penny_stock_radar "$@"

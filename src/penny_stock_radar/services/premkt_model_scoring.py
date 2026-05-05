@@ -9,6 +9,7 @@ from typing import Any
 import pandas as pd
 
 from ..db import fetch_historical_minute_bars_for_symbols
+from .replay_bar_cache import PreparedMinuteBar, ReplayBarSeriesCache
 from .premkt_training_dataset import (
     EASTERN,
     FEATURE_VERSION,
@@ -79,6 +80,7 @@ class PremktModelScorer:
         symbols: list[str],
         market_date: date | str | None,
         cutoff_at: datetime | None,
+        bar_cache: ReplayBarSeriesCache | None = None,
     ) -> dict[str, PremktModelScore]:
         normalized_symbols = sorted({symbol.strip().upper() for symbol in symbols if symbol.strip()})
         if not normalized_symbols:
@@ -99,14 +101,12 @@ class PremktModelScorer:
             self.cutoff_time,
             tzinfo=EASTERN,
         )
-        rows = fetch_historical_minute_bars_for_symbols(
-            self.database_path,
+        rows_by_symbol = self._rows_by_symbol(
             market_date=market_date_str,
             symbols=normalized_symbols,
+            feature_cutoff=feature_cutoff,
+            bar_cache=bar_cache,
         )
-        rows_by_symbol: dict[str, list[Any]] = {symbol: [] for symbol in normalized_symbols}
-        for row in rows:
-            rows_by_symbol.setdefault(str(row["symbol"]).upper(), []).append(row)
 
         results: dict[str, PremktModelScore] = {}
         feature_payloads: list[dict[str, object]] = []
@@ -193,6 +193,36 @@ class PremktModelScorer:
             scoring_notes=notes,
         )
 
+    def _rows_by_symbol(
+        self,
+        *,
+        market_date: str,
+        symbols: list[str],
+        feature_cutoff: datetime,
+        bar_cache: ReplayBarSeriesCache | None,
+    ) -> dict[str, list[Any]]:
+        rows_by_symbol: dict[str, list[Any]] = {symbol: [] for symbol in symbols}
+        if bar_cache is not None:
+            for symbol in symbols:
+                series = bar_cache.series_by_symbol.get(symbol)
+                if series is None:
+                    continue
+                rows_by_symbol[symbol] = [
+                    _prepared_bar_to_feature_row(bar)
+                    for bar in series.bars
+                    if bar.bar_at < feature_cutoff
+                ]
+            return rows_by_symbol
+
+        rows = fetch_historical_minute_bars_for_symbols(
+            self.database_path,
+            market_date=market_date,
+            symbols=symbols,
+        )
+        for row in rows:
+            rows_by_symbol.setdefault(str(row["symbol"]).upper(), []).append(row)
+        return rows_by_symbol
+
 
 def _score_model_probabilities(model: Any, features: pd.DataFrame) -> list[float]:
     if hasattr(model, "predict_proba"):
@@ -211,6 +241,19 @@ def _coerce_market_date(value: date | str) -> str:
     if isinstance(value, date):
         return value.isoformat()
     return date.fromisoformat(str(value)[:10]).isoformat()
+
+
+def _prepared_bar_to_feature_row(bar: PreparedMinuteBar) -> dict[str, object]:
+    return {
+        "symbol": bar.symbol,
+        "market_date": bar.market_date,
+        "bar_at": bar.bar_at.isoformat(),
+        "open_price": bar.open_price,
+        "high_price": bar.high_price,
+        "low_price": bar.low_price,
+        "close_price": bar.close_price,
+        "volume": bar.volume,
+    }
 
 
 def _is_missing(value: object) -> bool:

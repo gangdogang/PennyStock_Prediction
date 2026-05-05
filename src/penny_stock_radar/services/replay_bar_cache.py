@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as dt_time, timedelta
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -51,30 +52,131 @@ class PreparedMinuteBar:
 class PreparedSymbolSeries:
     symbol: str
     bars: tuple[PreparedMinuteBar, ...]
+    bar_times: tuple[datetime, ...]
     first_open: float | None
     cumulative_volume: tuple[float, ...]
     cumulative_dollar_volume: tuple[float, ...]
+    cumulative_vwap_volume: tuple[float, ...]
+    cumulative_vwap_notional: tuple[float, ...]
+    cumulative_high: tuple[float | None, ...]
+    cumulative_high_at: tuple[datetime | None, ...]
+    cumulative_premarket_high: tuple[float | None, ...]
 
     @classmethod
     def from_bars(cls, symbol: str, bars: list[PreparedMinuteBar]) -> PreparedSymbolSeries:
         sorted_bars = tuple(_ensure_ordered_bars(bars))
         first_open = _positive_float(sorted_bars[0].open_price) if sorted_bars else None
+        bar_times: list[datetime] = []
         cumulative_volume: list[float] = []
         cumulative_dollar_volume: list[float] = []
+        cumulative_vwap_volume: list[float] = []
+        cumulative_vwap_notional: list[float] = []
+        cumulative_high: list[float | None] = []
+        cumulative_high_at: list[datetime | None] = []
+        cumulative_premarket_high: list[float | None] = []
         volume_total = 0.0
         dollar_total = 0.0
+        vwap_volume_total = 0.0
+        vwap_notional_total = 0.0
+        high_so_far: float | None = None
+        high_at_so_far: datetime | None = None
+        premarket_high_so_far: float | None = None
         for bar in sorted_bars:
+            bar_times.append(bar.bar_at)
             volume_total += bar.volume
             dollar_total += bar.close_price * bar.volume
             cumulative_volume.append(volume_total)
             cumulative_dollar_volume.append(dollar_total)
+            if bar.volume > 0:
+                typical_price = (bar.high_price + bar.low_price + bar.close_price) / 3.0
+                vwap_volume_total += bar.volume
+                vwap_notional_total += typical_price * bar.volume
+            cumulative_vwap_volume.append(vwap_volume_total)
+            cumulative_vwap_notional.append(vwap_notional_total)
+            if bar.high_price > 0 and (high_so_far is None or bar.high_price >= high_so_far):
+                high_so_far = bar.high_price
+                high_at_so_far = bar.bar_at
+            cumulative_high.append(high_so_far)
+            cumulative_high_at.append(high_at_so_far)
+            if (
+                bar.bar_at.time() < dt_time(9, 30)
+                and bar.high_price > 0
+                and (premarket_high_so_far is None or bar.high_price > premarket_high_so_far)
+            ):
+                premarket_high_so_far = bar.high_price
+            cumulative_premarket_high.append(premarket_high_so_far)
         return cls(
             symbol=symbol,
             bars=sorted_bars,
+            bar_times=tuple(bar_times),
             first_open=first_open,
             cumulative_volume=tuple(cumulative_volume),
             cumulative_dollar_volume=tuple(cumulative_dollar_volume),
+            cumulative_vwap_volume=tuple(cumulative_vwap_volume),
+            cumulative_vwap_notional=tuple(cumulative_vwap_notional),
+            cumulative_high=tuple(cumulative_high),
+            cumulative_high_at=tuple(cumulative_high_at),
+            cumulative_premarket_high=tuple(cumulative_premarket_high),
         )
+
+    def vwap_at(self, index: int) -> float | None:
+        volume = self.cumulative_vwap_volume[index]
+        if volume <= 0:
+            return None
+        return self.cumulative_vwap_notional[index] / volume
+
+    def high_at(self, index: int) -> float | None:
+        return self.cumulative_high[index] if index >= 0 else None
+
+    def high_time_at(self, index: int) -> datetime | None:
+        return self.cumulative_high_at[index] if index >= 0 else None
+
+    def premarket_high_at(self, index: int) -> float | None:
+        return self.cumulative_premarket_high[index] if index >= 0 else None
+
+    def volume_baseline_at(self, index: int, *, lookback: int = 5) -> float | None:
+        start = max(0, index - lookback)
+        values = [
+            bar.volume
+            for bar in self.bars[start:index]
+            if bar.volume > 0
+        ]
+        return (sum(values) / len(values)) if values else None
+
+    def opening_range_bounds(
+        self,
+        index: int,
+        *,
+        cutoff_at: datetime,
+        minutes: int,
+    ) -> tuple[float | None, float | None]:
+        if not self.bars:
+            return None, None
+        current = self.bars[index]
+        session_open = current.bar_at.replace(hour=9, minute=30, second=0, microsecond=0)
+        if current.bar_at >= session_open:
+            start = session_open
+        else:
+            post_cutoff_index = bisect_left(self.bar_times, cutoff_at)
+            start = (
+                self.bar_times[post_cutoff_index]
+                if post_cutoff_index <= index
+                else self.bar_times[0]
+            )
+        end = start + timedelta(minutes=minutes)
+        start_index = bisect_left(self.bar_times, start)
+        end_index = min(bisect_left(self.bar_times, end), index + 1)
+        highs = [
+            bar.high_price
+            for bar in self.bars[start_index:end_index]
+            if bar.high_price > 0
+        ]
+        lows = [
+            bar.low_price
+            for bar in self.bars[start_index:end_index]
+            if bar.low_price > 0
+        ]
+        return (max(highs) if highs else None, min(lows) if lows else None)
 
 
 @dataclass(frozen=True)

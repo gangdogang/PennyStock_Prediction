@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import Iterable
 
 from ..models import MarketActivity
-from .replay_bar_cache import PreparedBarSnapshot, PreparedMinuteBar
+from .replay_bar_cache import PreparedBarSnapshot
 
 SETUP_STATES = (
     "DEAD_PUMP",
@@ -229,25 +229,23 @@ class SetupContextBuilder:
         position_opened_at: datetime | None = None,
         position_entry_price: float | None = None,
     ) -> SetupContext:
-        bars = list(snapshot.series.bars[: snapshot.index + 1])
-        previous = bars[-2] if len(bars) >= 2 else None
+        series = snapshot.series
+        index = snapshot.index
+        previous = series.bars[index - 1] if index >= 1 else None
         current = snapshot.current
         last_price = _positive(current.close_price)
-        vwap = _vwap(bars)
-        previous_vwap = _vwap(bars[:-1]) if len(bars) >= 2 else None
+        vwap = series.vwap_at(index)
+        previous_vwap = series.vwap_at(index - 1) if index >= 1 else None
         distance_to_vwap_pct = _move_pct(last_price, vwap)
-        premarket_high = _max_high(_premarket_bars(bars))
-        hod = _max_high(bars)
-        previous_hod = _max_high(bars[:-1])
-        opening_range = _opening_range_bars(
-            bars,
-            current=current,
+        premarket_high = series.premarket_high_at(index)
+        hod = series.high_at(index)
+        previous_hod = series.high_at(index - 1) if index >= 1 else None
+        opening_range_high, opening_range_low = series.opening_range_bounds(
+            index,
             cutoff_at=cutoff_at,
             minutes=self.opening_range_minutes,
         )
-        opening_range_high = _max_high(opening_range)
-        opening_range_low = _min_low(opening_range)
-        hod_at = _latest_high_at(bars, hod)
+        hod_at = series.high_time_at(index)
         minutes_since_hod = (
             (current.bar_at - hod_at).total_seconds() / 60.0
             if hod_at is not None
@@ -259,7 +257,7 @@ class SetupContextBuilder:
             else None
         )
         previous_close = _positive(previous.close_price) if previous is not None else None
-        volume_baseline = _avg(bar.volume for bar in bars[-6:-1] if bar.volume > 0)
+        volume_baseline = series.volume_baseline_at(index)
         volume_ratio = (
             current.volume / volume_baseline
             if volume_baseline is not None and volume_baseline > 0
@@ -680,60 +678,6 @@ def _context_reasons(
     if liquidity_ok:
         reasons.append("liquidity_ok")
     return _dedupe(reasons)
-
-
-def _opening_range_bars(
-    bars: list[PreparedMinuteBar],
-    *,
-    current: PreparedMinuteBar,
-    cutoff_at: datetime,
-    minutes: int,
-) -> list[PreparedMinuteBar]:
-    session_open = current.bar_at.replace(hour=9, minute=30, second=0, microsecond=0)
-    if current.bar_at >= session_open:
-        start = session_open
-    else:
-        post_cutoff = [bar.bar_at for bar in bars if bar.bar_at >= cutoff_at]
-        start = min(post_cutoff) if post_cutoff else bars[0].bar_at
-    end = start + timedelta(minutes=minutes)
-    return [bar for bar in bars if start <= bar.bar_at < end]
-
-
-def _premarket_bars(bars: list[PreparedMinuteBar]) -> list[PreparedMinuteBar]:
-    return [bar for bar in bars if bar.bar_at.time() < time(9, 30)]
-
-
-def _vwap(bars: list[PreparedMinuteBar]) -> float | None:
-    volume = sum(bar.volume for bar in bars if bar.volume > 0)
-    if volume <= 0:
-        return None
-    return (
-        sum(
-            ((bar.high_price + bar.low_price + bar.close_price) / 3.0) * bar.volume
-            for bar in bars
-            if bar.volume > 0
-        )
-        / volume
-    )
-
-
-def _max_high(bars: list[PreparedMinuteBar]) -> float | None:
-    highs = [bar.high_price for bar in bars if bar.high_price > 0]
-    return max(highs) if highs else None
-
-
-def _min_low(bars: list[PreparedMinuteBar]) -> float | None:
-    lows = [bar.low_price for bar in bars if bar.low_price > 0]
-    return min(lows) if lows else None
-
-
-def _latest_high_at(bars: list[PreparedMinuteBar], high: float | None) -> datetime | None:
-    if high is None:
-        return None
-    for bar in reversed(bars):
-        if bar.high_price == high:
-            return bar.bar_at
-    return None
 
 
 def _best_rank(row: MarketActivity) -> int:

@@ -5,14 +5,14 @@
 macOS:
 
 ```bash
-./launch_dashboard.command
-./launch_snapshot.command
-./launch_ai_supervisor.command
-./launch_paper_trader.command
-./stop_paper_trader_background.command
+./launchers/macos/launch_dashboard.command
+./launchers/macos/launch_snapshot.command
+./launchers/macos/launch_ai_supervisor.command
+./launchers/macos/launch_paper_trader.command
+./launchers/macos/stop_paper_trader_background.command
 ```
 
-`launch_paper_trader.command` 는 내부 paper engine 전용이다. KIS mock broker execution 은 별도 CLI 로 수동/세미오토 검증한다.
+macOS `.command` 파일은 `launchers/macos/` 아래에 모은다. `launch_paper_trader.command` 는 내부 paper engine 전용이다. KIS mock broker execution 은 별도 CLI 로 수동/세미오토 검증한다.
 
 Windows:
 
@@ -31,6 +31,8 @@ Windows `launch_paper_trader.ps1` 도 내부 paper engine 전용이다. OneDrive
 
 운영 기준은 `코드 동기화는 GitHub`, `실행 결과 공유는 OneDrive` 로 분리한다. OneDrive 안에 예전 `Penny_Stock` 저장소가 있더라도 실행/수정 기준으로 쓰지 않는다.
 
+현재 운영 전제는 맥북에서만 코드 수정/테스트/commit/push 를 하고, Windows 머신은 `C:\Dev\Penny_Stock` 를 24시간 paper/backtest 서버로 쓰는 것이다. Windows 에서는 코드를 직접 고치지 않고 `git pull --ff-only origin main` 으로 반영한다.
+
 권장 폴더 구조:
 
 ```text
@@ -40,7 +42,7 @@ macOS:
 
 Windows:
   C:\Dev\Penny_Stock
-    - git pull, dashboard 실행, paper 실행
+    - git pull, dashboard 실행, paper 실행, 장시간 historical replay/backtest 실행
     - .env 는 이 폴더의 C:\Dev\Penny_Stock\.env 에 있어야 한다
     - dashboard 와 같은 DB 를 보려면 paper 실행 시 -UseDefaultDatabase 를 붙인다
 
@@ -231,7 +233,7 @@ cd C:\Dev\Penny_Stock
 macOS:
 
 ```bash
-./live_api_setup.command
+./launchers/macos/live_api_setup.command
 ```
 
 Windows:
@@ -364,9 +366,9 @@ Windows 기본 권장:
 macOS background paper trader:
 
 ```bash
-./start_paper_trader_background.command
-./paper_trader_status.command
-./stop_paper_trader_background.command
+./launchers/macos/start_paper_trader_background.command
+./launchers/macos/paper_trader_status.command
+./launchers/macos/stop_paper_trader_background.command
 ```
 
 위 background launcher 는 paper engine 전용이다. KIS mock broker execution 은 현재 background daemon 이 아니라 CLI 기반 세미오토 운영 범위만 지원한다.

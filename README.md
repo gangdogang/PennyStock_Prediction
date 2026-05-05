@@ -7,24 +7,26 @@
 - 사람이 바로 실행하고 운영할 수 있을 것
 - 새 컨텍스트의 에이전트가 문서 몇 개만 읽고 현재 상태를 빠르게 파악할 수 있을 것
 
+운영 역할은 맥북에서 코드 수정/테스트/commit/push 를 하고, Windows 머신은 `C:\Dev\Penny_Stock` 기준 24시간 paper/backtest 서버로 돌리는 방식입니다.
+
 ## 시작점
 
 macOS 대시보드:
 
 ```bash
-./launch_dashboard.command
+./launchers/macos/launch_dashboard.command
 ```
 
 macOS 스냅샷 UI:
 
 ```bash
-./launch_snapshot.command
+./launchers/macos/launch_snapshot.command
 ```
 
 macOS AI supervisor:
 
 ```bash
-./launch_ai_supervisor.command
+./launchers/macos/launch_ai_supervisor.command
 ```
 
 Windows 대시보드:
@@ -43,31 +45,39 @@ Windows paper 실행/스냅샷:
 API 키 설정:
 
 ```bash
-./live_api_setup.command
+./launchers/macos/live_api_setup.command
 ```
 
 ```powershell
 .\launchers\windows\live_api_setup.ps1
 ```
 
-## 먼저 읽을 문서
+## 문서 읽기 순서
+
+새 컨텍스트의 기본 읽기 범위:
 
 - 에이전트 작업 규칙: [`AGENTS.md`](/Users/wondokyeong/Desktop/Penny_Stock/AGENTS.md)
-- 현재 진행 상태: [`docs/STATUS.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STATUS.md)
-- 백테스트 기준 로드맵: [`docs/BACKTEST_ROADMAP_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/BACKTEST_ROADMAP_KO.md)
-- 단계별 진행 기록: [`docs/STEP_PROGRESS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STEP_PROGRESS_KO.md)
-- 운영 가이드: [`docs/OPERATIONS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/OPERATIONS_KO.md)
+- 현재 상태와 다음 우선순위: [`docs/STATUS.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STATUS.md)
+- Step 단위 작업 규칙: [`docs/STEP_PROGRESS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STEP_PROGRESS_KO.md)
+
+작업별로 필요할 때만 추가로 읽는 문서:
+
+- 백테스트/replay/성능평가: [`docs/BACKTEST_ROADMAP_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/BACKTEST_ROADMAP_KO.md)
+- Windows 서버/OneDrive/런처/.env: [`docs/OPERATIONS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/OPERATIONS_KO.md)
 - 매매/판단 기준: [`docs/TRADING_GUIDE_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/TRADING_GUIDE_KO.md)
-- 2엔진 전환 설계: [`docs/ENGINE_SPLIT_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/ENGINE_SPLIT_PLAN_KO.md)
-- 실매매 준비 계획: [`docs/LIVE_TRADING_READINESS_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/LIVE_TRADING_READINESS_PLAN_KO.md)
+- 엔진 분리: [`docs/ENGINE_SPLIT_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/ENGINE_SPLIT_PLAN_KO.md)
+- live/shadow 전환: [`docs/LIVE_TRADING_READINESS_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/LIVE_TRADING_READINESS_PLAN_KO.md)
+
+`archive/`, `sample_outputs/`, `automation/inbox/` 아래 markdown 은 기본 진입 문서가 아니라 과거 기록 또는 런타임 산출물입니다.
 
 ## 폴더 구조
 
-- 루트: macOS `.command` 런처, 핵심 설정, 핵심 문서
+- 루트: 핵심 설정, 핵심 문서, 패키지 메타
 - `src/penny_stock_radar/`: 애플리케이션 코드
 - `archive/`: 전환 전 보관본, 완료된 계획 문서, 작업 스냅샷
 - `tests/`: 테스트
 - `scripts/`: 공통 CLI/pipeline/품질 게이트 스크립트
+- `launchers/macos/`: macOS Finder-friendly `.command` 런처
 - `launchers/windows/`: Windows 대화형 런처, OneDrive paper 실행/스냅샷 런처, 작업 스케줄러 스크립트
 - `automation/`: supervisor 프롬프트, launchd 템플릿, 상태/로그 폴더
 - `docs/`: 장기적으로 유지할 핵심 문서
@@ -163,4 +173,4 @@ Backtest L1 coverage report:
 - 실시간 모드는 웹소켓 기반 전체 틱 엔진이 아니라 주기적 polling 중심입니다.
 - 현재는 `intraday` 엔진과 `multiday` 엔진을 분리하는 전환 단계입니다.
 - 기존 intraday 핵심 파일 복사본은 `archive/engine_split_2026-04-18/` 에 보관되어 있습니다.
-- 새 작업을 시작할 때는 `AGENTS.md -> README.md -> docs/STATUS.md -> docs/BACKTEST_ROADMAP_KO.md` 순서로 보는 것이 가장 빠릅니다.
+- 새 작업을 시작할 때는 `AGENTS.md -> README.md -> docs/STATUS.md -> docs/STEP_PROGRESS_KO.md` 순서로 보는 것이 가장 빠릅니다. 백테스트 작업일 때만 `docs/BACKTEST_ROADMAP_KO.md` 를 추가로 봅니다.

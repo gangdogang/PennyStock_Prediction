@@ -1,12 +1,24 @@
 # Agent Guide
 
-이 저장소에서 새 컨텍스트의 에이전트는 아래 순서로 들어오면 됩니다.
+이 저장소에서 새 컨텍스트의 에이전트는 기본 문서만 먼저 읽고, 작업 종류가 확정된 뒤 필요한 문서를 추가로 엽니다.
 
 1. [`README.md`](/Users/wondokyeong/Desktop/Penny_Stock/README.md)
 2. [`docs/STATUS.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STATUS.md)
-3. [`docs/BACKTEST_ROADMAP_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/BACKTEST_ROADMAP_KO.md)
-4. [`docs/STEP_PROGRESS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STEP_PROGRESS_KO.md)
-5. 필요 시 [`docs/OPERATIONS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/OPERATIONS_KO.md), [`docs/TRADING_GUIDE_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/TRADING_GUIDE_KO.md), [`docs/ENGINE_SPLIT_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/ENGINE_SPLIT_PLAN_KO.md), [`docs/LIVE_TRADING_READINESS_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/LIVE_TRADING_READINESS_PLAN_KO.md)
+3. [`docs/STEP_PROGRESS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/STEP_PROGRESS_KO.md)
+
+작업별 추가 문서:
+
+- 백테스트, replay, 검증, 성능평가: [`docs/BACKTEST_ROADMAP_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/BACKTEST_ROADMAP_KO.md)
+- 실행, Windows 서버, OneDrive, 런처, `.env`: [`docs/OPERATIONS_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/OPERATIONS_KO.md)
+- 매매 해석, 전략 판단 기준: [`docs/TRADING_GUIDE_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/TRADING_GUIDE_KO.md)
+- 엔진 분리 작업: [`docs/ENGINE_SPLIT_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/ENGINE_SPLIT_PLAN_KO.md)
+- live/shadow 전환 판단: [`docs/LIVE_TRADING_READINESS_PLAN_KO.md`](/Users/wondokyeong/Desktop/Penny_Stock/docs/LIVE_TRADING_READINESS_PLAN_KO.md)
+
+기본으로 읽지 않는 영역:
+
+- `archive/`: 완료된 계획, 과거 리뷰, 전환 전 보관본
+- `sample_outputs/`, `data/`, `automation/inbox/`, `automation/logs/`, `automation/state/`: 런타임 산출물
+- `automation/prompts/`: AI supervisor 프롬프트를 수정할 때만 읽는다.
 
 ## 목적
 
@@ -22,6 +34,7 @@
 - 사용하지 않는 산출물, 캐시, 로그, 중복 문서는 남기지 않는다.
 - `sample_outputs/`, `data/`, `automation/inbox/`, `automation/logs/`, `automation/state/` 는 기본적으로 런타임 영역이다.
 - 별도 handoff 문서는 유지하지 않고 이 문서와 `README.md`를 진입 기준으로 사용한다.
+- 새 에이전트가 매번 모든 `.md` 를 읽어야 하는 구조를 만들지 않는다. 핵심 상태는 `README.md`, `docs/STATUS.md`, `docs/STEP_PROGRESS_KO.md` 에서 끝나야 한다.
 
 ## 문서 규칙
 

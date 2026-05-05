@@ -150,12 +150,21 @@ class PremktHistoricalReplayRunner:
             max_spread_pct=float(self.settings.premarket_max_spread_pct),
         )
         self.setup_judge = AISetupJudgeV1()
+        self._allowed_entry_labels = set(options.entry_labels) - set(options.exclude_entry_labels)
+        self._exit_labels = set(options.exit_labels)
+        self._required_entry_setup_states = (
+            set(options.require_entry_setup_states)
+            if options.require_entry_setup_states is not None
+            else None
+        )
         self._progress_path = self.export_dir / "progress.json"
         self._summary_path = self.export_dir / "replay_summary.json"
         self._manifest_path = self.export_dir / "run_manifest.json"
         self._prediction_rows: list[dict[str, object]] = []
         self._trade_rows: list[dict[str, object]] = []
         self._setup_feature_rows: list[dict[str, object]] = []
+        self._model_scorer: PremktModelScorer | None = None
+        self._model_scoring_notes: list[str] | None = None
         self._coverage_warnings: list[dict[str, object]] = []
         self._data_quality_notes: list[str] = []
         self._leakage_guard_notes: list[str] = [
@@ -260,17 +269,18 @@ class PremktHistoricalReplayRunner:
                 return
 
             cutoff_at = self._cutoff_at(market_date)
+            bars = self._load_bars(
+                market_date=market_date,
+                symbols=[str(row["symbol"]).upper() for row in watchlist_rows],
+            )
             predictions = self._score_predictions(
                 market_date=market_date,
                 cutoff_at=cutoff_at,
                 watchlist_rows=watchlist_rows,
+                bar_cache=bars,
             )
             self._prediction_rows.extend(
                 self._prediction_to_row(market_date, scan_id, row) for row in predictions
-            )
-            bars = self._load_bars(
-                market_date=market_date,
-                symbols=[str(row["symbol"]).upper() for row in watchlist_rows],
             )
             if not bars:
                 self._skip(
@@ -361,8 +371,9 @@ class PremktHistoricalReplayRunner:
         market_date: str,
         cutoff_at: datetime,
         watchlist_rows: Iterable[Any],
+        bar_cache: ReplayBarSeriesCache | None = None,
     ) -> list[PremktPrediction]:
-        scorer, scoring_notes = self._build_model_scorer()
+        scorer, scoring_notes = self._model_scorer_for_run()
         predictions: list[PremktPrediction] = []
         entries = [_watchlist_entry_from_row(row) for row in watchlist_rows]
         model_scores = (
@@ -370,6 +381,7 @@ class PremktHistoricalReplayRunner:
                 symbols=[entry.symbol for entry in entries],
                 market_date=market_date,
                 cutoff_at=cutoff_at,
+                bar_cache=bar_cache,
             )
             if scorer is not None and self.options.score_mode.lower() != "rule"
             else {}
@@ -432,6 +444,11 @@ class PremktHistoricalReplayRunner:
                 )
             )
         return sorted(predictions, key=lambda item: (-item.score, item.symbol))
+
+    def _model_scorer_for_run(self) -> tuple[PremktModelScorer | None, list[str]]:
+        if self._model_scoring_notes is None:
+            self._model_scorer, self._model_scoring_notes = self._build_model_scorer()
+        return self._model_scorer, list(self._model_scoring_notes)
 
     def _build_model_scorer(self) -> tuple[PremktModelScorer | None, list[str]]:
         score_mode = self.options.score_mode.lower()
@@ -519,18 +536,22 @@ class PremktHistoricalReplayRunner:
             self._apply_ranks(base_activity)
             for row in base_activity:
                 latest_activity_by_symbol[row.symbol] = row
-            for bucket, state in states.items():
-                bucket_activity = sanitize_activity_for_bucket(
+            bucket_activity_by_name = {
+                PREDICTOR_WEIGHTED_BUCKET: base_activity,
+                MOMENTUM_ONLY_BUCKET: base_activity,
+                WATCHLIST_BLIND_MOMENTUM_BUCKET: sanitize_activity_for_bucket(
                     self.scanner,
-                    bucket,
+                    WATCHLIST_BLIND_MOMENTUM_BUCKET,
                     base_activity,
-                )
+                ),
+            }
+            for bucket, state in states.items():
                 date_trade_rows.extend(
                     self._process_bucket_time(
                         state=state,
                         market_date=market_date,
                         simulated_time=simulated_time,
-                        activity=bucket_activity,
+                        activity=bucket_activity_by_name[bucket],
                         predictions_by_symbol=predictions_by_symbol,
                         bar_cursor=bar_cursor,
                         cutoff_at=cutoff_at,
@@ -576,13 +597,6 @@ class PremktHistoricalReplayRunner:
         cutoff_at: datetime,
     ) -> list[dict[str, object]]:
         trades: list[dict[str, object]] = []
-        allowed_entry_labels = set(self.options.entry_labels) - set(self.options.exclude_entry_labels)
-        exit_labels = set(self.options.exit_labels)
-        required_entry_setup_states = (
-            set(self.options.require_entry_setup_states)
-            if self.options.require_entry_setup_states is not None
-            else None
-        )
         setup_by_symbol: dict[str, tuple[SetupContext, SetupJudgement]] = {}
         for row in activity:
             setup = self._setup_for_row(
@@ -628,7 +642,7 @@ class PremktHistoricalReplayRunner:
                 )
         for row in activity:
             position = state.positions.get(row.symbol)
-            if position is not None and row.analysis_label in exit_labels:
+            if position is not None and row.analysis_label in self._exit_labels:
                 trades.append(
                     self._close_position(
                         state,
@@ -670,7 +684,7 @@ class PremktHistoricalReplayRunner:
                 continue
             if self.options.require_l1_quotes_for_entries and not row.has_live_quote:
                 continue
-            if row.analysis_label not in allowed_entry_labels:
+            if row.analysis_label not in self._allowed_entry_labels:
                 continue
             entry_setup = setup_by_symbol.get(row.symbol)
             if entry_setup is not None and entry_setup[0].position_state != "flat":
@@ -685,8 +699,8 @@ class PremktHistoricalReplayRunner:
                 if entry_setup is not None:
                     context, judgement = entry_setup
                     self._setup_feature_rows.append(context.feature_row(judgement))
-            if required_entry_setup_states is not None and (
-                entry_setup is None or entry_setup[1].setup_state not in required_entry_setup_states
+            if self._required_entry_setup_states is not None and (
+                entry_setup is None or entry_setup[1].setup_state not in self._required_entry_setup_states
             ):
                 continue
             entry = self._open_position(

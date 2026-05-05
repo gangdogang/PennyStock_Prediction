@@ -27,6 +27,7 @@ automation/inbox/*.md
 automation/logs/*.log
 !automation/logs/.gitkeep
 automation/state/*.json
+automation/state/*.pid
 !automation/state/.gitkeep
 
 data_backup_before_code_update/

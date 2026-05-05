@@ -59,7 +59,7 @@ def render_live_mode(
             f"실시간 provider가 아직 준비되지 않았습니다. 현재 상태: {reason}. `.env`에 API 키를 넣어주세요."
         )
         st.markdown(
-            "<div class='small-note'>Finder에서 <code>live_api_setup.command</code>를 더블클릭하면 .env 파일을 바로 열 수 있습니다.</div>",
+            "<div class='small-note'>Finder에서 <code>launchers/macos/live_api_setup.command</code>를 더블클릭하면 .env 파일을 바로 열 수 있습니다.</div>",
             unsafe_allow_html=True,
         )
         st.code(

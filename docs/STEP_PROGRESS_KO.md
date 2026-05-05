@@ -1,6 +1,6 @@
 # Step Progress
 
-최종 갱신일: 2026-05-02
+최종 갱신일: 2026-05-05
 
 ## 운영 원칙
 
@@ -9,6 +9,7 @@
 - 설계, 우선순위, 성능평가 기준, 구현 방향이 바뀌면 작업 전에 관련 `.md` 를 먼저 갱신한다.
 - 성능평가 산출물은 코드 수정 근거가 되므로, 해석 결과와 다음 작업은 `docs/STATUS.md` 또는 `docs/BACKTEST_ROADMAP_KO.md` 에 남긴 뒤 구현한다.
 - 구조와 문서가 어긋나면 구현보다 문서를 먼저 고친다.
+- 기본 문서 읽기 범위는 `AGENTS.md`, `README.md`, `docs/STATUS.md`, `docs/STEP_PROGRESS_KO.md` 로 제한하고, `BACKTEST_ROADMAP_KO.md` 등은 작업 종류가 맞을 때만 추가로 연다.
 - 병렬화 가능한 조사와 구현은 토큰 비용을 신경 쓰지 말고 서브에이전트를 최대한 적극적으로 사용한다.
 - 서브에이전트는 읽기 전용 조사, 경로 확인, 테스트 범위 분리, 구현 분리처럼 책임이 명확한 단위로 나눠 쓴다.
 - active 경로인 intraday paper engine 과 KIS mock broker execution 경로는 의도 없이 흔들지 않는다.
@@ -56,6 +57,9 @@
 - 2026-05-01: stop/exit path diagnostics 구현은 성능 판정이 아니라 손실 경로 분해 배선으로 본다. 이 산출물은 entry filter ablation 과 stop/exit 구조 ablation 의 우선순위를 정하는 용도다.
 - 2026-05-01: `score_lt45` 해석은 `analysis_score < 4.5` 과열 진입 회피에 따른 손실 감소 hypothesis 로 동결한다. live strategy 가 아니며, 고정 파라미터 3개월 이상 OOS 와 shadow 검증 전에는 실매매 판단에 쓰지 않는다.
 - 2026-05-01: historical replay 속도 개선으로 minute bars/model scoring bulk fetch, `(market_date, symbol, bar_at)` index, prepared bar cursor, activity copy 제거, 날짜별 timing/progress metric 을 추가했다. 생성물인 `src/penny_stock_radar.egg-info/` 와 로컬 캐시/중복 `.gitkeep 2` 도 정리했다. 이번 변경은 성능 최적화/구조 분리이며 entry/exit/stop/sizing 의사결정 로직은 변경하지 않는다.
+- 2026-05-05: historical replay 추가 속도 개선으로 model scorer 를 run 단위로 재사용하고, ML/blend scoring 이 이미 로드한 replay bar cache 를 써서 날짜별 minute bar 중복 조회를 피하게 했다. `setup_state` 는 prepared series 의 prefix VWAP/HOD/opening-range 지표를 사용해 전 종목/전 bucket 진단 중 반복 과거 봉 스캔을 제거했다. `scripts/psradar`, `scripts/check_quality.sh`, macOS `.command` 진입점도 문서와 맞게 복구했다.
+- 2026-05-05: markdown 기본 읽기 범위를 줄였다. 새 컨텍스트는 `AGENTS.md`, `README.md`, `docs/STATUS.md`, `docs/STEP_PROGRESS_KO.md` 만 기본으로 읽고, 백테스트/운영/매매/live 문서는 작업 종류가 맞을 때만 추가로 읽는다. `archive/`, `sample_outputs/`, `automation/inbox/` markdown 은 기본 읽기 대상이 아니다.
+- 2026-05-05: 루트에 흩어져 있던 macOS `.command` 런처를 `launchers/macos/` 로 옮기고, README/운영 가이드/런처 문서/테스트/UI 안내 문구를 새 경로에 맞췄다. 루트는 핵심 문서, 설정, 패키지 메타 중심으로 유지한다.
 - 2026-05-01: `run-premkt-model-replay` 에 close 기준 R multiple 도달 후 stop 을 entry 가격으로 올리는 replay-only `--breakeven-stop-after-r` 옵션을 추가했다. 이 옵션은 +1R 이후 stop-out/giveback 감소 가설 검증용이며, L1 없는 minute-only 환경에서는 실전 stop 체결 보장으로 해석하지 않는다.
 - 2026-05-01: breakeven stop 결과는 giveback 은 줄였지만 stop 이후 같은 종목 반복 진입이 늘어 총손실이 커질 수 있음을 보여줬다. 이를 분리하기 위해 replay-only `--max-entries-per-symbol-per-day`, `--cooldown-after-stop-minutes` 옵션을 추가했다.
 - 2026-05-02: threshold/parameter ablation 을 계속 늘리지 않고 `setup_state` v1 진단 레이어를 추가했다. `SetupContextBuilder` 는 minute bar 로 VWAP/reclaim/HOD/ORH/pullback/volume/rank/liquidity feature 를 만들고, deterministic `AISetupJudgeV1` 은 taxonomy/action_bias JSON 판단을 기록한다. replay 는 `paper_setup_features.csv`, `paper_setup_state_kpis.csv`, `paper_setup_transition_matrix.csv`, `paper_add_trim_runner_diagnostics.csv` 를 남긴다.
