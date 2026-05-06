@@ -24,6 +24,7 @@ from ..db import (
     fetch_paper_trading_run_by_id,
 )
 from ..models import PaperOrder, PaperPosition, PaperTradingRun
+from .csv_utils import iter_non_comment_lines
 from .paper_bucket_policy import bucket_uses_predictor_weight, paper_bucket_policy
 from .paper_runtime import paper_market_date
 from .replay_grade_stamper import load_replay_grade
@@ -76,7 +77,7 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(_non_comment_lines(handle))
+        reader = csv.DictReader(iter_non_comment_lines(handle))
         return [dict(row) for row in reader]
 
 
@@ -84,19 +85,12 @@ def read_csv_header(path: Path) -> list[str]:
     if not path.exists() or path.stat().st_size == 0:
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(_non_comment_lines(handle))
+        reader = csv.DictReader(iter_non_comment_lines(handle))
         return list(reader.fieldnames or [])
 
 
 def read_replay_grade(export_dir: Path) -> dict[str, object] | None:
     return load_replay_grade(export_dir)
-
-
-def _non_comment_lines(handle):
-    for line in handle:
-        if line.lstrip().startswith("#"):
-            continue
-        yield line
 
 
 def archive_paper_performance_export(
@@ -1290,7 +1284,7 @@ class PaperReportingService:
         if not path.exists():
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
-            return [dict(row) for row in csv.DictReader(_non_comment_lines(handle))]
+            return [dict(row) for row in csv.DictReader(iter_non_comment_lines(handle))]
 
     def _group_trade_rows(self, trade_rows: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
         grouped: dict[str, list[dict[str, object]]] = {}

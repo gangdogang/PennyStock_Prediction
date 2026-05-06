@@ -19,6 +19,7 @@ from ..db import (
 )
 from ..models import MarketActivity, PaperPosition, PremktPrediction, WatchlistEntry
 from .activity_sanitizer import sanitize_activity_for_bucket
+from .csv_utils import iter_non_comment_lines
 from .fill_model import FillModel
 from .market_activity import MarketActivityScanner
 from .paper_runtime import (
@@ -2127,14 +2128,7 @@ def _read_csv(path: Path) -> list[dict[str, object]]:
     if not path.exists() or path.stat().st_size == 0:
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        return [dict(row) for row in csv.DictReader(_non_comment_lines(handle))]
-
-
-def _non_comment_lines(handle: Iterable[str]) -> Iterable[str]:
-    for line in handle:
-        if line.lstrip().startswith("#"):
-            continue
-        yield line
+        return [dict(row) for row in csv.DictReader(iter_non_comment_lines(handle))]
 
 
 def _utc_now_iso() -> str:
