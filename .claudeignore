@@ -1,0 +1,33 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Runtime DB & cache
+data/penny_stock_radar.sqlite3
+data/penny_stock_radar.sqlite3-shm
+data/penny_stock_radar.sqlite3-wal
+data/radar.sqlite3
+data/cache/
+data/db_backups/
+data/kis_master/
+data/replay/
+data/inbox/
+
+# Runtime logs & state
+automation/logs/
+automation/state/
+
+# Runtime outputs
+sample_outputs/
+
+# Archive (완료된 계획 문서)
+archive/
+
+# Git
+.git/
+
+# 환경/인증
+.env
+*.key
