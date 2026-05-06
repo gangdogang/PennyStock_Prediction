@@ -45,6 +45,7 @@ def test_initialize_database_creates_expected_tables(tmp_path: Path) -> None:
         "execution_orders",
         "execution_positions",
         "execution_accounts",
+        "setup_alerts",
     }
     assert tables & expected_tables, "Database should create at least one core Milestone 1 table."
     assert "universe" in tables
@@ -99,6 +100,9 @@ def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path
         }
         execution_account_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(execution_accounts)")
+        }
+        setup_alert_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(setup_alerts)")
         }
 
     assert {"bid_price", "ask_price", "data_age_seconds", "has_live_trade", "has_live_quote"} <= market_activity_columns
@@ -155,6 +159,19 @@ def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path
         "total_equity",
         "raw_payload",
     } <= execution_account_columns
+    assert {
+        "run_id",
+        "source",
+        "market_date",
+        "symbol",
+        "observed_at",
+        "setup_id",
+        "alert_state",
+        "data_grade",
+        "required_data_grade",
+        "blocked_reasons",
+        "payload",
+    } <= setup_alert_columns
 
 
 def test_pyramid_columns_backfill_defaults_and_migration_idempotency(tmp_path: Path) -> None:

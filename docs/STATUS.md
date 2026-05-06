@@ -26,6 +26,7 @@
 - `services/engine_rules/entry.py`, `exit.py`, `profit.py` 로 intraday 규칙이 분리됐고 multiday도 같은 exit/close 경계를 재사용한다.
 - `services/setups/` 는 `SetupRegistry` 와 `LegacyMomentumSetup` 을 제공한다. paper hot loop 는 기본값에서 registry 를 통해 legacy momentum setup 을 dispatch 하되 기존 `engine_rules/entry.py`, `exit.py`, `profit.py` 함수 본문은 그대로 호출한다. `PSR_USE_SETUP_REGISTRY=0` 으로 기존 직접 호출 path 로 되돌릴 수 있다.
 - `services/pyramid.py` 는 `PyramidPosition`, leg/schedule/add/trim/runner dataclass, legacy starter-only schedule, aggressive future schedule 정의를 제공한다. paper DB/order/reporting 은 `leg_index`, `setup_id`, `pyramid_state` 컬럼을 갖지만 기본 legacy run 은 `leg_index=0`, `setup_id='legacy_momentum'`, `pyramid_state=NULL` 로 기존 단일 포지션 동작을 유지한다. `PSR_USE_PYRAMID=0` 은 기존 직접 hot loop path 로 되돌린다.
+- Setup-first 전환의 첫 배선은 주문 로직이 아니라 `setup_alerts` diagnostic bus 로 둔다. v0 범위는 `AfternoonVwapReclaim`, `Day2MorningPanic`, `FirstGreenDayContinuation` taxonomy 와 setup feature CSV 기반 alert/export/persist 경로이며, 산출물은 setup backtest 또는 실매매 승인 근거가 아니다. CLI 는 `build-setup-alerts-from-features --features-csv <paper_setup_features.csv>` 이다.
 - DB 계층은 `db/connection.py`, `schema.py`, `paper.py`, `execution.py`, `historical.py`, `premkt.py` 중심 패키지로 분할됐고 기존 `from ..db import ...` import 경로는 유지된다.
 - CLI 는 `cli/__init__.py` 루트 앱 아래 `premkt.py`, `backtest.py`, `automation.py`, `paper.py`, `broker.py`와 보조 서브앱으로 분할됐고 기존 `psradar <cmd>` 명령 표면은 유지된다.
 - `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
@@ -56,6 +57,7 @@
 - `backfill-finra-otc-daily-list` CLI 는 FINRA OTC Daily List JSON/CSV 를 symbol change/name change/deleted/split/dividend/corporate action staging artifact 로 저장한다. `--write-database` 는 최소 `corporate_actions` inventory 에만 insert 하며, current-only rows 는 historical survivorship blocker 를 자동 해소하지 않는다.
 - `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약하고 shortfall 섹션을 자동 포함한다.
 - `audit-hf-1m-bars` CLI 는 외부 CryptoSpartan Hugging Face 1m OHLCV parquet 를 repo 로 복사하지 않고 Polars lazy scan 으로 schema, row/ticker/timestamp 범위, OHLC sanity, duplicate ticker/timestamp, ET session count, low-price row count, high-move day count, top ticker row count 를 `data/backtest_lab/audits/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 JSON/MD 로 감사할 수 있다. 경로는 `PSR_HF_STOCKS_1M_PATH`, `PSR_DATA_ROOT`, repo-local fallback 순서로 해석한다.
+- `segment-hf-candidate-days` CLI 는 같은 HF parquet 를 ticker-day 단위로 분해해 low-price universe, early volume momentum, afternoon runner, posthoc high-move label, low session coverage blocker, concentration gate 를 `data/backtest_lab/candidate_days/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 CSV/JSON/MD 로 남긴다. 산출물은 항상 `decision_grade=False`, `cost_grade=none` 이며 `PASS` 는 gross candidate-day coverage 통과만 의미한다.
 - `report-coverage-shortfall` CLI 는 Step 0 blocker 를 binary `BLOCKED` 가 아니라 minute bar 개월 수, cost-eligible overlap %, corporate action 개월 수의 부족분으로 정량화한다. 산출물은 `operational_planning_only_not_decision_grade` stamp 를 포함하며, vendor 비용은 사용자가 입력한 월 단가만 사용한다.
 - `audit-universe-tradability` CLI 는 replay/watchlist/scanner universe 의 listing exchange 를 PIT universe, Nasdaq Symbol Directory, 선택적 yfinance cache 순서로 확인해 KIS tradable/untradable/unknown 비율을 JSON/CSV/MD 로 산출한다. untradable+unknown 이 30% 이상이면 `universe_kis_untradable_pct_high` blocker 로 기록된다.
 - `run-benchmark-suite` CLI 와 `services/benchmark_suite.py` 는 strategy expectancy 를 cash, same-universe random entry, random time within day, top-gainer naive, volume-leader naive, opposite-side diagnostic 6개 benchmark 대비 incremental 로 비교할 entry-event/report 배선을 제공한다. 실제 execution 전 cost-eligible source policy 를 먼저 적용하며, BLOCKED 상태에서는 benchmark entry generation 도 거부한다.
@@ -82,6 +84,7 @@
 - stale/halt/trade-condition hard gate 는 live smoke 기준으로 다시 검증해야 한다.
 - `report_builder.py`, `ai_supervisor.py`, `providers/live_market.py` 는 여전히 단일 파일이 커서 변경 범위가 넓다.
 - `SetupRegistry` 는 현재 legacy momentum wrapper 만 포함한다. Pyramid state machine 인프라는 있으나 실제 add/trim/runner schedule 을 켜는 새 setup 은 아직 없다. 기존 score/predictor archive 정리는 후속 Step 으로 분리한다.
+- `setup_alerts` v0 는 setup 후보/차단 사유를 분해하는 diagnostic layer 다. 이 단계에서는 실제 setup-specific entry/exit/stop/add rule 을 paper engine 에 연결하지 않는다.
 - `premkt_historical_replay.py` 는 bulk load/cursor/scoring 분리 후에도 아직 큰 orchestration 파일이다. 후속 정리는 export/report aggregation, diagnostics writer, CLI-facing runner facade 순서로 작게 나눈다.
 - Streamlit UI cleanup v1 은 구조 분리와 첫 화면 정보 구조 보존이 목표이며, 디자인 polish 와 비즈니스 로직 변경은 후속 작업으로 둔다.
 - 큰 service 파일 cleanup 은 `report_builder.py` 를 1순위로 두고 facade/API 를 유지한 채 payload loading, markdown export, snapshot HTML renderer, HTML formatting helper 순서로 나눈다.
@@ -190,7 +193,7 @@
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
-- 즉시 순서는 `audit-pit-universe-reconstruction` 으로 exact PIT 가능 날짜와 diagnostic-only 날짜를 분리한 뒤, `run-falsification-audit` overnight run 으로 governance/data-bias-cost/null/stop-geometry/benchmark blocker 를 산출하고, 결과를 `PASS / FAIL / BLOCKED` 로 판정하는 것이다. `PASS` 전에는 setup_state, entry label, score cutoff, stop, sizing, add/trim tuning 을 하지 않는다.
+- 즉시 순서는 setup backtest 가 아니라 `setup_alerts` diagnostic bus / setup taxonomy v0 를 먼저 고정한 뒤, `audit-pit-universe-reconstruction` 으로 exact PIT 가능 날짜와 diagnostic-only 날짜를 분리하고, `run-falsification-audit` overnight run 으로 governance/data-bias-cost/null/stop-geometry/benchmark blocker 를 산출하는 것이다. `PASS` 전에는 setup_state, entry label, score cutoff, stop, sizing, add/trim tuning 을 하지 않는다.
 - Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
 - 장시간 historical replay/backtest 는 Windows 24시간 서버에서 실행하고, 맥북은 코드 수정과 짧은 smoke/quality gate 용도로 쓴다.
 - `k2` size amplification 과 winner add/scaling-in 은 entry/stop 구조가 음수 expectancy 를 벗어난 뒤에만 켠다. 현재는 손실을 키우는지 줄이는지 평가할 KPI 배선부터 먼저 만든다.

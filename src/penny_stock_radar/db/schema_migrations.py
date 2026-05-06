@@ -360,6 +360,44 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 ON corporate_actions(source, source_record_id)
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS setup_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    market_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    market_phase TEXT NOT NULL,
+                    setup_id TEXT NOT NULL,
+                    setup_family TEXT NOT NULL,
+                    alert_state TEXT NOT NULL,
+                    time_bucket TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    quality INTEGER NOT NULL,
+                    risk INTEGER NOT NULL,
+                    data_grade TEXT NOT NULL,
+                    required_data_grade TEXT NOT NULL,
+                    blocked_reasons TEXT NOT NULL DEFAULT '[]',
+                    reasons TEXT NOT NULL DEFAULT '[]',
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_setup_alerts_run_setup
+                ON setup_alerts(run_id, setup_id, alert_state, observed_at)
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_setup_alerts_symbol_date
+                ON setup_alerts(symbol, market_date, observed_at)
+                """
+            )
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

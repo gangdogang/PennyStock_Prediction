@@ -89,7 +89,11 @@
 - 2026-05-06: Spec 8 Benchmark Suite 코드 배선을 추가했다. `BenchmarkSuiteRunner` 는 6개 benchmark entry event 를 생성하되 cost-eligible source policy 가 BLOCKED 이면 benchmark generation 을 거부하고 `ReplayGrade(decision_grade=False)` report/CSV 를 남긴다. 새 테스트와 backtest CLI 회귀는 `.venv/bin/python -m pytest -q tests/test_benchmark_suite.py tests/test_cli_backtest.py` 기준 `19 passed`.
 - 2026-05-06: Spec 9 Multi-day Catalyst Replay scaffolding 을 추가했다. `run-multiday-catalyst-replay` 는 intraday paper engine 을 건드리지 않고 SEC filing/PIT universe/KIS tradability 기반 entry generator 와 multi-day exit policy 를 별도 서비스로 실행하며, `tests/golden/multiday_catalyst/` 에 별도 golden snapshot 을 둔다. 전체 테스트는 `.venv/bin/python -m pytest -q tests` 기준 `334 passed, 1 skipped`.
 - 2026-05-07: Hugging Face CryptoSpartan 1m bars read-only audit 를 추가했다. `audit-hf-1m-bars` 는 `PSR_HF_STOCKS_1M_PATH` / `PSR_DATA_ROOT` / repo-local fallback 순서로 parquet 경로를 찾고, Polars lazy scan 으로 gross OHLCV sanity/coverage 후보 지표를 JSON/MD 로 남긴다. 산출물은 `decision_grade=False`, `cost_grade=none` 으로 고정한다.
-- 다음 우선순위는 overnight falsification runbook 실행과 gate 판정이다. `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
+- 2026-05-07: Setup-first 전환은 setup backtest 가 아니라 `setup_alerts` diagnostic bus 와 setup taxonomy v0 부터 시작한다. v0 는 `AfternoonVwapReclaim`, `Day2MorningPanic`, `FirstGreenDayContinuation` 후보/blocked 사유를 분리하고, 기존 paper/replay 주문 로직은 변경하지 않는다.
+- 2026-05-07: `build-setup-alerts-from-features` CLI, `setup_alerts` DB table, CSV/JSON/summary export, setup taxonomy/classifier 테스트를 추가했다.
+- 2026-05-07: 데이터 다운로드 완료 즉시 실행할 수 있도록 `segment-hf-candidate-days` CLI 를 추가했다. HF 1m parquet 를 ticker-day 단위로 분해해 low-price universe, early volume momentum, afternoon runner, posthoc high-move label, coverage/concentration gate 를 산출하며, 결과는 계속 `decision_grade=False`, `cost_grade=none` 이다.
+- 같은 기준 전체 검증은 `.venv/bin/python -m pytest -q tests` 기준 `397 passed, 1 skipped`.
+- 다음 우선순위는 setup alert bus / taxonomy v0 를 고정한 뒤 overnight falsification runbook 실행과 gate 판정으로 돌아가는 것이다. `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.

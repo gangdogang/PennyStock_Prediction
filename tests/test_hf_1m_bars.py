@@ -14,6 +14,8 @@ from penny_stock_radar.config import (
     resolve_hf_stocks_1m_path,
 )
 from penny_stock_radar.services.hf_1m_bars import (
+    HfCandidateDayOptions,
+    HfCandidateDaySegmenter,
     Hf1mBarsAuditError,
     Hf1mBarsAuditOptions,
     Hf1mBarsAuditor,
@@ -185,6 +187,71 @@ def test_hf_1m_cli_writes_audit_artifacts(tmp_path: Path) -> None:
     export_dir = tmp_path / "audits" / "cli"
     assert (export_dir / "audit_summary.json").exists()
     assert (export_dir / "audit_summary.md").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
+def test_hf_candidate_day_segmenter_writes_candidate_days(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "tiny_hf_1m.parquet"
+    _write_tiny_parquet(parquet_path)
+
+    result = HfCandidateDaySegmenter().run(
+        HfCandidateDayOptions(
+            parquet_path=parquet_path,
+            output_root=tmp_path / "candidate_days",
+            run_id="fixture",
+            min_regular_rows=1,
+            min_early_dollar_volume=100,
+            min_early_move_pct=5,
+            min_afternoon_dollar_volume=100,
+            min_afternoon_move_pct=1,
+            min_daily_high_open_pct=10,
+            min_candidate_days=1,
+            min_active_months=1,
+            max_top_ticker_pct=100,
+            max_top10_ticker_pct=100,
+            max_top_month_pct=100,
+        )
+    )
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["metadata"]["decision_grade"] is False
+    assert summary["metadata"]["cost_grade"] == "none"
+    assert summary["candidate_day_gate"]["status"] == "PASS"
+    assert summary["candidate_day_count"] >= 1
+    assert summary["candidate_flag_counts"]["posthoc_high_move_label"] >= 1
+    csv_text = result.candidate_csv_path.read_text(encoding="utf-8")
+    assert "gross_ohlcv_only_missing_l1_news_float_halt_kis_tradability" in csv_text
+
+
+def test_hf_candidate_day_cli_writes_segmentation_artifacts(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "tiny_hf_1m.parquet"
+    _write_tiny_parquet(parquet_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "segment-hf-candidate-days",
+            "--parquet-path",
+            str(parquet_path),
+            "--output-root",
+            str(tmp_path / "candidate_days"),
+            "--run-id",
+            "cli",
+            "--min-regular-rows",
+            "1",
+            "--min-candidate-days",
+            "1",
+            "--min-active-months",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = tmp_path / "candidate_days" / "cli"
+    assert (export_dir / "candidate_days.csv").exists()
+    assert (export_dir / "candidate_day_summary.json").exists()
+    assert (export_dir / "candidate_day_summary.md").exists()
     assert "decision_grade=false" in result.output
     assert "cost_grade=none" in result.output
 

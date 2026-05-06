@@ -34,6 +34,36 @@ class Hf1mBarsAuditResult:
     summary: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class HfCandidateDayOptions:
+    parquet_path: Path | None = None
+    output_root: Path = Path("data/backtest_lab/candidate_days/hf_cryptospartan_alpaca_bars_1m")
+    run_id: str | None = None
+    min_price: float = 0.25
+    max_price: float = 10.0
+    min_regular_rows: int = 120
+    min_early_dollar_volume: float = 250_000.0
+    min_early_move_pct: float = 5.0
+    min_afternoon_dollar_volume: float = 250_000.0
+    min_afternoon_move_pct: float = 5.0
+    min_daily_high_open_pct: float = 20.0
+    min_candidate_days: int = 1000
+    min_active_months: int = 36
+    max_top_ticker_pct: float = 8.0
+    max_top10_ticker_pct: float = 35.0
+    max_top_month_pct: float = 20.0
+    top_n: int = 25
+
+
+@dataclass(frozen=True, slots=True)
+class HfCandidateDayResult:
+    export_dir: Path
+    candidate_csv_path: Path
+    summary_json_path: Path
+    summary_md_path: Path
+    summary: dict[str, Any]
+
+
 class Hf1mBarsAuditor:
     def run(self, options: Hf1mBarsAuditOptions) -> Hf1mBarsAuditResult:
         resolved = resolve_hf_stocks_1m_path(options.parquet_path)
@@ -99,6 +129,65 @@ class Hf1mBarsAuditor:
         )
 
 
+class HfCandidateDaySegmenter:
+    def run(self, options: HfCandidateDayOptions) -> HfCandidateDayResult:
+        resolved = resolve_hf_stocks_1m_path(options.parquet_path)
+        path = resolved.path
+        if not path.exists():
+            raise Hf1mBarsAuditError(
+                "HF 1m bars parquet not found: "
+                f"{path}. Set PSR_HF_STOCKS_1M_PATH to the parquet file, "
+                "or set PSR_DATA_ROOT to the external data root containing "
+                "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet."
+            )
+        pl = _load_polars()
+        lf = pl.scan_parquet(str(path))
+        schema = _collect_schema(lf)
+        mapping = _resolve_column_mapping(list(schema.keys()))
+        if mapping.get("volume") is None:
+            raise Hf1mBarsAuditError(
+                "HF candidate-day segmentation requires a volume column. "
+                f"Available columns: {', '.join(schema.keys())}"
+            )
+        auditable = _with_audit_columns(lf, schema, mapping, pl)
+        daily = _candidate_day_lazy_frame(auditable, pl, options)
+        candidate_rows = daily.filter(pl.col("gross_candidate_day") == 1)
+
+        run_id = options.run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        export_dir = _unique_export_dir(options.output_root / run_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        candidate_csv_path = export_dir / "candidate_days.csv"
+        summary_json_path = export_dir / "candidate_day_summary.json"
+        summary_md_path = export_dir / "candidate_day_summary.md"
+
+        candidate_df = _collect_lazy(
+            candidate_rows.sort(["market_date", "ticker"])
+        )
+        candidate_df.write_csv(candidate_csv_path)
+        summary = _candidate_day_summary(
+            candidate_df,
+            options=options,
+            run_id=run_id,
+            path=path,
+            resolved=resolved,
+            schema=schema,
+            mapping=mapping,
+            pl=pl,
+        )
+        summary_json_path.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=True, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        summary_md_path.write_text(_candidate_day_markdown(summary), encoding="utf-8")
+        return HfCandidateDayResult(
+            export_dir=export_dir,
+            candidate_csv_path=candidate_csv_path,
+            summary_json_path=summary_json_path,
+            summary_md_path=summary_md_path,
+            summary=summary,
+        )
+
+
 def _load_polars():
     try:
         return importlib.import_module("polars")
@@ -133,14 +222,15 @@ def _resolve_column_mapping(columns: list[str]) -> dict[str, str]:
         "high": _first_column(lower_to_original, "high", "high_price", "h"),
         "low": _first_column(lower_to_original, "low", "low_price", "l"),
         "close": _first_column(lower_to_original, "close", "close_price", "c"),
+        "volume": _first_column(lower_to_original, "volume", "vol", "v"),
     }
-    missing = [name for name, column in mapping.items() if column is None]
+    missing = [name for name, column in mapping.items() if column is None and name != "volume"]
     if missing:
         raise Hf1mBarsAuditError(
             "HF 1m bars parquet is missing required columns: "
             f"{', '.join(missing)}. Available columns: {', '.join(columns)}"
         )
-    return {name: str(column) for name, column in mapping.items()}
+    return {name: str(column) for name, column in mapping.items() if column is not None}
 
 
 def _first_column(lower_to_original: dict[str, str], *candidates: str) -> str | None:
@@ -154,22 +244,23 @@ def _with_audit_columns(lf, schema: dict[str, Any], mapping: dict[str, str], pl)
     ts_col = mapping["timestamp"]
     ts_expr = _timestamp_expr(pl, ts_col, schema.get(ts_col))
     et_ts = ts_expr.dt.convert_time_zone(EASTERN_TZ)
-    return lf.with_columns(
-        [
-            pl.col(mapping["ticker"]).cast(pl.Utf8).str.to_uppercase().alias("__psr_ticker"),
-            ts_expr.alias("__psr_ts"),
-            et_ts.alias("__psr_et_ts"),
-            et_ts.dt.date().alias("__psr_et_date"),
-            (
-                et_ts.dt.hour().cast(pl.Int32) * 60
-                + et_ts.dt.minute().cast(pl.Int32)
-            ).alias("__psr_et_minute"),
-            pl.col(mapping["open"]).cast(pl.Float64).alias("__psr_open"),
-            pl.col(mapping["high"]).cast(pl.Float64).alias("__psr_high"),
-            pl.col(mapping["low"]).cast(pl.Float64).alias("__psr_low"),
-            pl.col(mapping["close"]).cast(pl.Float64).alias("__psr_close"),
-        ]
-    )
+    expressions = [
+        pl.col(mapping["ticker"]).cast(pl.Utf8).str.to_uppercase().alias("__psr_ticker"),
+        ts_expr.alias("__psr_ts"),
+        et_ts.alias("__psr_et_ts"),
+        et_ts.dt.date().alias("__psr_et_date"),
+        (
+            et_ts.dt.hour().cast(pl.Int32) * 60
+            + et_ts.dt.minute().cast(pl.Int32)
+        ).alias("__psr_et_minute"),
+        pl.col(mapping["open"]).cast(pl.Float64).alias("__psr_open"),
+        pl.col(mapping["high"]).cast(pl.Float64).alias("__psr_high"),
+        pl.col(mapping["low"]).cast(pl.Float64).alias("__psr_low"),
+        pl.col(mapping["close"]).cast(pl.Float64).alias("__psr_close"),
+    ]
+    if "volume" in mapping:
+        expressions.append(pl.col(mapping["volume"]).cast(pl.Float64).alias("__psr_volume"))
+    return lf.with_columns(expressions)
 
 
 def _timestamp_expr(pl, column: str, dtype: Any):
@@ -324,6 +415,315 @@ def _single_int(df, column: str) -> int:
     return int(value or 0)
 
 
+def _candidate_day_lazy_frame(auditable, pl, options: HfCandidateDayOptions):
+    minute = pl.col("__psr_et_minute")
+    regular = minute.is_between(570, 959, closed="both")
+    premarket = minute.is_between(240, 569, closed="both")
+    early = minute.is_between(570, 630, closed="both")
+    afternoon = minute.is_between(840, 930, closed="both")
+    afterhours = minute.is_between(960, 1199, closed="both")
+    volume = pl.col("__psr_volume").fill_null(0.0)
+    dollar_volume = (pl.col("__psr_close") * volume).fill_null(0.0)
+    o = pl.col("__psr_open")
+    h = pl.col("__psr_high")
+    l = pl.col("__psr_low")
+    c = pl.col("__psr_close")
+    ohlc_bad = (
+        o.is_null()
+        | h.is_null()
+        | l.is_null()
+        | c.is_null()
+        | (o <= 0)
+        | (h <= 0)
+        | (l <= 0)
+        | (c <= 0)
+        | (h < l)
+        | (h < o)
+        | (h < c)
+        | (l > o)
+        | (l > c)
+    ).fill_null(True)
+    daily = (
+        auditable.with_columns(dollar_volume.alias("__psr_dollar_volume"))
+        .group_by(["__psr_ticker", "__psr_et_date"])
+        .agg(
+            [
+                pl.len().alias("row_count"),
+                premarket.cast(pl.Int64).sum().alias("premarket_row_count"),
+                regular.cast(pl.Int64).sum().alias("regular_row_count"),
+                afterhours.cast(pl.Int64).sum().alias("afterhours_row_count"),
+                ohlc_bad.cast(pl.Int64).sum().alias("ohlc_sanity_failure_count"),
+                pl.col("__psr_open")
+                .filter(regular)
+                .sort_by(pl.col("__psr_ts").filter(regular))
+                .first()
+                .alias("regular_open_price"),
+                pl.col("__psr_close")
+                .filter(regular)
+                .sort_by(pl.col("__psr_ts").filter(regular))
+                .last()
+                .alias("regular_close_price"),
+                pl.col("__psr_high").filter(regular).max().alias("regular_high_price"),
+                pl.col("__psr_low").filter(regular).min().alias("regular_low_price"),
+                pl.col("__psr_high").max().alias("full_day_high_price"),
+                pl.col("__psr_low").min().alias("full_day_low_price"),
+                pl.col("__psr_volume").sum().alias("full_day_volume"),
+                pl.col("__psr_dollar_volume").sum().alias("full_day_dollar_volume"),
+                pl.col("__psr_high").filter(early).max().alias("early_high_price"),
+                pl.col("__psr_close")
+                .filter(early)
+                .sort_by(pl.col("__psr_ts").filter(early))
+                .last()
+                .alias("early_close_price"),
+                pl.col("__psr_volume").filter(early).sum().alias("early_volume"),
+                pl.col("__psr_dollar_volume").filter(early).sum().alias("early_dollar_volume"),
+                pl.col("__psr_close")
+                .filter(afternoon)
+                .sort_by(pl.col("__psr_ts").filter(afternoon))
+                .first()
+                .alias("afternoon_start_price"),
+                pl.col("__psr_high").filter(afternoon).max().alias("afternoon_high_price"),
+                pl.col("__psr_volume").filter(afternoon).sum().alias("afternoon_volume"),
+                pl.col("__psr_dollar_volume").filter(afternoon).sum().alias("afternoon_dollar_volume"),
+            ]
+        )
+        .rename({"__psr_ticker": "ticker", "__psr_et_date": "market_date"})
+    )
+    daily = daily.with_columns(
+        [
+            pl.col("market_date").dt.strftime("%Y-%m").alias("market_month"),
+            (((pl.col("early_high_price") / pl.col("regular_open_price")) - 1.0) * 100.0)
+            .fill_null(0.0)
+            .alias("early_high_from_open_pct"),
+            (((pl.col("afternoon_high_price") / pl.col("afternoon_start_price")) - 1.0) * 100.0)
+            .fill_null(0.0)
+            .alias("afternoon_high_from_start_pct"),
+            (((pl.col("full_day_high_price") / pl.col("regular_open_price")) - 1.0) * 100.0)
+            .fill_null(0.0)
+            .alias("full_day_high_from_open_pct"),
+        ]
+    )
+    low_price = pl.col("regular_open_price").is_between(
+        options.min_price,
+        options.max_price,
+        closed="both",
+    )
+    daily = daily.with_columns(
+        [
+            low_price.fill_null(False).cast(pl.Int64).alias("low_price_universe"),
+            (
+                low_price
+                & (pl.col("regular_row_count") >= options.min_regular_rows)
+                & (pl.col("early_dollar_volume") >= options.min_early_dollar_volume)
+                & (pl.col("early_high_from_open_pct") >= options.min_early_move_pct)
+            )
+            .fill_null(False)
+            .cast(pl.Int64)
+            .alias("early_volume_momentum_candidate"),
+            (
+                low_price
+                & (pl.col("regular_row_count") >= options.min_regular_rows)
+                & (pl.col("afternoon_dollar_volume") >= options.min_afternoon_dollar_volume)
+                & (pl.col("afternoon_high_from_start_pct") >= options.min_afternoon_move_pct)
+            )
+            .fill_null(False)
+            .cast(pl.Int64)
+            .alias("afternoon_runner_candidate"),
+            (
+                low_price
+                & (pl.col("full_day_high_from_open_pct") >= options.min_daily_high_open_pct)
+            )
+            .fill_null(False)
+            .cast(pl.Int64)
+            .alias("posthoc_high_move_label"),
+            (pl.col("regular_row_count") < options.min_regular_rows)
+            .fill_null(True)
+            .cast(pl.Int64)
+            .alias("blocked_low_regular_session_coverage"),
+        ]
+    )
+    return daily.with_columns(
+        [
+            (
+                (pl.col("early_volume_momentum_candidate") == 1)
+                | (pl.col("afternoon_runner_candidate") == 1)
+                | (pl.col("posthoc_high_move_label") == 1)
+            )
+            .cast(pl.Int64)
+            .alias("gross_candidate_day"),
+            pl.lit(
+                "gross_ohlcv_only_missing_l1_news_float_halt_kis_tradability"
+            ).alias("blocked_context_reasons"),
+            pl.lit(False).alias("decision_grade"),
+            pl.lit("none").alias("cost_grade"),
+        ]
+    )
+
+
+def _candidate_day_summary(
+    candidate_df,
+    *,
+    options: HfCandidateDayOptions,
+    run_id: str,
+    path: Path,
+    resolved: ResolvedDataPath,
+    schema: dict[str, Any],
+    mapping: dict[str, str],
+    pl,
+) -> dict[str, Any]:
+    candidate_count = int(candidate_df.height)
+    active_months = _df_n_unique(candidate_df, "market_month")
+    early_count = _df_sum_int(candidate_df, "early_volume_momentum_candidate")
+    afternoon_count = _df_sum_int(candidate_df, "afternoon_runner_candidate")
+    high_move_count = _df_sum_int(candidate_df, "posthoc_high_move_label")
+    low_coverage_count = _df_sum_int(candidate_df, "blocked_low_regular_session_coverage")
+    top_tickers = _top_counts(candidate_df, pl, "ticker", total=candidate_count, top_n=options.top_n)
+    top_months = _top_counts(candidate_df, pl, "market_month", total=candidate_count, top_n=options.top_n)
+    top1_ticker_pct = float(top_tickers[0]["pct_of_candidates"]) if top_tickers else 0.0
+    top10_ticker_pct = round(sum(float(row["pct_of_candidates"]) for row in top_tickers[:10]), 6)
+    top_month_pct = float(top_months[0]["pct_of_candidates"]) if top_months else 0.0
+    gate_status, gate_reasons = _candidate_day_gate(
+        candidate_count=candidate_count,
+        active_months=active_months,
+        top1_ticker_pct=top1_ticker_pct,
+        top10_ticker_pct=top10_ticker_pct,
+        top_month_pct=top_month_pct,
+        options=options,
+    )
+    stat = path.stat()
+    return {
+        "run_id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": {
+            "dataset": DATASET_NAME,
+            "scope": "hf_1m_candidate_day_segmentation_gross_only",
+            "decision_grade": False,
+            "cost_grade": "none",
+            "cost_grade_reason": "Candidate days are derived from 1m OHLCV only; no bid/ask, NBBO, L2, news, float, halt, or KIS tradability evidence.",
+            "pass_meaning": "PASS only means there are enough gross candidate days to continue falsification work. It does not approve setup backtests or live trading.",
+        },
+        "path_resolution": _path_resolution_payload(resolved),
+        "file": {
+            "path": str(path),
+            "exists": True,
+            "size_bytes": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        },
+        "schema": {
+            "columns": [{"name": name, "dtype": str(dtype)} for name, dtype in schema.items()],
+            "column_mapping": mapping,
+        },
+        "thresholds": {
+            "min_price": options.min_price,
+            "max_price": options.max_price,
+            "min_regular_rows": options.min_regular_rows,
+            "min_early_dollar_volume": options.min_early_dollar_volume,
+            "min_early_move_pct": options.min_early_move_pct,
+            "min_afternoon_dollar_volume": options.min_afternoon_dollar_volume,
+            "min_afternoon_move_pct": options.min_afternoon_move_pct,
+            "min_daily_high_open_pct": options.min_daily_high_open_pct,
+            "min_candidate_days": options.min_candidate_days,
+            "min_active_months": options.min_active_months,
+            "max_top_ticker_pct": options.max_top_ticker_pct,
+            "max_top10_ticker_pct": options.max_top10_ticker_pct,
+            "max_top_month_pct": options.max_top_month_pct,
+        },
+        "candidate_day_count": candidate_count,
+        "active_candidate_month_count": active_months,
+        "candidate_flag_counts": {
+            "early_volume_momentum_candidate": early_count,
+            "afternoon_runner_candidate": afternoon_count,
+            "posthoc_high_move_label": high_move_count,
+            "blocked_low_regular_session_coverage": low_coverage_count,
+        },
+        "concentration": {
+            "top1_ticker_pct": top1_ticker_pct,
+            "top10_ticker_pct": top10_ticker_pct,
+            "top_month_pct": top_month_pct,
+            "top_tickers": top_tickers,
+            "top_months": top_months,
+        },
+        "candidate_day_gate": {
+            "status": gate_status,
+            "reasons": gate_reasons,
+        },
+    }
+
+
+def _candidate_day_gate(
+    *,
+    candidate_count: int,
+    active_months: int,
+    top1_ticker_pct: float,
+    top10_ticker_pct: float,
+    top_month_pct: float,
+    options: HfCandidateDayOptions,
+) -> tuple[str, list[str]]:
+    blockers: list[str] = []
+    failures: list[str] = []
+    if candidate_count < options.min_candidate_days:
+        blockers.append(
+            f"candidate_day_count_lt_{options.min_candidate_days}: {candidate_count}"
+        )
+    if active_months < options.min_active_months:
+        blockers.append(
+            f"active_candidate_month_count_lt_{options.min_active_months}: {active_months}"
+        )
+    if top1_ticker_pct > options.max_top_ticker_pct:
+        failures.append(
+            f"top1_ticker_pct_gt_{options.max_top_ticker_pct}: {top1_ticker_pct}"
+        )
+    if top10_ticker_pct > options.max_top10_ticker_pct:
+        failures.append(
+            f"top10_ticker_pct_gt_{options.max_top10_ticker_pct}: {top10_ticker_pct}"
+        )
+    if top_month_pct > options.max_top_month_pct:
+        failures.append(
+            f"top_month_pct_gt_{options.max_top_month_pct}: {top_month_pct}"
+        )
+    if failures:
+        return "FAIL", failures + blockers
+    if blockers:
+        return "BLOCKED", blockers
+    return "PASS", ["gross_candidate_day_segmentation_passed_minimum_coverage_checks"]
+
+
+def _top_counts(df, pl, column: str, *, total: int, top_n: int) -> list[dict[str, Any]]:
+    if total <= 0 or column not in df.columns:
+        return []
+    top = (
+        df.group_by(column)
+        .agg(pl.len().alias("candidate_day_count"))
+        .sort(["candidate_day_count", column], descending=[True, False])
+        .head(top_n)
+        .with_columns(
+            ((pl.col("candidate_day_count") / float(total)) * 100.0)
+            .round(6)
+            .alias("pct_of_candidates")
+        )
+    )
+    rows = top.to_dicts()
+    return [{str(column): str(row[column]), **{k: v for k, v in row.items() if k != column}} for row in rows]
+
+
+def _df_sum_int(df, column: str) -> int:
+    if df.height == 0 or column not in df.columns:
+        return 0
+    value = df.select(pl_col_sum(column)).to_dicts()[0].get(column)
+    return int(value or 0)
+
+
+def pl_col_sum(column: str):
+    pl = _load_polars()
+    return pl.col(column).sum().alias(column)
+
+
+def _df_n_unique(df, column: str) -> int:
+    if df.height == 0 or column not in df.columns:
+        return 0
+    return int(df.select(_load_polars().col(column).n_unique().alias("n")).to_dicts()[0]["n"] or 0)
+
+
 def _path_resolution_payload(resolved: ResolvedDataPath) -> dict[str, str | None]:
     return {
         "source": resolved.source,
@@ -374,6 +774,60 @@ def _markdown_summary(summary: dict[str, Any]) -> str:
         "- This dataset is gross OHLCV falsification data only.",
         "- It does not provide cost-grade execution evidence.",
     ]
+    return "\n".join(lines) + "\n"
+
+
+def _candidate_day_markdown(summary: dict[str, Any]) -> str:
+    metadata = summary.get("metadata", {})
+    gate = summary.get("candidate_day_gate", {})
+    flags = summary.get("candidate_flag_counts", {})
+    concentration = summary.get("concentration", {})
+    thresholds = summary.get("thresholds", {})
+    lines = [
+        "# HF Candidate-Day Segmentation",
+        "",
+        f"- Dataset: `{metadata.get('dataset')}`",
+        f"- Scope: `{metadata.get('scope')}`",
+        f"- Decision grade: `{metadata.get('decision_grade')}`",
+        f"- Cost grade: `{metadata.get('cost_grade')}`",
+        f"- Candidate-day gate: `{gate.get('status')}`",
+        f"- Candidate days: {summary.get('candidate_day_count', 0)}",
+        f"- Active candidate months: {summary.get('active_candidate_month_count', 0)}",
+        "",
+        "## Flag Counts",
+        "",
+        f"- Early volume momentum: {flags.get('early_volume_momentum_candidate', 0)}",
+        f"- Afternoon runner: {flags.get('afternoon_runner_candidate', 0)}",
+        f"- Posthoc high-move label: {flags.get('posthoc_high_move_label', 0)}",
+        f"- Low regular-session coverage: {flags.get('blocked_low_regular_session_coverage', 0)}",
+        "",
+        "## Concentration",
+        "",
+        f"- Top 1 ticker %: {concentration.get('top1_ticker_pct', 0)}",
+        f"- Top 10 ticker %: {concentration.get('top10_ticker_pct', 0)}",
+        f"- Top month %: {concentration.get('top_month_pct', 0)}",
+        "",
+        "## Thresholds",
+        "",
+        f"- Price: {thresholds.get('min_price')} to {thresholds.get('max_price')}",
+        f"- Min regular rows: {thresholds.get('min_regular_rows')}",
+        f"- Min candidate days: {thresholds.get('min_candidate_days')}",
+        f"- Min active months: {thresholds.get('min_active_months')}",
+        "",
+        "## Gate Reasons",
+        "",
+    ]
+    for reason in gate.get("reasons", []):
+        lines.append(f"- {reason}")
+    lines.extend(
+        [
+            "",
+            "## Caveat",
+            "",
+            "- PASS only means gross OHLCV candidate-day coverage is sufficient for falsification work.",
+            "- These rows are not setup backtest results and do not approve live execution.",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

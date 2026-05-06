@@ -154,7 +154,29 @@ Hugging Face CryptoSpartan 1m bars audit:
 PSR_DATA_ROOT=/path/to/Penny_Stock_Data ./scripts/psradar audit-hf-1m-bars --run-id hf_$(date +%Y%m%d)
 ```
 
+Windows:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 audit-hf-1m-bars --run-id hf_20260507
+```
+
 이 감사는 gross OHLCV falsification data 용도만 지원하며 산출물은 `decision_grade=false`, `cost_grade=none` 이다. parquet 는 repo 로 복사하지 않는다.
+
+Hugging Face candidate-day segmentation:
+
+```bash
+PSR_DATA_ROOT=/path/to/Penny_Stock_Data ./scripts/psradar segment-hf-candidate-days --run-id hf_candidates_$(date +%Y%m%d)
+```
+
+Windows:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 segment-hf-candidate-days --run-id hf_candidates_20260507
+```
+
+이 명령은 1분봉 parquet 를 ticker-day 단위로 분해해 `candidate_days.csv` 와 gate summary 를 만든다. `PASS` 는 gross candidate-day coverage 가 충분하다는 뜻일 뿐 setup backtest, cost/fill, live 가능 판정이 아니다.
 
 Coverage shortfall planning:
 
@@ -192,6 +214,14 @@ Replay entry-signal audit:
 ```bash
 ./scripts/psradar audit-premkt-entry-signal --run-dir data/replay_outputs/no_conditional_june --csv-dir data/replay_outputs/entry_signal_audit
 ```
+
+Setup alert diagnostic export:
+
+```bash
+./scripts/psradar build-setup-alerts-from-features --features-csv data/backtest_lab/replays/<run_id>/paper_setup_features.csv
+```
+
+이 명령은 `AfternoonVwapReclaim`, `Day2MorningPanic`, `FirstGreenDayContinuation` 후보/blocked 사유를 setup alert 로 분리한다. 주문을 내거나 setup backtest 를 수행하지 않으며 산출물은 `decision_grade=false`, `cost_grade=none` 이다.
 
 Falsification-first overnight audit:
 

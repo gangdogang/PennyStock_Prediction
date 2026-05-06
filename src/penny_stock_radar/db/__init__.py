@@ -63,9 +63,11 @@ from .schema import init_database, initialize_database
 from .signals import (
     fetch_latest_replay_report,
     fetch_latest_session_decisions,
+    fetch_latest_setup_alerts,
     fetch_latest_social_signals,
     insert_replay_report,
     insert_session_decisions,
+    insert_setup_alerts,
     insert_social_signals,
 )
 from .universe import (
@@ -113,6 +115,7 @@ __all__ = [
     "fetch_latest_reportable_scan_id",
     "fetch_latest_scan_id",
     "fetch_latest_session_decisions",
+    "fetch_latest_setup_alerts",
     "fetch_latest_social_signals",
     "fetch_latest_watchlist",
     "fetch_paper_orders",
@@ -140,6 +143,7 @@ __all__ = [
     "insert_premkt_predictions",
     "insert_replay_report",
     "insert_session_decisions",
+    "insert_setup_alerts",
     "insert_social_signals",
     "insert_universe_candidates",
     "insert_watchlist",

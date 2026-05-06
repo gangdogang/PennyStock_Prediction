@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Iterable
 
 from ..models import ReplayEvaluation, SessionDecision, SocialSignal
 from .connection import _resolve_scan_id, get_connection
@@ -218,4 +219,99 @@ def fetch_latest_social_signals(
             LIMIT ?
             """,
             (target_scan_id, limit),
+        ).fetchall()
+
+
+def insert_setup_alerts(
+    database_path: Path,
+    alerts: Iterable[object],
+    *,
+    replace_run: bool = False,
+) -> None:
+    rows = [alert.to_row() for alert in alerts if hasattr(alert, "to_row")]
+    if not rows:
+        return
+    run_ids = sorted({str(row["run_id"]) for row in rows})
+    with get_connection(database_path) as connection:
+        if replace_run:
+            connection.executemany(
+                "DELETE FROM setup_alerts WHERE run_id = ?",
+                [(run_id,) for run_id in run_ids],
+            )
+        connection.executemany(
+            """
+            INSERT INTO setup_alerts (
+                run_id,
+                source,
+                market_date,
+                symbol,
+                observed_at,
+                market_phase,
+                setup_id,
+                setup_family,
+                alert_state,
+                time_bucket,
+                confidence,
+                quality,
+                risk,
+                data_grade,
+                required_data_grade,
+                blocked_reasons,
+                reasons,
+                payload,
+                created_at
+            )
+            VALUES (
+                :run_id,
+                :source,
+                :market_date,
+                :symbol,
+                :observed_at,
+                :market_phase,
+                :setup_id,
+                :setup_family,
+                :alert_state,
+                :time_bucket,
+                :confidence,
+                :quality,
+                :risk,
+                :data_grade,
+                :required_data_grade,
+                :blocked_reasons,
+                :reasons,
+                :payload,
+                :created_at
+            )
+            """,
+            rows,
+        )
+
+
+def fetch_latest_setup_alerts(
+    database_path: Path,
+    *,
+    run_id: str | None = None,
+    setup_id: str | None = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    filters: list[str] = []
+    params: list[object] = []
+    if run_id is not None:
+        filters.append("run_id = ?")
+        params.append(run_id)
+    if setup_id is not None:
+        filters.append("setup_id = ?")
+        params.append(setup_id)
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    params.append(limit)
+    with get_connection(database_path) as connection:
+        return connection.execute(
+            f"""
+            SELECT *
+            FROM setup_alerts
+            {where_clause}
+            ORDER BY observed_at DESC, symbol ASC, setup_id ASC
+            LIMIT ?
+            """,
+            params,
         ).fetchall()

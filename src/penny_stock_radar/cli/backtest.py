@@ -19,6 +19,7 @@ from ..db import (
     fetch_latest_premkt_predictions,
     fetch_latest_watchlist,
     get_connection,
+    insert_setup_alerts,
 )
 from ..services.backtest_data import BacktestDataManager
 from ..services.benchmark_suite import BenchmarkSuiteOptions, BenchmarkSuiteRunner
@@ -60,6 +61,11 @@ from ..services.premkt_entry_signal_audit import (
     DEFAULT_SIGNAL_SETUP_STATES,
     PremktEntrySignalAuditor,
 )
+from ..services.setup_alerts import (
+    DEFAULT_SETUP_ALERT_ROOT,
+    SetupAlertBus,
+    write_setup_alert_exports,
+)
 from ..services.market_activity import MarketActivityScanner
 from ..services.falsification_research import (
     FalsificationAuditOptions,
@@ -71,6 +77,8 @@ from ..services.finra_otc_daily_list import (
 )
 from ..services.hf_1m_bars import (
     DEFAULT_AUDIT_ROOT as DEFAULT_HF_1M_BARS_AUDIT_ROOT,
+    HfCandidateDayOptions,
+    HfCandidateDaySegmenter,
     Hf1mBarsAuditError,
     Hf1mBarsAuditOptions,
     Hf1mBarsAuditor,
@@ -775,6 +783,59 @@ def audit_premkt_entry_signal(
         console.print(f"- {warning}")
 
 
+@app.command("build-setup-alerts-from-features")
+def build_setup_alerts_from_features(
+    features_csv: Path = typer.Option(
+        ...,
+        "--features-csv",
+        help="Replay paper_setup_features.csv path to convert into setup diagnostic alerts.",
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_SETUP_ALERT_ROOT,
+        "--output-root",
+        help="Directory where setup alert exports are written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional alert run id. Defaults to the feature CSV run_id or timestamp.",
+    ),
+    database_path: Path | None = typer.Option(
+        None,
+        "--database-path",
+        help="Optional SQLite DB path. When provided, alerts are persisted into setup_alerts.",
+    ),
+    replace_run: bool = typer.Option(
+        False,
+        "--replace-run",
+        help="Delete existing setup_alerts rows for the same run id before inserting.",
+    ),
+) -> None:
+    """Build setup-first diagnostic alerts from replay setup feature rows."""
+    try:
+        alerts = SetupAlertBus().build_from_feature_csv(features_csv, run_id=run_id)
+        result = write_setup_alert_exports(alerts, output_root=output_root, run_id=run_id)
+        if database_path is not None:
+            insert_setup_alerts(database_path, result.alerts, replace_run=replace_run)
+    except OSError as exc:
+        console.print(f"Failed to build setup alerts: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    summary = result.summary
+    console.print(f"Setup alerts wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"CSV: [bold]{result.csv_path}[/bold]")
+    console.print(f"JSON: [bold]{result.json_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(
+        "Alert counts: "
+        f"total={summary.get('alert_count', 0)} "
+        f"states={summary.get('alert_state_counts', {})}"
+    )
+    console.print(
+        "These alerts are diagnostic only: decision_grade=false, cost_grade=none."
+    )
+
+
 @app.command("backfill-alpaca-iex-quotes")
 def backfill_alpaca_iex_quotes(
     strategy_run_dir: Path | None = typer.Option(
@@ -1457,6 +1518,84 @@ def audit_hf_1m_bars(
         f"duplicates={summary.get('duplicate_ticker_timestamp_count', 0)} "
         "decision_grade=false cost_grade=none"
     )
+
+
+@app.command("segment-hf-candidate-days")
+def segment_hf_candidate_days(
+    parquet_path: Path | None = typer.Option(
+        None,
+        "--parquet-path",
+        help=(
+            "Optional parquet path. Otherwise resolves PSR_HF_STOCKS_1M_PATH, "
+            "then PSR_DATA_ROOT, then the repo-local fallback."
+        ),
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/candidate_days/hf_cryptospartan_alpaca_bars_1m"),
+        "--output-root",
+        help="Directory where HF candidate-day segmentation output is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    min_price: float = typer.Option(0.25, "--min-price", help="Minimum regular open price."),
+    max_price: float = typer.Option(10.0, "--max-price", help="Maximum regular open price."),
+    min_regular_rows: int = typer.Option(
+        120,
+        "--min-regular-rows",
+        min=1,
+        help="Minimum regular-session 1m bars required for a usable ticker-day.",
+    ),
+    min_candidate_days: int = typer.Option(
+        1000,
+        "--min-candidate-days",
+        min=1,
+        help="Minimum gross candidate days required for segmentation PASS.",
+    ),
+    min_active_months: int = typer.Option(
+        36,
+        "--min-active-months",
+        min=1,
+        help="Minimum active candidate months required for segmentation PASS.",
+    ),
+) -> None:
+    """Segment HF 1m bars into gross ticker-day candidates before setup backtests."""
+    try:
+        result = HfCandidateDaySegmenter().run(
+            HfCandidateDayOptions(
+                parquet_path=parquet_path,
+                output_root=output_root,
+                run_id=run_id,
+                min_price=min_price,
+                max_price=max_price,
+                min_regular_rows=min_regular_rows,
+                min_candidate_days=min_candidate_days,
+                min_active_months=min_active_months,
+            )
+        )
+    except Hf1mBarsAuditError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.summary.get("candidate_day_gate", {})
+    console.print(f"HF candidate-day segmentation wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"CSV: [bold]{result.candidate_csv_path}[/bold]")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_days={result.summary.get('candidate_day_count', 0)} "
+        f"active_months={result.summary.get('active_candidate_month_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
 
 
 @app.command("report-coverage-shortfall")
