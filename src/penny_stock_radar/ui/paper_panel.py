@@ -25,6 +25,7 @@ def render_paper_trading_panel(
     regime_split: pd.DataFrame,
     predictor_kpis: pd.DataFrame,
     execution_quality: pd.DataFrame,
+    replay_grade: dict[str, Any] | None = None,
 ) -> None:
     if run_frame.empty:
         st.info("모의투자 기록이 없습니다. `psradar run-paper-trading` 또는 `psradar paper-trader`를 먼저 실행하세요.")
@@ -63,6 +64,15 @@ def render_paper_trading_panel(
     notes = [_paper_note_text(item) for item in coerce_reason_list(row.get("notes"))]
     if notes:
         st.info("\n\n".join(notes[:4]))
+
+    if replay_grade:
+        decision_grade = bool(replay_grade.get("decision_grade"))
+        reason = str(replay_grade.get("grade_reason") or "-")
+        message = f"Replay decision grade: {decision_grade} · {reason}"
+        if decision_grade:
+            st.info(message)
+        else:
+            st.warning(message)
 
     if not positions.empty and "strategy_bucket" in positions.columns:
         bucket_frame = positions.copy()

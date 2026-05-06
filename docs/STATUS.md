@@ -15,6 +15,9 @@
 - live scan/provider 경로는 `automation/logs/live_metrics.jsonl` 기준 JSONL sidecar 로 `quote_age`, `spread`, provider request reject 신호, scan summary 를 남긴다.
 - `report-backtest-coverage` 는 coverage report latest JSON 을 `automation/state/backtest_coverage/` 기준으로 정기 산출할 수 있다.
 - `capture-kis-l1-window` 는 같은 심볼 집합으로 반복 L1 snapshot 적재를 수행한 뒤 latest L1 coverage report/gate 상태를 갱신할 수 있다.
+- `capture-kis-l1-window` 는 KIS WebSocket 동시 구독 한계 대응용 rotation manager 를 사용할 수 있다. 기본값은 resolved universe 전체를 tier1 continuous 로 두어 기존 non-rotation 경로를 유지하고, `--rotation-tier1-size 30 --rotation-tier2-concurrent 10` 같은 설정으로 tier2 rotation 을 켠다.
+- `historical_l1_quotes.subscription_continuous` 는 L1 row 가 continuous subscription 구간에서 온 것인지 기록한다. Cost source policy 는 cost-eligible source 라도 `subscription_continuous=True` row 만 비용 근거로 세고, tier2 rotation row 는 diagnostic-only 로 취급한다.
+- Backtest L1 coverage report 는 `tier1_continuous_symbol_count`, `tier2_rotation_symbol_count`, `rotation_gap_seconds_p90` 를 기록해 rotation 으로 생긴 누락 구간을 별도 추적할 수 있다.
 - Step 0 L1 coverage gate 상태는 `automation/state/backtest_coverage_gate_status.json` latest snapshot 으로 저장되고, 상태 파일의 pass/fail 규칙은 고정되며 CI hard fail 은 Step 0 60% 도달 후 켠다.
 - 골든 회귀 기준은 intraday `stop_loss`/`time_stop`, multiday `day2_exit`/`overnight_hold_rejected`/`loser_replacement`, fill-model stop gap 경로까지 고정돼 있다.
 - 로컬 품질 게이트는 `scripts/check_quality.sh`, `scripts/check_quality.ps1` 기준으로 골든 회귀 + 전체 `pytest` + coverage gate 상태 요약을 같은 진입점에서 실행할 수 있다.
@@ -50,9 +53,17 @@
 - `archive-nasdaq-symbol-directory` CLI 는 현재 Nasdaq Symbol Directory(`nasdaqlisted.txt`, `otherlisted.txt`)를 raw/report artifact 로 저장하고, 명시적 `--allow-current-date` 일 때만 forward PIT `scan_runs/universe` 를 기록한다. 2025년 과거 PIT 복원으로 취급하지 않는다.
 - `backfill-sec-filings-pit` CLI 는 SEC EDGAR submissions 를 D 08:00 ET cutoff 기준으로 eligible/diagnostic-after-cutoff 로 나누고, PIT scan/filings artifact 를 남긴다.
 - `backfill-finra-otc-daily-list` CLI 는 FINRA OTC Daily List JSON/CSV 를 symbol change/name change/deleted/split/dividend/corporate action staging artifact 로 저장한다. `--write-database` 는 최소 `corporate_actions` inventory 에만 insert 하며, current-only rows 는 historical survivorship blocker 를 자동 해소하지 않는다.
-- `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약한다.
+- `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약하고 shortfall 섹션을 자동 포함한다.
+- `report-coverage-shortfall` CLI 는 Step 0 blocker 를 binary `BLOCKED` 가 아니라 minute bar 개월 수, cost-eligible overlap %, corporate action 개월 수의 부족분으로 정량화한다. 산출물은 `operational_planning_only_not_decision_grade` stamp 를 포함하며, vendor 비용은 사용자가 입력한 월 단가만 사용한다.
 - `audit-universe-tradability` CLI 는 replay/watchlist/scanner universe 의 listing exchange 를 PIT universe, Nasdaq Symbol Directory, 선택적 yfinance cache 순서로 확인해 KIS tradable/untradable/unknown 비율을 JSON/CSV/MD 로 산출한다. untradable+unknown 이 30% 이상이면 `universe_kis_untradable_pct_high` blocker 로 기록된다.
+- `run-benchmark-suite` CLI 와 `services/benchmark_suite.py` 는 strategy expectancy 를 cash, same-universe random entry, random time within day, top-gainer naive, volume-leader naive, opposite-side diagnostic 6개 benchmark 대비 incremental 로 비교할 entry-event/report 배선을 제공한다. 실제 execution 전 cost-eligible source policy 를 먼저 적용하며, BLOCKED 상태에서는 benchmark entry generation 도 거부한다.
+- `run-multiday-catalyst-replay` CLI 와 `services/multiday_catalyst_replay.py` 는 길 B 사전 준비용 D~D+5 catalyst replay scaffold 를 제공한다. SEC filing + PIT universe + KIS tradability filter 로 entry event 를 만들고, volume exhaustion / follow-on filing / structure stop / max holding day exit 를 EOD bar 기반으로 검증 산출물에 남긴다.
+- `evaluate-kis-quote-consolidation` CLI 는 `historical_l1_quotes.source='kis_l1_snapshot'` 의 bid/ask exchange 다양성, active-hours update frequency, spread distribution 을 검사해 `automation/state/source_validation/latest_kis_consolidation.json` verdict 를 갱신한다.
+- falsification cost source policy 는 최신 KIS consolidation verdict 가 `nbbo_consolidated` 일 때만 `kis_l1_snapshot` 을 cost-eligible 로 허용한다. verdict 가 `single_venue_proxy` 이면 KIS L1 rows 는 diagnostic-only 로 강등된다.
+- `ExternalDataValidator` 는 신규 외부 quote source 를 cost source policy 에 넣기 전 NBBO consolidation, market-hours coverage, spread sanity, license redistribution/cost-evidence 허용 여부를 검증한다. `config/cost_source_policy.json` 이 동적 whitelist/diagnostic/rejected source 를 관리하며, 파일이 없으면 기본 policy 를 생성하고 파일이 깨졌으면 기존 기본 whitelist 로 fail-safe fallback 한다.
+- `backfill-ibkr-historical-quotes` CLI 는 optional `ib_insync` extra 로 IBKR historical BID_ASK ticks 를 `historical_l1_quotes.source='ibkr_nbbo'` 로 적재한다. personal-use / redistribution 금지 license 를 source validation JSON 과 cost source policy 에 기록하고, NBBO consolidation/spread/coverage 검증을 통과한 경우에만 cost-eligible 후보로 등록한다.
 - Step 5 historical replay 검증은 1개월 calibration 과 3개월 이상 out-of-sample replay 산출물을 `evaluate-premkt-replay` / `run-premkt-validation-plan` 으로 평가해 `evaluation_report.json` 의 coverage, leakage, 비용/체결, bucket 비교, decision gate 를 분리 기록한다.
+- historical replay 산출물은 `replay_grade` stamp 를 가진다. `stamp_replay_run` 은 falsification `decision_gate=PASS`, KIS universe tradability blocker 없음, cost source policy 위반 없음, KIS 사용 시 `nbbo_consolidated` verdict 를 모두 만족할 때만 `decision_grade=True` 로 기록하고, KPI/diagnostic CSV 첫 줄에는 같은 grade/reason 주석을 붙인다.
 - historical replay 는 날짜별 minute bar 와 모델 scoring feature 를 symbol별 반복 조회하지 않고 `market_date + symbol IN (...)` bulk load 로 읽은 뒤, prepared bar cursor 와 누적 volume/dollar volume 으로 simulated time 을 진행한다. model scorer 는 run 안에서 재사용하고, ML/blend scoring 은 replay bar cache 를 재사용해 같은 날짜의 minute bar 재조회 비용을 줄인다. setup_state 는 VWAP/HOD/opening-range 누적 지표를 prepared series prefix 값으로 계산해 반복 과거 봉 스캔을 피한다. non-blind bucket 은 activity deep-copy 를 생략하고, 전략 entry/exit/stop/sizing 규칙은 변경하지 않는다. `progress.json` 에 날짜별 elapsed, loaded bar rows, loaded symbols, simulated time count 를 남긴다.
 - KIS mock broker execution 경로가 `providers/broker.py`, `providers/kis_mock_broker.py`, `services/broker_execution.py` 기준으로 분리돼 있다.
 - broker execution 결과는 `execution_orders`, `execution_positions`, `execution_accounts` 테이블에 저장된다.
@@ -74,6 +85,7 @@
 - 큰 service 파일 cleanup 은 `report_builder.py` 를 1순위로 두고 facade/API 를 유지한 채 payload loading, markdown export, snapshot HTML renderer, HTML formatting helper 순서로 나눈다.
 - KIS mock broker execution 은 `trade-plan` 기반 반자동 검증 범위만 지원하고 auto loop, reconciliation, recovery runbook 이 없다.
 - full tape/websocket 기반 실시간 엔진이 아니며 기본 구조는 계속 `replay/mock-first` 성격이 강하다.
+- KIS WebSocket rotation manager 는 subscription plan, stamp, coverage/cost policy 배선까지만 구현됐다. 실제 KIS WebSocket connection 변경은 하지 않았고 테스트도 mock 기반이다.
 - 기존 `momentum_only` 버킷은 pure momentum 이 아니라 watchlist universe 와 watchlist metadata 를 유지한 watchlist-aware momentum 이었다. 현재 scanner input universe 자체가 watchlist/live pipeline 에 묶여 있으므로 이 이름만으로 predictor/watchlist/momentum alpha 를 분리했다고 해석하면 안 된다.
 - 현재 단계에서 가능한 비교는 동일 scanned activity universe 안에서 metadata 를 제거하는 `watchlist_blind_momentum` 방식의 within-scan ablation 이며, 진짜 `pure_momentum` 은 independent universe/replay provider 가 분리된 뒤에만 도입한다.
 - Step 4/5 리포트는 존재하지만 Step 0 coverage 와 shadow/out-of-sample 검증 전에는 live 판단 근거가 될 수 없다.
@@ -81,6 +93,7 @@
 - PremktPredictor 학습 준비 1일차 산출물은 성능 판별이 아니라 누수 없는 학습 데이터셋 생성 기반이다. cutoff 이후 minute bar 가 없으면 row 는 유지하고 label 컬럼은 비워 둔다.
 - PremktPredictor 학습 준비 3단계는 모델 점수 연결이며, trading 성능 판단은 아직 아님. 모델 점수에 필요한 historical minute feature 가 부족하면 rule score 로 fallback 하고 JSON lineage 에 이유를 남긴다.
 - historical replay smoke 또는 calibration 결과는 최종 성능 판단이 아니다. 과거 백테스트가 좋아도 곧바로 실매매 판단이 아니며, 좋은 OOS 결과의 최대 판정은 `promising_needs_shadow` 다.
+- `replay_grade.decision_grade=False` 산출물은 UI/report 에서 명시적으로 표시되며 edge 판단 근거로 쓰지 않는다. 기존 run 에 falsification audit, universe tradability audit, cost policy/KIS consolidation 근거가 없으면 보수적으로 false stamp 가 정상이다.
 - `score_lt45` 는 live strategy 가 아니라 2025년 6월 sanity replay 와 2025년 4~5월 backward robustness 에서 손실 감소 가능성을 본 frozen hypothesis 다. Step 0 coverage, 고정 파라미터 OOS, shadow 검증 전에는 실매매 진입 필터로 해석하지 않는다.
 - `setup_state` v1 도 live strategy 가 아니다. AI/setup judge 는 상황 해석만 하며 주문은 계속 risk/rule engine 이 통제한다. 현재 구현은 L1 부재와 minute-only replay 한계 때문에 setup state 의 손익 분리력 검증용 진단 배선으로만 해석한다.
 - `audit-premkt-entry-signal` 결과도 strategy approval 이 아니다. 이 리포트는 특정 조합이 심볼/날짜 집중 착시인지, 1R 도달 조건이 분리되는지 보는 감사 산출물이며 L1 없는 replay 에서는 계속 sanity evidence 로만 본다.
@@ -90,13 +103,18 @@
 - L2 historical depth 가 없으므로 order book 시뮬레이터는 만들지 않는다. 현재 현실화는 L1 quote, minute volume, halt/resume 상태를 이용한 보수적 proxy 로만 해석한다.
 - 현재 최우선 blocker 는 overnight falsification gate 미통과 상태다. 결과가 `FAIL` 이면 hypothesis 를 폐기하고, `BLOCKED` 이면 데이터/coverage/survivorship/L1 cost/benchmark 보강만 허용한다.
 - 2026-05-06 Phase 0 falsification blocker 보강 MVP 로 Polygon 제외 무료 데이터 배선을 추가했다. Cost source policy, Alpaca IEX diagnostic quote importer, Nasdaq forward PIT archiver, SEC EDGAR PIT backfill, FINRA OTC Daily List staging, coverage audit CLI 가 들어갔지만 이는 edge 승인 근거가 아니라 blocker 를 더 명확하게 드러내는 배선이다.
+- 2026-05-06 Coverage shortfall quantifier 를 추가했다. 이 산출물은 길 A/B/C 의 운영 계획 비교용이며 decision grade, edge judgment, strategy approval 로 해석하지 않는다.
 - 2026-05-06 Universe tradability audit 를 추가했다. 새 listing source 는 기본 diagnostic-only 이며, KIS 거래 가능성은 backtest transferability blocker 로만 사용한다. yfinance lookup 은 기본 비활성이고 cache 를 지정한 경우에만 보조 조회한다.
+- 2026-05-06 KIS quote consolidation verdict 전에는 `kis_l1_snapshot` 을 cost-eligible 최상위 근거로 신뢰하지 않는다. 기존 historical row 의 `bid_exchange` / `ask_exchange` 는 NULL 이며, KIS 응답에서 venue 필드가 확인되지 않으면 `single_venue_proxy` 또는 `insufficient_evidence` 로 남는 것이 정상이다.
+- IBKR historical NBBO 는 본인 계정 personal-use license 로만 사용한다. source validation 결과와 summary JSON 은 내부 검증용 metadata 이며 원 quote 데이터 재배포 근거가 아니다.
 - strategy trade-log 기반 `same_universe_random_entry` 는 비용 관측치가 strategy market_date 와 겹칠 때만 실행한다. 다른 날짜의 L1/minute spread 를 current-cost fallback 으로 써서 2025 replay 를 통과시키지 않는다.
 - 2026-05-05 로컬 smoke `run-falsification-audit --run-id smoke_local --null-sample-count 20` 결과는 `BLOCKED` 다. 현재 `data/backtest_lab/` DB 기준 blocker 는 6개월 minute bar 부족, point-in-time scan 부재, corporate_actions 부재, same-universe null 불가, benchmark suite 미완성, spread sample <1000 이다.
 - point-in-time universe blocker 의 첫 실행 단계는 `audit-pit-universe-reconstruction` 으로 날짜별 복구 가능성을 분리하는 것이다. exact PIT 없는 날짜를 bar-derived diagnostic 으로 임시 통과시키지 않는다.
 - 2026-05-05 `audit-pit-universe-reconstruction --run-id pit_smoke_local --min-bars-per-symbol 30` smoke 결과는 `diagnostic_reconstruction_possible` 이다. 현재 DB에는 exact PIT 가 없고, 2026-04-17 historical bar 기반 diagnostic universe 1건만 가능하다.
 - 2026-05-05 `run-falsification-audit --strategy-trade-log sample_outputs/paper_trading/paper_trade_log.csv --strategy-bucket momentum_only` smoke 결과에서 `same_universe_random_entry` 는 `point_in_time_universe_missing` 으로 blocked 됐다. trade log parser/CLI 는 동작하지만 exact PIT 전에는 benchmark blocker 를 해소하지 않는다.
 - 2026-05-06 Windows `matched_june_2025_sec_universe` 확인 결과 `historical_minute_bars=2,284,272` 이지만 `minute_spread_rows=0`, `minute_bid_ask_rows=0`, `historical_l1_quotes=0` 이다. 따라서 2025년 6월 matched random-entry 는 `cost_distribution_missing` 이 정상 blocker 이며, 이 DB로는 net expectancy 또는 live feasibility 를 판정하지 않는다.
+- 2026-05-06 Spec 8 benchmark suite 는 코드 배선만 완료했다. cost-eligible source 확보 전에는 `run-benchmark-suite` 가 `decision_grade=False` / `blocked` 산출물을 남기는 것이 정상이며, benchmark 결과를 strategy approval 로 해석하지 않는다.
+- 2026-05-06 Spec 9 multi-day catalyst replay 는 scaffolding 이며 길 A 실패 시 길 B 로 넘어가기 위한 사전 배선이다. falsification gate PASS 없이 생성된 산출물은 `decision_grade=False` 가 정상이고, EOD/yfinance representative cost 는 multi-day horizon 검토용 cost eligibility 로만 해석한다.
 
 ## OneDrive 기존 run 인벤토리
 

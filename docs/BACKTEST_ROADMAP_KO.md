@@ -76,6 +76,7 @@ strategy entry timing 을 보존한 random-entry null 을 포함할 때:
 Cost source policy:
 
 - cost evidence 는 `kis_l1_snapshot` 또는 명시적 full NBBO/SIP 계열 source 만 허용한다.
+- `ibkr_nbbo` 는 본인 IBKR 계정의 historical BID_ASK ticks 를 personal-use license 로 적재한 경우에만 후보가 된다. 원 quote 데이터 재배포는 금지하며, `ExternalDataValidator` 의 NBBO consolidation / active-hours coverage / spread sanity 를 통과해야 cost-eligible 로 등록한다.
 - Alpaca IEX (`alpaca_iex_historical_quotes`, `alpaca_iex_diagnostic`, `alpaca_iex_*`) 는 무료 diagnostic proxy 이며, `l1_spread.count`, minute spread cost distribution, matched random-entry cost overlap 을 해소하지 않는다.
 - strategy date 에 Alpaca IEX quote 만 있으면 `cost_distribution_eligible_source_missing` 또는 date overlap missing 계열 blocker 가 정상이다.
 - current-only 또는 diagnostic-only cost proxy 로 Phase 0 gate 를 통과시키지 않는다.

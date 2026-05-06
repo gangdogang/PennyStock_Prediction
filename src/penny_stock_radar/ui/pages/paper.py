@@ -15,6 +15,7 @@ def render_paper_trading(
     regime_split: pd.DataFrame,
     predictor_kpis: pd.DataFrame,
     execution_quality: pd.DataFrame,
+    replay_grade: dict | None = None,
 ) -> None:
     render_paper_trading_panel(
         run_frame=run_frame,
@@ -26,4 +27,5 @@ def render_paper_trading(
         regime_split=regime_split,
         predictor_kpis=predictor_kpis,
         execution_quality=execution_quality,
+        replay_grade=replay_grade,
     )

@@ -55,6 +55,13 @@ def render_report(frame: pd.DataFrame, premarket: pd.DataFrame, session: pd.Data
     cols[1].metric("기대값", f"{row.get('expectancy', 0.0):.2f}")
     cols[2].metric("수익 요인", f"{row.get('profit_factor', 0.0):.2f}")
     cols[3].metric("Precision@K", f"{row.get('precision_at_k', 0.0):.2f}")
+    replay_grade = row.get("replay_grade")
+    if isinstance(replay_grade, dict):
+        reason = str(replay_grade.get("grade_reason") or "-")
+        if bool(replay_grade.get("decision_grade")):
+            st.info(f"Replay decision grade: True · {reason}")
+        else:
+            st.warning(f"Replay decision grade: False · {reason}")
 
     label = str(row.get("label", ""))
     if label == "continuation":

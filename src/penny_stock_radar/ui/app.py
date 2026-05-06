@@ -161,6 +161,7 @@ def main() -> None:
     paper_execution_quality = table_or_empty(
         ui_data.load_paper_execution_quality(settings.paper_trade_dir), ["strategy_name"]
     )
+    replay_grade = ui_data.load_replay_grade(settings.paper_trade_dir)
 
     tabs = st.tabs(
         [
@@ -208,6 +209,7 @@ def main() -> None:
             paper_regime_split,
             paper_predictor_kpis,
             paper_execution_quality,
+            replay_grade,
         )
     with tabs[6]:
         render_live_mode(

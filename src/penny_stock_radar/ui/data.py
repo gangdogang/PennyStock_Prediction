@@ -16,7 +16,7 @@ from ..db import (
     fetch_paper_run_snapshots,
     fetch_scan_selection,
 )
-from ..services.paper_reporting import paper_report_paths
+from ..services.paper_reporting import paper_report_paths, read_replay_grade
 from ..services.paper_trading import PREDICTOR_WEIGHTED_BUCKET, PRIMARY_PAPER_STRATEGY
 
 
@@ -41,7 +41,7 @@ def _read_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(path)
+        return pd.read_csv(path, comment="#")
     except Exception:
         return pd.DataFrame()
 
@@ -236,6 +236,11 @@ def load_paper_predictor_kpis(export_dir: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=False, ttl=5)
 def load_paper_execution_quality(export_dir: Path) -> pd.DataFrame:
     return _read_csv(paper_report_paths(export_dir).execution_quality)
+
+
+@st.cache_data(show_spinner=False, ttl=5)
+def load_replay_grade(export_dir: Path) -> dict[str, Any]:
+    return dict(read_replay_grade(export_dir) or {})
 
 
 @st.cache_data(show_spinner=False, ttl=10)

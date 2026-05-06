@@ -148,6 +148,12 @@ Phase 0 falsification data coverage audit:
 ./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
+Coverage shortfall planning:
+
+```bash
+./scripts/psradar report-coverage-shortfall --target-minute-bars-months 6 --target-cost-eligible-overlap-pct 80 --target-corporate-action-months 12 --vendor-quote-source databento_nbbo --vendor-quote-cost-per-month-usd 99 --out automation/state/shortfall/$(date +%Y%m%d_%H%M%S).json
+```
+
 Universe KIS tradability audit:
 
 ```bash
@@ -164,6 +170,14 @@ Universe KIS tradability audit:
 ```
 
 Alpaca IEX 는 diagnostic-only 이며 NBBO/SIP cost evidence 가 아니다. Nasdaq Symbol Directory 는 forward PIT archive 이고 과거 PIT 복원이 아니다. 상세 Windows runbook 은 `docs/OPERATIONS_KO.md` 의 "Phase 0 무료 데이터 MVP runbook" 을 본다.
+
+IBKR historical NBBO backfill:
+
+```bash
+./scripts/psradar backfill-ibkr-historical-quotes --symbols-file watchlist.txt --market-date-start 2025-12-01 --market-date-end 2026-05-01 --paper-account --out-summary automation/state/ibkr_backfill/$(date +%Y%m%d_%H%M%S).json
+```
+
+IBKR 경로는 optional extra 이므로 실행 머신에 `pip install .[ibkr]` 가 필요하다. 적재 source 는 `ibkr_nbbo` 이고 license 는 personal use / redistribution 금지로 등록한다.
 
 Replay entry-signal audit:
 
@@ -186,6 +200,14 @@ Strategy trade-log matched null:
 ```
 
 `same_universe_random_entry` 는 실제 strategy entry timing 을 유지하고 exact PIT universe 안에서 replacement symbol 을 뽑는 null benchmark 다. exact PIT, 같은 분봉 bar overlap, cost sample 이 없으면 blocked 로 남긴다.
+
+Benchmark suite report:
+
+```bash
+./scripts/psradar run-benchmark-suite --run-id benchmark_$(date +%Y%m%d) --strategy-trade-log <paper_trade_log.csv> --strategy-bucket predictor_weighted
+```
+
+이 명령은 6개 benchmark entry-event/report 배선만 준비한다. cost-eligible source 가 없으면 benchmark generation 도 blocked 로 남긴다.
 
 PIT universe reconstruction audit:
 

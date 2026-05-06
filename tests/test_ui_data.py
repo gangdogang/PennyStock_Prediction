@@ -139,7 +139,10 @@ def test_paper_ui_data_csv_loaders_follow_shared_report_paths(tmp_path) -> None:
     _clear_ui_caches()
 
     paths = paper_report_paths(export_dir)
-    paths.backtest_kpis.write_text("strategy_label,expectancy_r\nAdaptive,1.2\n", encoding="utf-8")
+    paths.backtest_kpis.write_text(
+        "# decision_grade=False, reason=fixture\nstrategy_label,expectancy_r\nAdaptive,1.2\n",
+        encoding="utf-8",
+    )
     paths.regime_split.write_text("strategy_label,regime_bucket\nAdaptive,trend\n", encoding="utf-8")
     paths.predictor_kpis.write_text("strategy_label,predictor_hit_rate_pct\nAdaptive,55\n", encoding="utf-8")
     paths.execution_quality.write_text("strategy_label,order_count\nAdaptive,4\n", encoding="utf-8")
@@ -148,3 +151,16 @@ def test_paper_ui_data_csv_loaders_follow_shared_report_paths(tmp_path) -> None:
     assert list(ui_data.load_paper_regime_split(export_dir)["regime_bucket"]) == ["trend"]
     assert list(ui_data.load_paper_predictor_kpis(export_dir)["predictor_hit_rate_pct"]) == [55]
     assert list(ui_data.load_paper_execution_quality(export_dir)["order_count"]) == [4]
+
+
+def test_paper_ui_loads_replay_grade_from_summary(tmp_path) -> None:
+    export_dir = tmp_path / "paper"
+    export_dir.mkdir(parents=True)
+    _clear_ui_caches()
+
+    (export_dir / "replay_summary.json").write_text(
+        '{"replay_grade": {"decision_grade": false, "grade_reason": "fixture"}}\n',
+        encoding="utf-8",
+    )
+
+    assert ui_data.load_replay_grade(export_dir)["grade_reason"] == "fixture"
