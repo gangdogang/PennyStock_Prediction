@@ -31,6 +31,7 @@
 | 8 | DONE | coverage report JSON/latest export 와 gate 상태 파일 추가, 관련/전체 테스트 `176 passed` 확인 |
 | 9 | DONE | intraday `time_stop`, multiday `overnight_hold_rejected`/`loser_replacement` 골든 추가, 관련/전체 테스트 `179 passed` 확인 |
 | 10 | DONE | GitHub Actions CI + 로컬 quality gate 스크립트 추가, 관련/전체 테스트 `184 passed` 확인 |
+| 11 | DONE | `services/setups/` SetupRegistry + LegacyMomentumSetup 추가. 기본 ON dispatch 와 `PSR_USE_SETUP_REGISTRY=0` fallback 모두 골든 bit-exact 유지, `./scripts/check_quality.sh` 기준 `354 passed, 1 skipped` 확인 |
 
 ## 현재 메모
 
@@ -75,6 +76,7 @@
 - 2026-05-05: `run-falsification-audit` 에 `--strategy-run-dir` / `--strategy-trade-log` / `--strategy-bucket` 를 추가하고, strategy entry schedule 기반 `same_universe_random_entry` benchmark 를 구현했다. exact PIT universe, same-minute bar overlap, cost sample 이 없으면 current universe fallback 없이 machine-readable `blocked` reason 을 남긴다. 같은 변경 기준 `./scripts/check_quality.sh` 는 `273 passed, 1 skipped` 를 확인했다.
 - 2026-05-06: Windows `matched_june_2025_sec_universe` 산출물에서 2025년 6월 DB 의 L1/minute spread 관측치가 0개임을 확인했다. `same_universe_random_entry` 는 전체 DB 비용 샘플이 있더라도 strategy market_date 와 겹치지 않으면 `cost_distribution_date_overlap_missing` 으로 blocked 되게 강화했다. `./scripts/check_quality.sh` 기준 `274 passed, 1 skipped`.
 - 2026-05-06: Phase 0 falsification blocker 보강 MVP 를 추가했다. Cost source policy 는 Alpaca IEX 를 diagnostic-only 로 차단하고, Alpaca IEX quote importer / Nasdaq forward PIT archiver / SEC EDGAR PIT filing backfill / FINRA OTC Daily List staging / `audit-research-data-coverage` CLI 를 구현했다. 이 변경은 데이터 coverage, PIT, survivorship, cost realism, benchmark plumbing 만 다루며 setup_state/entry label/score cutoff/stop/sizing/add/trim tuning 은 건드리지 않았다. 전체 테스트는 `.venv/bin/python -m pytest -q tests` 기준 `292 passed, 1 skipped`.
+- 2026-05-06: Step 11 setup registry foundation 을 추가했다. `LegacyMomentumSetup` 은 기존 `engine_rules/entry.py`, `exit.py`, `profit.py` 함수 본문을 이동하지 않고 wrapper 로만 호출하며, paper hot loop 는 기본값에서 `SetupRegistry` 를 통해 legacy setup 을 dispatch 한다. `PSR_USE_SETUP_REGISTRY=0` fallback 은 기존 직접 호출 path 를 유지한다. `./scripts/check_quality.sh` 는 `354 passed, 1 skipped`, synthetic 1-day hot-loop 비교는 registry ON 평균 0.9450s / fallback OFF 평균 0.9574s, 4 bucket x 100 sample dispatch mismatch 0건을 확인했다.
 - 2026-05-06: Spec 1 Universe Tradability Audit 를 추가했다. `audit-universe-tradability` 는 replay/watchlist/scanner universe 를 KIS tradable/untradable/unknown 으로 분류하고 JSON/CSV/MD 산출물에 `decision_grade` / `grade_reason` 을 기록한다. `run-falsification-audit` 는 untradable+unknown 30% 이상일 때 `universe_kis_untradable_pct_high` blocker 를 추가하고, `audit-research-data-coverage` 는 `kis_tradable_universe_pct` 를 JSON 에 포함한다. 관련 테스트 `22 passed`, 전체 `.venv/bin/python -m pytest -q tests` 기준 `299 passed, 1 skipped`.
 - 다음 우선순위는 overnight falsification runbook 실행과 gate 판정이다. `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.

@@ -21,6 +21,7 @@
 - GitHub Actions CI 는 `.github/workflows/ci.yml` 기준으로 `.[dev,ui]` 설치 후 같은 품질 게이트를 실행한다.
 - intraday 와 multiday 의 `process_market_activity` 가 `services/engine_shared.py:run_step()` 공통 오케스트레이터를 사용한다.
 - `services/engine_rules/entry.py`, `exit.py`, `profit.py` 로 intraday 규칙이 분리됐고 multiday도 같은 exit/close 경계를 재사용한다.
+- `services/setups/` 는 `SetupRegistry` 와 `LegacyMomentumSetup` 을 제공한다. paper hot loop 는 기본값에서 registry 를 통해 legacy momentum setup 을 dispatch 하되 기존 `engine_rules/entry.py`, `exit.py`, `profit.py` 함수 본문은 그대로 호출한다. `PSR_USE_SETUP_REGISTRY=0` 으로 기존 직접 호출 path 로 되돌릴 수 있다.
 - DB 계층은 `db/connection.py`, `schema.py`, `paper.py`, `execution.py`, `historical.py`, `premkt.py` 중심 패키지로 분할됐고 기존 `from ..db import ...` import 경로는 유지된다.
 - CLI 는 `cli/__init__.py` 루트 앱 아래 `premkt.py`, `backtest.py`, `automation.py`, `paper.py`, `broker.py`와 보조 서브앱으로 분할됐고 기존 `psradar <cmd>` 명령 표면은 유지된다.
 - `predictor_weighted`, legacy `momentum_only`=`watchlist_momentum`, `watchlist_blind_momentum` 버킷을 독립 포트폴리오로 병렬 비교할 수 있다.
@@ -67,6 +68,7 @@
 - live observability 는 아직 JSONL sidecar 수준이며 대시보드 집계, 알람, broker execution reject telemetry 분리는 남아 있다.
 - stale/halt/trade-condition hard gate 는 live smoke 기준으로 다시 검증해야 한다.
 - `report_builder.py`, `ai_supervisor.py`, `providers/live_market.py` 는 여전히 단일 파일이 커서 변경 범위가 넓다.
+- `SetupRegistry` 는 현재 legacy momentum wrapper 만 포함한다. 새 setup 추가, pyramid/multi-leg, 기존 score/predictor archive 정리는 후속 Step 으로 분리한다.
 - `premkt_historical_replay.py` 는 bulk load/cursor/scoring 분리 후에도 아직 큰 orchestration 파일이다. 후속 정리는 export/report aggregation, diagnostics writer, CLI-facing runner facade 순서로 작게 나눈다.
 - Streamlit UI cleanup v1 은 구조 분리와 첫 화면 정보 구조 보존이 목표이며, 디자인 polish 와 비즈니스 로직 변경은 후속 작업으로 둔다.
 - 큰 service 파일 cleanup 은 `report_builder.py` 를 1순위로 두고 facade/API 를 유지한 채 payload loading, markdown export, snapshot HTML renderer, HTML formatting helper 순서로 나눈다.
@@ -178,6 +180,7 @@
 - Step 8은 완료됐고 coverage report latest JSON 과 gate 상태 파일이 기준 경로에 고정됐으며 전체 `176 passed` 를 확인했다.
 - Step 9는 완료됐고 intraday `time_stop`, multiday `overnight_hold_rejected`/`loser_replacement` 골든 스냅샷을 추가한 뒤 전체 `179 passed` 를 확인했다.
 - Step 10은 완료됐고 로컬 품질 게이트 스크립트와 GitHub Actions CI 를 추가한 뒤 전체 `184 passed` 를 확인했다.
+- Step 11은 완료됐고 `services/setups/` registry + legacy momentum wrapper 를 추가했다. 기본 ON / `PSR_USE_SETUP_REGISTRY=0` fallback 모두 골든 bit-exact 이며 `./scripts/check_quality.sh` 기준 `354 passed, 1 skipped` 를 확인했다. Synthetic 1-day hot-loop 비교는 registry ON 평균 0.9450s, fallback OFF 평균 0.9574s 로 5% slowdown 조건을 넘지 않았다.
 - Step 0 보강으로 `capture-kis-l1-window` 반복 archive runner 를 추가했고 관련/전체 테스트 `185 passed` 를 확인했다.
 - 이후에는 Step 0 coverage 확보와 shadow/out-of-sample 검증 순으로 다시 돌아간다.
 - UI cleanup v1 이후 남은 구조 정리 후보는 `report_builder.py`, `providers/live_market.py`, `ai_supervisor.py`, `paper_reporting.py`, `market_activity.py` 순서다. `ai_supervisor.py` 는 현재 freshness 테스트 실패 원인을 먼저 분리한 뒤 착수한다.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
@@ -80,6 +81,7 @@ class AppSettings(BaseSettings):
     regular_opening_range_minutes: int = 5
     regular_extension_z_threshold: float = 2.0
     paper_trading_enabled: bool = True
+    paper_use_setup_registry: bool = True
     paper_trade_dir: Path = Path("sample_outputs/paper_trading")
     paper_initial_capital: float = 10_000.0
     paper_max_open_positions: int = 3
@@ -248,6 +250,12 @@ class AppSettings(BaseSettings):
             and bool(self.paper_ai_escalation_model)
             and self.paper_ai_escalation_model != self.gemini_model
         )
+
+    def setup_registry_enabled(self) -> bool:
+        value = os.getenv("PSR_USE_SETUP_REGISTRY")
+        if value is None:
+            return self.paper_use_setup_registry
+        return value.strip().lower() not in {"0", "false", "no", "off"}
 
     @field_validator("universe_price_min", "universe_price_max")
     @classmethod

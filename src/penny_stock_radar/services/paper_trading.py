@@ -54,7 +54,7 @@ from .paper_runtime import (
     PaperTradingStepResult,
     WATCHLIST_BLIND_MOMENTUM_BUCKET,
     active_position_symbols, default_paper_bucket, export_run_csv,
-    paper_market_date, run_engine_once,
+    build_paper_setup_registry, paper_market_date, run_engine_once,
 )
 from .trading_support import (
     classify_day_regime, current_day_pnl,
@@ -88,6 +88,7 @@ class PaperTradingEngine:
         self.scanner = MarketActivityScanner(settings)
         self.fill_model = FillModel(settings)
         self._predictor_score_by_symbol: dict[str, float] = {}
+        self.setup_registry = build_paper_setup_registry()
 
     def run_once(
         self,
@@ -119,6 +120,14 @@ class PaperTradingEngine:
         )
 
     def _strategy_rules(self) -> StrategyRules:
+        if self._use_setup_registry():
+            return StrategyRules(
+                prepare=StrategyHook(callback=self._prepare_step),
+                apply_exit_rules=StrategyHook(callback=self._run_setup_exit_rules),
+                apply_profit_management=StrategyHook(callback=self._run_setup_profit_management),
+                apply_entry_rules=StrategyHook(callback=self._run_setup_entry_rules),
+                apply_session_close=StrategyHook(callback=self._run_session_close),
+            )
         return StrategyRules(
             prepare=StrategyHook(callback=self._prepare_step),
             apply_exit_rules=StrategyHook(callback=self._run_exit_rules),
@@ -127,12 +136,33 @@ class PaperTradingEngine:
             apply_session_close=StrategyHook(callback=self._run_session_close),
         )
 
+    def _use_setup_registry(self) -> bool:
+        return (
+            self.settings.setup_registry_enabled()
+            and self.setup_registry.primary_for_bucket(self.bucket) is not None
+        )
+
     def _prepare_step(self, context: StepContext) -> StepHookResult:
         self._refresh_predictor_scores(context.market_date)
         return StepHookResult()
 
     def _run_exit_rules(self, context: StepContext) -> StepHookResult:
         orders = self._apply_exit_rules(
+            run=context.run,
+            positions=context.positions,
+            activity_by_symbol=context.activity_by_symbol,
+            market_phase=context.market_phase,
+            day_regime=context.day_regime,
+            now=context.now,
+        )
+        return StepHookResult(
+            orders=tuple(orders),
+            exited_count=sum(1 for order in orders if order.intent == "EXIT"),
+            actions=tuple(f"exit:{order.symbol}" for order in orders),
+        )
+
+    def _run_setup_exit_rules(self, context: StepContext) -> StepHookResult:
+        orders = self._apply_setup_exit_rules(
             run=context.run,
             positions=context.positions,
             activity_by_symbol=context.activity_by_symbol,
@@ -160,8 +190,40 @@ class PaperTradingEngine:
             actions=tuple(f"trim:{order.symbol}" for order in orders),
         )
 
+    def _run_setup_profit_management(self, context: StepContext) -> StepHookResult:
+        orders = self._apply_setup_profit_management(
+            run=context.run,
+            positions=context.positions,
+            activity_by_symbol=context.activity_by_symbol,
+            market_phase=context.market_phase,
+            day_regime=context.day_regime,
+            now=context.now,
+        )
+        return StepHookResult(
+            orders=tuple(orders),
+            actions=tuple(f"trim:{order.symbol}" for order in orders),
+        )
+
     def _run_entry_rules(self, context: StepContext) -> StepHookResult:
         orders = self._apply_entry_rules(
+            run=context.run,
+            positions=context.positions,
+            activity=context.activity,
+            advice_by_symbol=context.advice_by_symbol,
+            market_phase=context.market_phase,
+            market_date=context.market_date,
+            day_regime=context.day_regime,
+            now=context.now,
+        )
+        return StepHookResult(
+            orders=tuple(orders),
+            entered_count=sum(1 for order in orders if order.intent == "ENTRY"),
+            added_count=sum(1 for order in orders if order.intent == "ADD"),
+            actions=tuple(f"{order.intent.lower()}:{order.symbol}" for order in orders),
+        )
+
+    def _run_setup_entry_rules(self, context: StepContext) -> StepHookResult:
+        orders = self._apply_setup_entry_rules(
             run=context.run,
             positions=context.positions,
             activity=context.activity,
@@ -360,6 +422,42 @@ class PaperTradingEngine:
             now=now,
         )
 
+    def _apply_setup_entry_rules(
+        self,
+        *,
+        run: PaperTradingRun,
+        positions: list[PaperPosition],
+        activity: list[MarketActivity],
+        advice_by_symbol: dict[str, MomentumAdvice],
+        market_phase: str,
+        market_date: str,
+        day_regime: str,
+        now: datetime,
+    ) -> list[PaperOrder]:
+        setup = self.setup_registry.primary_for_bucket(self.bucket)
+        if setup is None:
+            return self._apply_entry_rules(
+                run=run,
+                positions=positions,
+                activity=activity,
+                advice_by_symbol=advice_by_symbol,
+                market_phase=market_phase,
+                market_date=market_date,
+                day_regime=day_regime,
+                now=now,
+            )
+        return setup.apply_entry_rules(  # type: ignore[attr-defined]
+            self._entry_rule_deps(),
+            run=run,
+            positions=positions,
+            activity=activity,
+            advice_by_symbol=advice_by_symbol,
+            market_phase=market_phase,
+            market_date=market_date,
+            day_regime=day_regime,
+            now=now,
+        )
+
     def _apply_profit_management(
         self,
         *,
@@ -380,6 +478,36 @@ class PaperTradingEngine:
             now=now,
         )
 
+    def _apply_setup_profit_management(
+        self,
+        *,
+        run: PaperTradingRun,
+        positions: list[PaperPosition],
+        activity_by_symbol: dict[str, MarketActivity],
+        market_phase: str,
+        day_regime: str,
+        now: datetime,
+    ) -> list[PaperOrder]:
+        setup = self.setup_registry.primary_for_bucket(self.bucket)
+        if setup is None:
+            return self._apply_profit_management(
+                run=run,
+                positions=positions,
+                activity_by_symbol=activity_by_symbol,
+                market_phase=market_phase,
+                day_regime=day_regime,
+                now=now,
+            )
+        return setup.apply_profit_management(  # type: ignore[attr-defined]
+            self._profit_rule_deps(),
+            run=run,
+            positions=positions,
+            activity_by_symbol=activity_by_symbol,
+            market_phase=market_phase,
+            day_regime=day_regime,
+            now=now,
+        )
+
     def _apply_exit_rules(
         self,
         *,
@@ -391,6 +519,36 @@ class PaperTradingEngine:
         now: datetime,
     ) -> list[PaperOrder]:
         return apply_exit_rules(
+            self._exit_rule_deps(),
+            run=run,
+            positions=positions,
+            activity_by_symbol=activity_by_symbol,
+            market_phase=market_phase,
+            day_regime=day_regime,
+            now=now,
+        )
+
+    def _apply_setup_exit_rules(
+        self,
+        *,
+        run: PaperTradingRun,
+        positions: list[PaperPosition],
+        activity_by_symbol: dict[str, MarketActivity],
+        market_phase: str,
+        day_regime: str,
+        now: datetime,
+    ) -> list[PaperOrder]:
+        setup = self.setup_registry.primary_for_bucket(self.bucket)
+        if setup is None:
+            return self._apply_exit_rules(
+                run=run,
+                positions=positions,
+                activity_by_symbol=activity_by_symbol,
+                market_phase=market_phase,
+                day_regime=day_regime,
+                now=now,
+            )
+        return setup.apply_exit_rules(  # type: ignore[attr-defined]
             self._exit_rule_deps(),
             run=run,
             positions=positions,

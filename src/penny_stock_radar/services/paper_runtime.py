@@ -157,6 +157,12 @@ def active_position_symbols(database_path: Path, run_id: str | None) -> tuple[st
     )
 
 
+def build_paper_setup_registry():
+    from .setups import build_default_registry
+
+    return build_default_registry()
+
+
 def run_engine_once(
     engine,
     *,
