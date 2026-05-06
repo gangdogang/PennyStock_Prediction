@@ -13,6 +13,7 @@ from typing import Any
 
 from ..db import get_connection
 from .paper_runtime import write_csv
+from .universe_tradability_audit import audit_universe, report_to_dict
 
 
 COST_ELIGIBLE_EXACT_SOURCES = frozenset(
@@ -79,6 +80,7 @@ class FalsificationResearchAuditor:
         inventory = self._data_inventory(options.db_path)
         cost_audit = self._cost_audit(options)
         survivorship = self._survivorship_audit(options.db_path, inventory=inventory)
+        universe_tradability = self._universe_tradability_audit(options)
         null_rows, null_summary = self._null_baseline(options, cost_audit=cost_audit)
         matched_rows, matched_summary = self._matched_random_entry_benchmark(
             options,
@@ -93,6 +95,7 @@ class FalsificationResearchAuditor:
             inventory=inventory,
             cost_audit=cost_audit,
             survivorship=survivorship,
+            universe_tradability=universe_tradability,
             null_summary=null_summary,
             benchmark_suite=benchmark_suite,
         )
@@ -109,6 +112,7 @@ class FalsificationResearchAuditor:
             "data_inventory": inventory,
             "cost_audit": cost_audit,
             "survivorship_audit": survivorship,
+            "universe_tradability_audit": universe_tradability,
             "null_benchmark": null_summary,
             "matched_random_entry_benchmark": matched_summary,
             "benchmark_suite": benchmark_suite,
@@ -597,6 +601,32 @@ class FalsificationResearchAuditor:
                 "Document ticker-change handling before any OOS claim.",
             ],
         }
+
+    def _universe_tradability_audit(self, options: FalsificationAuditOptions) -> dict[str, Any]:
+        universe_args: dict[str, Any] = {
+            "enable_yfinance": False,
+        }
+        if options.strategy_run_dir is not None:
+            universe_source = "replay_log"
+            universe_args["replay_dir"] = options.strategy_run_dir
+        elif options.strategy_trade_log is not None:
+            universe_source = "replay_log"
+            universe_args["trade_log"] = options.strategy_trade_log
+        else:
+            universe_source = "scanner_universe"
+            universe_args["passed_only"] = False
+        try:
+            report = audit_universe(options.db_path, universe_source, universe_args)  # type: ignore[arg-type]
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            return {
+                "total_symbols": 0,
+                "decision_blocker": False,
+                "decision_grade": True,
+                "grade_reason": f"universe_tradability_audit_unavailable:{exc}",
+            }
+        payload = report_to_dict(report)
+        payload.pop("by_symbol", None)
+        return payload
 
     def _has_table(self, db_path: Path, table_name: str) -> bool:
         if not db_path.exists():
@@ -1404,6 +1434,7 @@ class FalsificationResearchAuditor:
         inventory: dict[str, Any],
         cost_audit: dict[str, Any],
         survivorship: dict[str, Any],
+        universe_tradability: dict[str, Any],
         null_summary: dict[str, Any],
         benchmark_suite: dict[str, Any],
     ) -> list[str]:
@@ -1423,6 +1454,8 @@ class FalsificationResearchAuditor:
             blockers.append("No point-in-time universe scan is available; survivorship/adverse-selection is unresolved.")
         if survivorship.get("status") == "blocked":
             blockers.extend(str(item) for item in survivorship.get("warnings", []))
+        if bool(universe_tradability.get("decision_blocker")):
+            blockers.append("universe_kis_untradable_pct_high")
         if null_summary.get("status") != "ready":
             blockers.append(f"Null baseline is not ready: {null_summary.get('reason', 'unknown')}")
         missing_benchmarks = benchmark_suite.get("missing_or_blocked_benchmarks", [])

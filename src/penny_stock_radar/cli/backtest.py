@@ -65,6 +65,7 @@ from ..services.research_data_coverage import (
     ResearchDataCoverageAuditor,
     ResearchDataCoverageOptions,
 )
+from ..services.universe_tradability_audit import audit_universe, write_report
 from .common import console, format_optional_number, format_optional_percent, trade_call_label
 
 app = typer.Typer()
@@ -1268,6 +1269,81 @@ def audit_research_data_coverage(
             console.print(f"- {blocker}")
     else:
         console.print("No coverage blockers in this report. Run falsification audit next.")
+
+
+@app.command("audit-universe-tradability")
+def audit_universe_tradability(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to audit. Defaults to data/backtest_lab/.",
+    ),
+    universe_source: str = typer.Option(
+        ...,
+        "--universe-source",
+        help="Universe source: watchlist, replay_log, or scanner_universe.",
+    ),
+    replay_dir: Path | None = typer.Option(
+        None,
+        "--replay-dir",
+        help="Replay output directory containing paper_trade_log.csv.",
+    ),
+    trade_log: Path | None = typer.Option(
+        None,
+        "--trade-log",
+        help="Explicit replay paper_trade_log.csv path.",
+    ),
+    scan_id: str | None = typer.Option(
+        None,
+        "--scan-id",
+        help="Optional scan_id for watchlist or scanner_universe sources.",
+    ),
+    out_dir: Path = typer.Option(
+        Path("automation/state/tradability"),
+        "--out-dir",
+        help="Directory for JSON, CSV, and Markdown tradability artifacts.",
+    ),
+    enable_yfinance: bool = typer.Option(
+        False,
+        "--enable-yfinance/--no-enable-yfinance",
+        help="Allow yfinance exchange lookup for unknown symbols. Disabled by default.",
+    ),
+    yfinance_cache_path: Path | None = typer.Option(
+        None,
+        "--yfinance-cache-path",
+        help="Optional JSON cache path for yfinance exchange lookups.",
+    ),
+) -> None:
+    """Audit whether a backtest universe is transferable to KIS tradable listings."""
+    if universe_source not in {"watchlist", "replay_log", "scanner_universe"}:
+        console.print("--universe-source must be one of watchlist, replay_log, scanner_universe.")
+        raise typer.Exit(code=1)
+    try:
+        report = audit_universe(
+            db_path,
+            universe_source,  # type: ignore[arg-type]
+            {
+                "replay_dir": replay_dir,
+                "trade_log": trade_log,
+                "scan_id": scan_id,
+                "enable_yfinance": enable_yfinance,
+                "yfinance_cache_path": yfinance_cache_path,
+            },
+        )
+        report_path = write_report(report, out_dir)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        console.print(f"Failed to audit universe tradability: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Universe tradability audit wrote [bold]{out_dir}[/bold].")
+    console.print(f"Report: [bold]{report_path}[/bold]")
+    console.print(
+        "KIS tradable universe: "
+        f"[bold]{report.tradable_count}/{report.total_symbols}[/bold] "
+        f"({(report.tradable_count / report.total_symbols * 100.0) if report.total_symbols else 0.0:.2f}%)."
+    )
+    if report.decision_blocker:
+        console.print("Blocker: universe_kis_untradable_pct_high")
 
 
 @app.command("run-falsification-audit")

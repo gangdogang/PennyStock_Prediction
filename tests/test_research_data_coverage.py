@@ -123,9 +123,11 @@ def test_research_data_coverage_classifies_cost_sources_and_writes_artifacts(
     assert row["minute_spread_cost_eligible_count"] == 0
     assert row["minute_spread_diagnostic_only_count"] == 1
     assert row["pit_universe_exists"] is True
+    assert row["kis_tradable_universe_pct"] == 100.0
     assert row["sec_filing_cutoff_eligible_count"] == 1
     assert row["sec_filing_post_cutoff_diagnostic_count"] == 1
     assert report["summary"]["strategy_dates_cost_eligible_overlap"] is True
+    assert report["summary"]["kis_tradable_universe_pct"] == 100.0
     assert "minute_bars_6_month_coverage_missing" in report["summary"]["blockers"]
     assert result.csv_path.exists()
     assert "Alpaca IEX" in result.summary_path.read_text(encoding="utf-8")

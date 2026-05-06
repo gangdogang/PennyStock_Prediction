@@ -148,6 +148,12 @@ Phase 0 falsification data coverage audit:
 ./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
+Universe KIS tradability audit:
+
+```bash
+./scripts/psradar audit-universe-tradability --universe-source replay_log --replay-dir data/backtest_lab/replays/<run_id> --out-dir automation/state/tradability/<run_id>
+```
+
 무료 데이터 blocker 보강 CLI:
 
 ```bash

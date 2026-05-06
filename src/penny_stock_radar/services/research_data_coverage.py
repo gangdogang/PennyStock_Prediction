@@ -12,6 +12,11 @@ from zoneinfo import ZoneInfo
 from ..db import get_connection
 from .falsification_research import _is_cost_eligible_source, _is_diagnostic_only_source
 from .paper_runtime import write_csv
+from .universe_tradability_audit import (
+    classify_listing_exchange,
+    normalize_listing_exchange,
+    summarize_kis_tradability_from_connection,
+)
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -107,6 +112,7 @@ def _date_rows(
 
     minute_rows = _date_counts(connection, table_names, "historical_minute_bars", "market_date")
     pit_counts = _pit_universe_counts(connection, table_names)
+    pit_tradability = _pit_tradability_by_date(connection, table_names)
     l1_counts = _source_counts_by_date(
         connection,
         table_names,
@@ -141,6 +147,9 @@ def _date_rows(
                 "minute_bar_rows": minute_rows.get(market_date, 0),
                 "pit_universe_exists": market_date in pit_counts,
                 "pit_universe_count": pit_counts.get(market_date, 0),
+                "kis_tradable_universe_pct": pit_tradability.get(market_date, {}).get(
+                    "kis_tradable_universe_pct"
+                ),
                 "l1_cost_eligible_quote_count": _classified_count(
                     l1_date_counts,
                     cost_eligible=True,
@@ -210,6 +219,7 @@ def _summary(
         if int(row.get("minute_bar_rows") or 0) > 0 and not bool(row.get("pit_universe_exists"))
     ]
     corporate_summary = _corporate_summary(connection, table_names, minute_dates)
+    tradability_summary = summarize_kis_tradability_from_connection(connection, table_names)
     blockers: list[str] = []
     has_6mo = len(minute_dates) >= 126 and (minute_span_days or 0) >= 180
     if not has_6mo:
@@ -238,6 +248,8 @@ def _summary(
             "market_dates": diagnostic_only_dates,
         },
         "pit_universe_missing_dates": pit_missing_dates,
+        "kis_tradable_universe_pct": tradability_summary.get("kis_tradable_universe_pct"),
+        "universe_tradability": tradability_summary,
         "corporate_actions": corporate_summary,
         "blockers": blockers,
         "next_allowed_action": (
@@ -357,6 +369,49 @@ def _pit_universe_counts(
         """
     ).fetchall()
     return {str(row["market_date"]): int(row["row_count"] or 0) for row in rows}
+
+
+def _pit_tradability_by_date(
+    connection: sqlite3.Connection,
+    table_names: set[str],
+) -> dict[str, dict[str, Any]]:
+    if "scan_runs" not in table_names or "universe" not in table_names:
+        return {}
+    rows = connection.execute(
+        """
+        SELECT sr.market_date AS market_date, u.symbol, u.exchange
+        FROM scan_runs sr
+        JOIN universe u ON u.scan_id = sr.scan_id
+        WHERE sr.snapshot_role = 'point_in_time'
+          AND sr.market_date IS NOT NULL
+        ORDER BY sr.market_date, u.symbol
+        """
+    ).fetchall()
+    by_date: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        market_date = str(row["market_date"])
+        symbol = str(row["symbol"] or "").strip().upper()
+        if not symbol:
+            continue
+        by_date.setdefault(market_date, {}).setdefault(
+            symbol,
+            normalize_listing_exchange(row["exchange"]),
+        )
+    summaries: dict[str, dict[str, Any]] = {}
+    for market_date, symbols in by_date.items():
+        classifications = [classify_listing_exchange(exchange) for exchange in symbols.values()]
+        total = len(classifications)
+        tradable = sum(1 for item in classifications if item == "tradable")
+        untradable = sum(1 for item in classifications if item == "untradable")
+        unknown = sum(1 for item in classifications if item == "unknown")
+        summaries[market_date] = {
+            "total_symbols": total,
+            "tradable_count": tradable,
+            "untradable_count": untradable,
+            "unknown_count": unknown,
+            "kis_tradable_universe_pct": (tradable / total * 100.0) if total else None,
+        }
+    return summaries
 
 
 def _source_counts_by_date(
@@ -532,6 +587,7 @@ def _markdown_summary(report: dict[str, Any]) -> str:
         f"- Dates: {report.get('date_count', 0)}",
         f"- 6mo minute bars: {summary.get('has_6_month_minute_bar_coverage', False)}",
         f"- Strategy cost overlap: {summary.get('strategy_dates_cost_eligible_overlap', False)}",
+        f"- KIS tradable universe: {summary.get('kis_tradable_universe_pct')}",
         f"- Diagnostic-only data present: {summary.get('diagnostic_only_data_presence', {}).get('present', False) if isinstance(summary.get('diagnostic_only_data_presence'), dict) else False}",
         f"- Next allowed action: {summary.get('next_allowed_action')}",
         "",
