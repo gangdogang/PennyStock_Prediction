@@ -56,6 +56,8 @@ from .paper_runtime import (
     active_position_symbols, default_paper_bucket, export_run_csv,
     build_paper_setup_registry, paper_market_date, run_engine_once,
 )
+from .pyramid import LEGACY_SCHEDULE, PyramidSchedule
+from .setups import Setup
 from .trading_support import (
     classify_day_regime, current_day_pnl,
     daily_loss_lock_marker, has_daily_loss_lock, halt_suspected,
@@ -120,7 +122,7 @@ class PaperTradingEngine:
         )
 
     def _strategy_rules(self) -> StrategyRules:
-        if self._use_setup_registry():
+        if self._use_setup_registry() and self._use_pyramid_v2():
             return StrategyRules(
                 prepare=StrategyHook(callback=self._prepare_step),
                 apply_exit_rules=StrategyHook(callback=self._run_setup_exit_rules),
@@ -141,6 +143,9 @@ class PaperTradingEngine:
             self.settings.setup_registry_enabled()
             and self.setup_registry.primary_for_bucket(self.bucket) is not None
         )
+
+    def _use_pyramid_v2(self) -> bool:
+        return self.settings.pyramid_v2_enabled()
 
     def _prepare_step(self, context: StepContext) -> StepHookResult:
         self._refresh_predictor_scores(context.market_date)
@@ -446,7 +451,7 @@ class PaperTradingEngine:
                 day_regime=day_regime,
                 now=now,
             )
-        return setup.apply_entry_rules(  # type: ignore[attr-defined]
+        orders = setup.apply_entry_rules(  # type: ignore[attr-defined]
             self._entry_rule_deps(),
             run=run,
             positions=positions,
@@ -457,6 +462,8 @@ class PaperTradingEngine:
             day_regime=day_regime,
             now=now,
         )
+        self._apply_pyramid_metadata(orders, setup=setup)
+        return orders
 
     def _apply_profit_management(
         self,
@@ -498,7 +505,7 @@ class PaperTradingEngine:
                 day_regime=day_regime,
                 now=now,
             )
-        return setup.apply_profit_management(  # type: ignore[attr-defined]
+        orders = setup.apply_profit_management(  # type: ignore[attr-defined]
             self._profit_rule_deps(),
             run=run,
             positions=positions,
@@ -507,6 +514,8 @@ class PaperTradingEngine:
             day_regime=day_regime,
             now=now,
         )
+        self._apply_pyramid_metadata(orders, setup=setup)
+        return orders
 
     def _apply_exit_rules(
         self,
@@ -548,7 +557,7 @@ class PaperTradingEngine:
                 day_regime=day_regime,
                 now=now,
             )
-        return setup.apply_exit_rules(  # type: ignore[attr-defined]
+        orders = setup.apply_exit_rules(  # type: ignore[attr-defined]
             self._exit_rule_deps(),
             run=run,
             positions=positions,
@@ -557,6 +566,34 @@ class PaperTradingEngine:
             day_regime=day_regime,
             now=now,
         )
+        self._apply_pyramid_metadata(orders, setup=setup)
+        return orders
+
+    def _pyramid_schedule_for_setup(self, setup: Setup | object) -> PyramidSchedule:
+        getter = getattr(setup, "pyramid_schedule", None)
+        if callable(getter):
+            return getter()
+        return LEGACY_SCHEDULE
+
+    def _apply_pyramid_metadata(
+        self,
+        orders: list[PaperOrder],
+        *,
+        setup: Setup | object,
+    ) -> None:
+        if not orders:
+            return
+        schedule = self._pyramid_schedule_for_setup(setup)
+        setup_id = str(getattr(setup, "setup_id", "legacy_momentum") or "legacy_momentum")
+        legacy_single_leg = schedule == LEGACY_SCHEDULE
+        for order in orders:
+            order.setup_id = setup_id
+            if legacy_single_leg:
+                order.leg_index = 0
+            elif order.intent == "ENTRY":
+                order.leg_index = 0
+            else:
+                order.leg_index = max(int(order.leg_index), 0)
 
     def _close_for_session_end(
         self,

@@ -82,6 +82,7 @@ class AppSettings(BaseSettings):
     regular_extension_z_threshold: float = 2.0
     paper_trading_enabled: bool = True
     paper_use_setup_registry: bool = True
+    paper_use_pyramid_v2: bool = True
     paper_trade_dir: Path = Path("sample_outputs/paper_trading")
     paper_initial_capital: float = 10_000.0
     paper_max_open_positions: int = 3
@@ -255,6 +256,12 @@ class AppSettings(BaseSettings):
         value = os.getenv("PSR_USE_SETUP_REGISTRY")
         if value is None:
             return self.paper_use_setup_registry
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+
+    def pyramid_v2_enabled(self) -> bool:
+        value = os.getenv("PSR_USE_PYRAMID")
+        if value is None:
+            return self.paper_use_pyramid_v2
         return value.strip().lower() not in {"0", "false", "no", "off"}
 
     @field_validator("universe_price_min", "universe_price_max")

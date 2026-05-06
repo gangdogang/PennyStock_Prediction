@@ -22,6 +22,23 @@ from .paper_runs import (
 )
 
 
+def serialize_pyramid_state(state: object | None) -> str | None:
+    if state is None:
+        return None
+    if isinstance(state, str):
+        return state
+    return json.dumps(state, sort_keys=True)
+
+
+def deserialize_pyramid_state(value: str | None) -> dict[str, object] | None:
+    if value in {None, ""}:
+        return None
+    decoded = json.loads(str(value))
+    if isinstance(decoded, dict):
+        return {str(key): item for key, item in decoded.items()}
+    return {"value": decoded}
+
+
 def upsert_paper_positions(
     database_path: Path,
     rows: Iterable[PaperPosition],
@@ -55,6 +72,7 @@ def upsert_paper_positions(
             row.fees_paid_total,
             row.day_regime,
             row.watchlist_rank_at_entry,
+            row.pyramid_state,
             json.dumps(row.entry_reasons),
             json.dumps(row.exit_reasons),
             row.opened_at.isoformat(),
@@ -96,13 +114,14 @@ def upsert_paper_positions(
                 fees_paid_total,
                 day_regime,
                 watchlist_rank_at_entry,
+                pyramid_state,
                 entry_reasons,
                 exit_reasons,
                 opened_at,
                 updated_at,
                 closed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(position_id) DO UPDATE SET
                 run_id = excluded.run_id,
                 symbol = excluded.symbol,
@@ -130,6 +149,7 @@ def upsert_paper_positions(
                 fees_paid_total = excluded.fees_paid_total,
                 day_regime = excluded.day_regime,
                 watchlist_rank_at_entry = excluded.watchlist_rank_at_entry,
+                pyramid_state = excluded.pyramid_state,
                 entry_reasons = excluded.entry_reasons,
                 exit_reasons = excluded.exit_reasons,
                 opened_at = excluded.opened_at,
@@ -197,6 +217,8 @@ def insert_paper_orders(
             row.participation_slippage_pct,
             row.day_regime,
             row.watchlist_rank_at_entry,
+            row.leg_index,
+            row.setup_id,
             json.dumps(row.reasons),
             row.created_at.isoformat(),
             row.realized_pnl,
@@ -241,12 +263,14 @@ def insert_paper_orders(
                 participation_slippage_pct,
                 day_regime,
                 watchlist_rank_at_entry,
+                leg_index,
+                setup_id,
                 reasons,
                 created_at,
                 realized_pnl,
                 realized_pnl_pct
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )

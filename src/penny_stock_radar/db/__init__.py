@@ -39,6 +39,7 @@ from .historical import (
 )
 from .paper import (
     create_paper_trading_run,
+    deserialize_pyramid_state,
     fetch_active_paper_trading_run,
     fetch_latest_paper_strategy_runs,
     fetch_latest_paper_trading_run,
@@ -48,6 +49,7 @@ from .paper import (
     fetch_paper_trading_run_by_id,
     insert_paper_orders,
     insert_paper_run_snapshot,
+    serialize_pyramid_state,
     upsert_paper_positions,
     upsert_paper_trading_run,
 )
@@ -87,6 +89,7 @@ __all__ = [
     "SUPPLEMENTAL_REPORTABLE_SECTIONS",
     "create_paper_trading_run",
     "create_snapshot_run",
+    "deserialize_pyramid_state",
     "fetch_active_paper_trading_run",
     "fetch_execution_order",
     "fetch_execution_orders",
@@ -131,6 +134,7 @@ __all__ = [
     "insert_market_activity",
     "insert_paper_orders",
     "insert_paper_run_snapshot",
+    "serialize_pyramid_state",
     "insert_premarket_signals",
     "insert_prediction_outcomes",
     "insert_premkt_predictions",

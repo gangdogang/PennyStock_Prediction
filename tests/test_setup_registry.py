@@ -13,6 +13,7 @@ from penny_stock_radar.services.setups import (
     build_default_registry,
 )
 from penny_stock_radar.services.setups.legacy_momentum import LegacyMomentumSetup
+from penny_stock_radar.services.pyramid import LEGACY_SCHEDULE
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ def test_default_registry_exposes_legacy_momentum_setup() -> None:
     setup = registry.primary_for_bucket("predictor_weighted")
 
     assert isinstance(setup, LegacyMomentumSetup)
+    assert setup.pyramid_schedule() == LEGACY_SCHEDULE
 
 
 def test_psr_use_setup_registry_env_flag_can_disable_registry(
@@ -94,3 +96,17 @@ def test_psr_use_setup_registry_env_flag_can_disable_registry(
     monkeypatch.setenv("PSR_USE_SETUP_REGISTRY", "0")
 
     assert settings.setup_registry_enabled() is False
+
+
+def test_psr_use_pyramid_env_flag_can_disable_pyramid_v2(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("PSR_USE_PYRAMID", raising=False)
+    settings = AppSettings(db_path=tmp_path / "radar.sqlite3")
+
+    assert settings.pyramid_v2_enabled() is True
+
+    monkeypatch.setenv("PSR_USE_PYRAMID", "0")
+
+    assert settings.pyramid_v2_enabled() is False

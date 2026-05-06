@@ -170,6 +170,12 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
             )
             _ensure_column(
                 connection,
+                "paper_positions",
+                "pyramid_state",
+                "TEXT",
+            )
+            _ensure_column(
+                connection,
                 "paper_orders",
                 "strategy_bucket",
                 "TEXT NOT NULL DEFAULT ''",
@@ -242,6 +248,18 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 "paper_orders",
                 "watchlist_rank_at_entry",
                 "INTEGER",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "leg_index",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                connection,
+                "paper_orders",
+                "setup_id",
+                "TEXT NOT NULL DEFAULT 'legacy_momentum'",
             )
             _ensure_column(
                 connection,

@@ -498,6 +498,13 @@ class PaperReportingService:
                 )
                 entry_price = entry_order.price if entry_order is not None else position.average_entry_price
                 initial_quantity = entry_order.quantity if entry_order is not None else position.quantity
+                leg_index = entry_order.leg_index if entry_order is not None else 0
+                setup_id = (
+                    entry_order.setup_id
+                    if entry_order is not None and entry_order.setup_id
+                    else "legacy_momentum"
+                )
+                pyramid_stage = "starter" if leg_index == 0 else f"leg_{leg_index}"
                 planned_risk_dollars = max((entry_price or 0.0) - (planned_stop_price or 0.0), 0.0) * max(initial_quantity, 0)
                 stop_slippages = [
                     ((order.planned_stop_price - order.price) / order.planned_stop_price) * 100.0
@@ -516,6 +523,9 @@ class PaperReportingService:
                         "bucket": run.bucket,
                         "bucket_label": self.bucket_labels.get(run.bucket, run.bucket),
                         "symbol": position.symbol,
+                        "leg_index": leg_index,
+                        "setup_id": setup_id,
+                        "pyramid_stage": pyramid_stage,
                         "status": position.status,
                         "predicted": predicted,
                         "predictor_score": predictor_score,

@@ -11,6 +11,7 @@ from ..setup_state import SetupJudgement
 
 if TYPE_CHECKING:
     from ...models import PaperPosition
+    from ..pyramid import PyramidSchedule
 
 
 ACTION_ENTER = "ENTER"
@@ -54,3 +55,5 @@ class Setup(Protocol):
     def detect(self, ctx: SetupEvalContext) -> bool: ...
 
     def evaluate(self, ctx: SetupEvalContext) -> SetupDecision: ...
+
+    def pyramid_schedule(self) -> PyramidSchedule: ...

@@ -3046,3 +3046,71 @@ def test_paper_backtest_kpis_include_tail_risk_metrics(tmp_path: Path) -> None:
     assert float(row["median_hold_minutes"]) == pytest.approx(12.5)
     assert float(row["p90_hold_minutes"]) > float(row["median_hold_minutes"])
     assert float(row["calmar_ratio"]) == pytest.approx(0.5)
+
+
+def test_pyramid_metadata_defaults_on_legacy_paper_orders_and_trade_log(tmp_path: Path) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    export_dir = tmp_path / "paper_exports"
+    init_database(db_path)
+    current_time = datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=export_dir,
+        live_market_provider="disabled",
+    )
+    engine = PaperTradingEngine(settings, now_fn=lambda: current_time)
+
+    engine.process_market_activity(
+        market_phase="premarket",
+        activity=[
+            _activity(
+                "AAA",
+                phase="premarket",
+                price=1.00,
+                label="OPENING_RANGE_CANDIDATE",
+                score=4.4,
+            )
+        ],
+        export_csv=True,
+    )
+
+    run = fetch_latest_paper_trading_run(db_path, PRIMARY_PAPER_STRATEGY, bucket=PREDICTOR_WEIGHTED_BUCKET)
+    assert run is not None
+    orders = fetch_paper_orders(db_path, run.run_id)
+    positions = fetch_paper_positions(db_path, run.run_id)
+    coordinator = PaperTradingCoordinator(settings, now_fn=lambda: current_time)
+    coordinator.export_trade_log()
+    trade_rows = _csv_rows(export_dir / "paper_trade_log.csv")
+
+    assert orders
+    assert {order.leg_index for order in orders} == {0}
+    assert {order.setup_id for order in orders} == {"legacy_momentum"}
+    assert positions[0].pyramid_state is None
+    assert trade_rows[0]["leg_index"] == "0"
+    assert trade_rows[0]["setup_id"] == "legacy_momentum"
+    assert trade_rows[0]["pyramid_stage"] == "starter"
+
+
+def test_psr_use_pyramid_zero_uses_direct_hot_loop(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("PSR_USE_PYRAMID", "0")
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    settings = AppSettings(
+        db_path=db_path,
+        paper_trade_dir=tmp_path / "paper_exports",
+        live_market_provider="disabled",
+    )
+    engine = PaperTradingEngine(
+        settings,
+        now_fn=lambda: datetime(2026, 3, 26, 10, 5, tzinfo=timezone.utc),
+    )
+
+    rules = engine._strategy_rules()
+
+    assert settings.setup_registry_enabled() is True
+    assert settings.pyramid_v2_enabled() is False
+    assert rules.apply_entry_rules is not None
+    assert rules.apply_entry_rules.callback.__name__ == "_run_entry_rules"

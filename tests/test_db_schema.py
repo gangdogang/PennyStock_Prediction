@@ -113,6 +113,7 @@ def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path
         "fees_paid_total",
         "day_regime",
         "watchlist_rank_at_entry",
+        "pyramid_state",
     } <= paper_position_columns
     assert {
         "strategy_bucket",
@@ -126,6 +127,8 @@ def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path
         "transaction_cost",
         "day_regime",
         "watchlist_rank_at_entry",
+        "leg_index",
+        "setup_id",
     } <= paper_order_columns
     assert {
         "client_order_id",
@@ -152,3 +155,105 @@ def test_initialize_database_includes_trade_plan_and_fill_columns(tmp_path: Path
         "total_equity",
         "raw_payload",
     } <= execution_account_columns
+
+
+def test_pyramid_columns_backfill_defaults_and_migration_idempotency(tmp_path: Path) -> None:
+    module = load_first_module(DB_CANDIDATES)
+    init_fn = getattr(module, "initialize_database", None) or getattr(module, "init_db", None)
+    assert callable(init_fn)
+
+    db_path = tmp_path / "penny_stock.sqlite3"
+    init_fn(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO paper_positions (
+                position_id,
+                run_id,
+                symbol,
+                status,
+                entry_phase,
+                quantity,
+                average_entry_price,
+                cost_basis,
+                market_value,
+                realized_pnl,
+                unrealized_pnl,
+                total_pnl,
+                entry_reasons,
+                exit_reasons,
+                opened_at,
+                updated_at
+            )
+            VALUES (
+                'pos-1',
+                'run-1',
+                'AAA',
+                'OPEN',
+                'premarket',
+                10,
+                1.0,
+                10.0,
+                10.0,
+                0.0,
+                0.0,
+                0.0,
+                '[]',
+                '[]',
+                '2026-05-06T14:00:00+00:00',
+                '2026-05-06T14:00:00+00:00'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO paper_orders (
+                order_id,
+                run_id,
+                position_id,
+                symbol,
+                market_phase,
+                action,
+                intent,
+                quantity,
+                price,
+                notional,
+                reasons,
+                created_at
+            )
+            VALUES (
+                'order-1',
+                'run-1',
+                'pos-1',
+                'AAA',
+                'premarket',
+                'BUY',
+                'ENTRY',
+                10,
+                1.0,
+                10.0,
+                '[]',
+                '2026-05-06T14:00:00+00:00'
+            )
+            """
+        )
+        conn.commit()
+
+    init_fn(db_path)
+    init_fn(db_path)
+
+    with sqlite3.connect(db_path) as conn:
+        position_row = conn.execute(
+            "SELECT pyramid_state FROM paper_positions WHERE position_id = 'pos-1'"
+        ).fetchone()
+        order_row = conn.execute(
+            "SELECT leg_index, setup_id FROM paper_orders WHERE order_id = 'order-1'"
+        ).fetchone()
+        order_count = conn.execute("SELECT COUNT(*) FROM paper_orders").fetchone()[0]
+        position_count = conn.execute("SELECT COUNT(*) FROM paper_positions").fetchone()[0]
+
+    assert position_row == (None,)
+    assert order_row == (0, "legacy_momentum")
+    assert order_count == 1
+    assert position_count == 1

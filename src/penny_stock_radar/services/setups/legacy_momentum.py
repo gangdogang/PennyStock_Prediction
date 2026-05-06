@@ -16,6 +16,7 @@ from ..paper_runtime import (
     WATCHLIST_BLIND_MOMENTUM_BUCKET,
     WATCHLIST_MOMENTUM_BUCKET,
 )
+from ..pyramid import LEGACY_SCHEDULE, PyramidSchedule
 from .base import (
     ACTION_ADD,
     ACTION_ENTER,
@@ -36,6 +37,9 @@ LEGACY_BUCKETS = (
 class LegacyMomentumSetup:
     setup_id = "legacy_momentum"
     bucket_compatibility = LEGACY_BUCKETS
+
+    def pyramid_schedule(self) -> PyramidSchedule:
+        return LEGACY_SCHEDULE
 
     def detect(self, ctx: SetupEvalContext) -> bool:
         if ctx.open_position is not None:
