@@ -148,6 +148,14 @@ Phase 0 falsification data coverage audit:
 ./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
+Hugging Face CryptoSpartan 1m bars audit:
+
+```bash
+PSR_DATA_ROOT=/path/to/Penny_Stock_Data ./scripts/psradar audit-hf-1m-bars --run-id hf_$(date +%Y%m%d)
+```
+
+이 감사는 gross OHLCV falsification data 용도만 지원하며 산출물은 `decision_grade=false`, `cost_grade=none` 이다. parquet 는 repo 로 복사하지 않는다.
+
 Coverage shortfall planning:
 
 ```bash

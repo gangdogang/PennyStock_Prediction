@@ -69,6 +69,12 @@ from ..services.finra_otc_daily_list import (
     FinraOTCDailyListImporter,
     records_to_corporate_actions_hook,
 )
+from ..services.hf_1m_bars import (
+    DEFAULT_AUDIT_ROOT as DEFAULT_HF_1M_BARS_AUDIT_ROOT,
+    Hf1mBarsAuditError,
+    Hf1mBarsAuditOptions,
+    Hf1mBarsAuditor,
+)
 from ..services.point_in_time_universe_audit import (
     PointInTimeUniverseAuditOptions,
     PointInTimeUniverseAuditor,
@@ -1400,6 +1406,57 @@ def audit_research_data_coverage(
             console.print(f"- {blocker}")
     else:
         console.print("No coverage blockers in this report. Run falsification audit next.")
+
+
+@app.command("audit-hf-1m-bars")
+def audit_hf_1m_bars(
+    parquet_path: Path | None = typer.Option(
+        None,
+        "--parquet-path",
+        help=(
+            "Optional parquet path. Otherwise resolves PSR_HF_STOCKS_1M_PATH, "
+            "then PSR_DATA_ROOT, then the repo-local fallback."
+        ),
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_HF_1M_BARS_AUDIT_ROOT,
+        "--output-root",
+        help="Directory where the Hugging Face 1m bars audit run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+) -> None:
+    """Audit the CryptoSpartan Hugging Face 1m OHLCV bars parquet."""
+    try:
+        result = Hf1mBarsAuditor().run(
+            Hf1mBarsAuditOptions(
+                parquet_path=parquet_path,
+                output_root=output_root,
+                run_id=run_id,
+            )
+        )
+    except Hf1mBarsAuditError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    summary = result.summary
+    console.print(f"HF 1m bars audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"rows={summary.get('row_count', 0)} "
+        f"tickers={summary.get('ticker_count', 0)} "
+        f"ohlc_failures={summary.get('ohlc_sanity_failure_count', 0)} "
+        f"duplicates={summary.get('duplicate_ticker_timestamp_count', 0)} "
+        "decision_grade=false cost_grade=none"
+    )
 
 
 @app.command("report-coverage-shortfall")

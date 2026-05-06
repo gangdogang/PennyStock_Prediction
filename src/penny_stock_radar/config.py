@@ -1,11 +1,53 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 import os
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+HF_STOCKS_1M_DATASET_RELATIVE_PATH = Path(
+    "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet"
+)
+HF_STOCKS_1M_FALLBACK_PATH = (
+    Path("data/backtest_lab") / HF_STOCKS_1M_DATASET_RELATIVE_PATH
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedDataPath:
+    path: Path
+    source: str
+    data_root: Path | None = None
+
+
+def resolve_data_root() -> Path | None:
+    value = os.getenv("PSR_DATA_ROOT")
+    if value is None or not value.strip():
+        return None
+    return Path(value).expanduser()
+
+
+def resolve_hf_stocks_1m_path(path: Path | str | None = None) -> ResolvedDataPath:
+    if path is not None:
+        return ResolvedDataPath(Path(path).expanduser(), "explicit")
+
+    env_path = os.getenv("PSR_HF_STOCKS_1M_PATH")
+    if env_path is not None and env_path.strip():
+        return ResolvedDataPath(Path(env_path).expanduser(), "PSR_HF_STOCKS_1M_PATH")
+
+    data_root = resolve_data_root()
+    if data_root is not None:
+        return ResolvedDataPath(
+            data_root / HF_STOCKS_1M_DATASET_RELATIVE_PATH,
+            "PSR_DATA_ROOT",
+            data_root=data_root,
+        )
+
+    return ResolvedDataPath(HF_STOCKS_1M_FALLBACK_PATH, "fallback")
 
 
 class AppSettings(BaseSettings):

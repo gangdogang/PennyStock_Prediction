@@ -27,12 +27,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.1,<9.0",
+  "polars>=1.0,<2.0",
 ]
 ui = [
   "streamlit>=1.33,<2.0",
 ]
 ibkr = [
   "ib_insync>=0.9.86,<1.0",
+]
+hf = [
+  "polars>=1.0,<2.0",
 ]
 
 [project.scripts]
