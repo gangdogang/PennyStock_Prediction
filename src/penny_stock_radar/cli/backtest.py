@@ -79,6 +79,8 @@ from ..services.hf_1m_bars import (
     DEFAULT_AUDIT_ROOT as DEFAULT_HF_1M_BARS_AUDIT_ROOT,
     HfCandidateDayOptions,
     HfCandidateDaySegmenter,
+    HfCandidateEventOptions,
+    HfCandidateEventSegmenter,
     Hf1mBarsAuditError,
     Hf1mBarsAuditOptions,
     Hf1mBarsAuditor,
@@ -1614,6 +1616,136 @@ def segment_hf_candidate_days(
     console.print(
         "Summary: "
         f"candidate_days={result.summary.get('candidate_day_count', 0)} "
+        f"active_months={result.summary.get('active_candidate_month_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("segment-hf-candidate-events")
+def segment_hf_candidate_events(
+    parquet_path: Path | None = typer.Option(
+        None,
+        "--parquet-path",
+        help=(
+            "Optional parquet path. Otherwise resolves PSR_HF_STOCKS_1M_PATH, "
+            "then PSR_DATA_ROOT, then the repo-local fallback."
+        ),
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/candidate_events/hf_cryptospartan_alpaca_bars_1m"),
+        "--output-root",
+        help="Directory where HF candidate-event segmentation output is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    event_time: list[str] | None = typer.Option(
+        None,
+        "--event-time",
+        help="Event time in HH:MM ET. Repeat to override defaults: 09:45, 10:30, 14:00, 15:30.",
+    ),
+    forward_window: list[int] | None = typer.Option(
+        None,
+        "--forward-window",
+        help="Forward outcome window in minutes. Repeat to override defaults: 30, 60, 120.",
+    ),
+    min_price: float = typer.Option(0.25, "--min-price", help="Minimum event price."),
+    max_price: float = typer.Option(10.0, "--max-price", help="Maximum event price."),
+    min_rows_to_event: int = typer.Option(
+        5,
+        "--min-rows-to-event",
+        min=1,
+        help="Minimum regular-session bars up to the event time.",
+    ),
+    max_event_staleness_minutes: int = typer.Option(
+        2,
+        "--max-event-staleness-minutes",
+        min=0,
+        help="Maximum minutes between the event time and the latest available bar.",
+    ),
+    min_event_dollar_volume: float = typer.Option(
+        250_000.0,
+        "--min-event-dollar-volume",
+        help="Minimum cumulative dollar volume up to the event time.",
+    ),
+    min_event_move_pct: float = typer.Option(
+        5.0,
+        "--min-event-move-pct",
+        help="Minimum high-from-open percent observed by the event time.",
+    ),
+    min_candidate_events: int = typer.Option(
+        1000,
+        "--min-candidate-events",
+        min=1,
+        help="Minimum gross candidate events required for segmentation PASS.",
+    ),
+    min_active_months: int = typer.Option(
+        36,
+        "--min-active-months",
+        min=1,
+        help="Minimum active candidate months required for segmentation PASS.",
+    ),
+    chunk_months: int = typer.Option(
+        3,
+        "--chunk-months",
+        min=1,
+        help="Process the parquet in date chunks to reduce memory pressure.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Optional inclusive ET start date, YYYY-MM-DD.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Optional inclusive ET end date, YYYY-MM-DD.",
+    ),
+) -> None:
+    """Segment HF 1m bars into event-time gross candidates with forward outcomes."""
+    try:
+        parsed_start = date.fromisoformat(start_date) if start_date is not None else None
+        parsed_end = date.fromisoformat(end_date) if end_date is not None else None
+        result = HfCandidateEventSegmenter().run(
+            HfCandidateEventOptions(
+                parquet_path=parquet_path,
+                output_root=output_root,
+                run_id=run_id,
+                min_price=min_price,
+                max_price=max_price,
+                min_rows_to_event=min_rows_to_event,
+                max_event_staleness_minutes=max_event_staleness_minutes,
+                min_event_dollar_volume=min_event_dollar_volume,
+                min_event_move_pct=min_event_move_pct,
+                min_candidate_events=min_candidate_events,
+                min_active_months=min_active_months,
+                event_times_et=tuple(event_time or ("09:45", "10:30", "14:00", "15:30")),
+                forward_windows_minutes=tuple(forward_window or (30, 60, 120)),
+                chunk_months=chunk_months,
+                start_date=parsed_start,
+                end_date=parsed_end,
+            )
+        )
+    except (Hf1mBarsAuditError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.summary.get("candidate_event_gate", {})
+    console.print(f"HF candidate-event segmentation wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"CSV: [bold]{result.event_csv_path}[/bold]")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_events={result.summary.get('candidate_event_count', 0)} "
         f"active_months={result.summary.get('active_candidate_month_count', 0)} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"

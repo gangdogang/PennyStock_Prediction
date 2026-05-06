@@ -67,6 +67,39 @@ class HfCandidateDayResult:
     summary: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class HfCandidateEventOptions:
+    parquet_path: Path | None = None
+    output_root: Path = Path("data/backtest_lab/candidate_events/hf_cryptospartan_alpaca_bars_1m")
+    run_id: str | None = None
+    min_price: float = 0.25
+    max_price: float = 10.0
+    min_rows_to_event: int = 5
+    max_event_staleness_minutes: int = 2
+    min_event_dollar_volume: float = 250_000.0
+    min_event_move_pct: float = 5.0
+    min_candidate_events: int = 1000
+    min_active_months: int = 36
+    max_top_ticker_pct: float = 8.0
+    max_top10_ticker_pct: float = 35.0
+    max_top_month_pct: float = 20.0
+    event_times_et: tuple[str, ...] = ("09:45", "10:30", "14:00", "15:30")
+    forward_windows_minutes: tuple[int, ...] = (30, 60, 120)
+    top_n: int = 25
+    chunk_months: int = 3
+    start_date: date | None = None
+    end_date: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HfCandidateEventResult:
+    export_dir: Path
+    event_csv_path: Path
+    summary_json_path: Path
+    summary_md_path: Path
+    summary: dict[str, Any]
+
+
 class Hf1mBarsAuditor:
     def run(self, options: Hf1mBarsAuditOptions) -> Hf1mBarsAuditResult:
         resolved = resolve_hf_stocks_1m_path(options.parquet_path)
@@ -198,6 +231,101 @@ class HfCandidateDaySegmenter:
         return HfCandidateDayResult(
             export_dir=export_dir,
             candidate_csv_path=candidate_csv_path,
+            summary_json_path=summary_json_path,
+            summary_md_path=summary_md_path,
+            summary=summary,
+        )
+
+
+class HfCandidateEventSegmenter:
+    def run(self, options: HfCandidateEventOptions) -> HfCandidateEventResult:
+        resolved = resolve_hf_stocks_1m_path(options.parquet_path)
+        path = resolved.path
+        if not path.exists():
+            raise Hf1mBarsAuditError(
+                "HF 1m bars parquet not found: "
+                f"{path}. Set PSR_HF_STOCKS_1M_PATH to the parquet file, "
+                "or set PSR_DATA_ROOT to the external data root containing "
+                "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet."
+            )
+        pl = _load_polars()
+        lf = pl.scan_parquet(str(path))
+        schema = _collect_schema(lf)
+        mapping = _resolve_column_mapping(list(schema.keys()))
+        if mapping.get("volume") is None:
+            raise Hf1mBarsAuditError(
+                "HF event-time segmentation requires a volume column. "
+                f"Available columns: {', '.join(schema.keys())}"
+            )
+        event_minutes = _event_minutes(options.event_times_et)
+        forward_windows = tuple(
+            sorted(
+                {
+                    int(window)
+                    for window in options.forward_windows_minutes
+                    if int(window) > 0
+                }
+            )
+        )
+        if not event_minutes:
+            raise Hf1mBarsAuditError("At least one --event-time is required.")
+        if not forward_windows:
+            raise Hf1mBarsAuditError("At least one positive forward window is required.")
+
+        auditable = _with_audit_columns(lf, schema, mapping, pl)
+        run_id = options.run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        export_dir = _unique_export_dir(options.output_root / run_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        event_csv_path = export_dir / "candidate_events.csv"
+        summary_json_path = export_dir / "candidate_event_summary.json"
+        summary_md_path = export_dir / "candidate_event_summary.md"
+
+        start_date, end_exclusive = _candidate_date_bounds(auditable, pl, options)
+        chunks = list(_iter_date_chunks(start_date, end_exclusive, options.chunk_months))
+        frames = []
+        for chunk_start, chunk_end in chunks:
+            chunk_auditable = auditable.filter(
+                (pl.col("__psr_et_date") >= chunk_start)
+                & (pl.col("__psr_et_date") < chunk_end)
+            )
+            event_frame = _candidate_event_lazy_frame(
+                chunk_auditable,
+                pl,
+                options,
+                event_minutes=event_minutes,
+                forward_windows=forward_windows,
+            )
+            event_rows = event_frame.filter(pl.col("gross_candidate_event") == 1)
+            event_chunk = _collect_lazy(event_rows.sort(["market_date", "ticker", "event_time_et"]))
+            if event_chunk.height:
+                frames.append(event_chunk)
+        event_df = (
+            pl.concat(frames, how="vertical_relaxed").sort(["market_date", "ticker", "event_time_et"])
+            if frames
+            else _empty_candidate_event_df(pl, forward_windows=forward_windows)
+        )
+        event_df.write_csv(event_csv_path)
+        summary = _candidate_event_summary(
+            event_df,
+            options=options,
+            run_id=run_id,
+            path=path,
+            resolved=resolved,
+            schema=schema,
+            mapping=mapping,
+            pl=pl,
+            chunks=chunks,
+            event_times=tuple(_minute_to_hhmm(minute) for minute in event_minutes),
+            forward_windows=forward_windows,
+        )
+        summary_json_path.write_text(
+            json.dumps(summary, indent=2, ensure_ascii=True, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        summary_md_path.write_text(_candidate_event_markdown(summary), encoding="utf-8")
+        return HfCandidateEventResult(
+            export_dir=export_dir,
+            event_csv_path=event_csv_path,
             summary_json_path=summary_json_path,
             summary_md_path=summary_md_path,
             summary=summary,
@@ -576,7 +704,216 @@ def _candidate_day_lazy_frame(auditable, pl, options: HfCandidateDayOptions):
     )
 
 
-def _candidate_date_bounds(auditable, pl, options: HfCandidateDayOptions) -> tuple[date, date]:
+def _candidate_event_lazy_frame(
+    auditable,
+    pl,
+    options: HfCandidateEventOptions,
+    *,
+    event_minutes: tuple[int, ...],
+    forward_windows: tuple[int, ...],
+):
+    frames = [
+        _candidate_event_for_minute_lazy_frame(
+            auditable,
+            pl,
+            options,
+            event_minute=event_minute,
+            forward_windows=forward_windows,
+        )
+        for event_minute in event_minutes
+    ]
+    return pl.concat(frames, how="vertical_relaxed")
+
+
+def _candidate_event_for_minute_lazy_frame(
+    auditable,
+    pl,
+    options: HfCandidateEventOptions,
+    *,
+    event_minute: int,
+    forward_windows: tuple[int, ...],
+):
+    minute = pl.col("__psr_et_minute")
+    regular = minute.is_between(570, 959, closed="both")
+    to_event = minute.is_between(570, event_minute, closed="both")
+    volume = pl.col("__psr_volume").fill_null(0.0)
+    dollar_volume = (pl.col("__psr_close") * volume).fill_null(0.0)
+    o = pl.col("__psr_open")
+    h = pl.col("__psr_high")
+    l = pl.col("__psr_low")
+    c = pl.col("__psr_close")
+    ohlc_bad = (
+        o.is_null()
+        | h.is_null()
+        | l.is_null()
+        | c.is_null()
+        | (o <= 0)
+        | (h <= 0)
+        | (l <= 0)
+        | (c <= 0)
+        | (h < l)
+        | (h < o)
+        | (h < c)
+        | (l > o)
+        | (l > c)
+    ).fill_null(True)
+    aggregations = [
+        to_event.cast(pl.Int64).sum().alias("rows_to_event"),
+        ohlc_bad.filter(to_event).cast(pl.Int64).sum().alias("event_ohlc_sanity_failure_count"),
+        pl.col("__psr_open")
+        .filter(regular)
+        .sort_by(pl.col("__psr_ts").filter(regular))
+        .first()
+        .alias("regular_open_price"),
+        pl.col("__psr_et_minute").filter(to_event).max().alias("latest_bar_minute_to_event"),
+        pl.col("__psr_close")
+        .filter(to_event)
+        .sort_by(pl.col("__psr_ts").filter(to_event))
+        .last()
+        .alias("event_price"),
+        pl.col("__psr_high").filter(to_event).max().alias("event_high_so_far"),
+        pl.col("__psr_low").filter(to_event).min().alias("event_low_so_far"),
+        pl.col("__psr_volume").filter(to_event).sum().alias("event_volume_to_time"),
+        dollar_volume.filter(to_event).sum().alias("event_dollar_volume_to_time"),
+    ]
+    for window in forward_windows:
+        forward = regular & minute.is_between(
+            event_minute + 1,
+            event_minute + window,
+            closed="both",
+        )
+        aggregations.extend(
+            [
+                forward.cast(pl.Int64).sum().alias(f"forward_{window}m_row_count"),
+                pl.col("__psr_close")
+                .filter(forward)
+                .sort_by(pl.col("__psr_ts").filter(forward))
+                .last()
+                .alias(f"forward_{window}m_close_price"),
+                pl.col("__psr_high").filter(forward).max().alias(f"forward_{window}m_high_price"),
+                pl.col("__psr_low").filter(forward).min().alias(f"forward_{window}m_low_price"),
+            ]
+        )
+    event = (
+        auditable.with_columns(dollar_volume.alias("__psr_dollar_volume"))
+        .group_by(["__psr_ticker", "__psr_et_date"])
+        .agg(aggregations)
+        .rename({"__psr_ticker": "ticker", "__psr_et_date": "market_date"})
+    )
+    event = event.with_columns(
+        [
+            pl.col("market_date").dt.strftime("%Y-%m").alias("market_month"),
+            pl.lit(_minute_to_hhmm(event_minute)).alias("event_time_et"),
+            pl.lit(_event_time_bucket(event_minute)).alias("time_bucket"),
+            (pl.lit(event_minute) - pl.col("latest_bar_minute_to_event"))
+            .alias("event_staleness_minutes"),
+            (((pl.col("event_price") / pl.col("regular_open_price")) - 1.0) * 100.0)
+            .alias("event_return_from_open_pct"),
+            (((pl.col("event_high_so_far") / pl.col("regular_open_price")) - 1.0) * 100.0)
+            .alias("event_high_from_open_pct"),
+            (((pl.col("event_low_so_far") / pl.col("regular_open_price")) - 1.0) * 100.0)
+            .alias("event_low_from_open_pct"),
+        ]
+    )
+    forward_exprs = []
+    for window in forward_windows:
+        forward_exprs.extend(
+            [
+                (((pl.col(f"forward_{window}m_close_price") / pl.col("event_price")) - 1.0) * 100.0)
+                .alias(f"forward_{window}m_return_pct"),
+                (((pl.col(f"forward_{window}m_high_price") / pl.col("event_price")) - 1.0) * 100.0)
+                .alias(f"forward_{window}m_max_up_pct"),
+                (((pl.col(f"forward_{window}m_low_price") / pl.col("event_price")) - 1.0) * 100.0)
+                .alias(f"forward_{window}m_max_down_pct"),
+            ]
+        )
+    event = event.with_columns(forward_exprs)
+    low_price = pl.col("event_price").is_between(
+        options.min_price,
+        options.max_price,
+        closed="both",
+    )
+    event = event.with_columns(
+        [
+            low_price.fill_null(False).cast(pl.Int64).alias("low_price_universe"),
+            (
+                low_price
+                & (pl.col("rows_to_event") >= options.min_rows_to_event)
+                & (
+                    pl.col("event_staleness_minutes")
+                    <= options.max_event_staleness_minutes
+                )
+                & (pl.col("event_dollar_volume_to_time") >= options.min_event_dollar_volume)
+                & (pl.col("event_high_from_open_pct") >= options.min_event_move_pct)
+            )
+            .fill_null(False)
+            .cast(pl.Int64)
+            .alias("gross_candidate_event"),
+            (pl.col("rows_to_event") < options.min_rows_to_event)
+            .fill_null(True)
+            .cast(pl.Int64)
+            .alias("blocked_low_history_to_event"),
+            (
+                pl.col("event_staleness_minutes")
+                > options.max_event_staleness_minutes
+            )
+            .fill_null(True)
+            .cast(pl.Int64)
+            .alias("blocked_stale_event_price"),
+            pl.lit(
+                "gross_ohlcv_event_only_missing_l1_news_float_halt_kis_tradability"
+            ).alias("blocked_context_reasons"),
+            pl.lit(False).alias("decision_grade"),
+            pl.lit("none").alias("cost_grade"),
+        ]
+    )
+    selected = [
+        "ticker",
+        "market_date",
+        "market_month",
+        "event_time_et",
+        "time_bucket",
+        "rows_to_event",
+        "event_ohlc_sanity_failure_count",
+        "regular_open_price",
+        "latest_bar_minute_to_event",
+        "event_staleness_minutes",
+        "event_price",
+        "event_high_so_far",
+        "event_low_so_far",
+        "event_volume_to_time",
+        "event_dollar_volume_to_time",
+        "event_return_from_open_pct",
+        "event_high_from_open_pct",
+        "event_low_from_open_pct",
+    ]
+    for window in forward_windows:
+        selected.extend(
+            [
+                f"forward_{window}m_row_count",
+                f"forward_{window}m_close_price",
+                f"forward_{window}m_high_price",
+                f"forward_{window}m_low_price",
+                f"forward_{window}m_return_pct",
+                f"forward_{window}m_max_up_pct",
+                f"forward_{window}m_max_down_pct",
+            ]
+        )
+    selected.extend(
+        [
+            "low_price_universe",
+            "gross_candidate_event",
+            "blocked_low_history_to_event",
+            "blocked_stale_event_price",
+            "blocked_context_reasons",
+            "decision_grade",
+            "cost_grade",
+        ]
+    )
+    return event.select(selected)
+
+
+def _candidate_date_bounds(auditable, pl, options: Any) -> tuple[date, date]:
     if options.start_date is not None:
         start = options.start_date
     else:
@@ -634,6 +971,42 @@ def _coerce_date(value: object) -> date:
     return date.fromisoformat(str(value))
 
 
+def _event_minutes(values: tuple[str, ...]) -> tuple[int, ...]:
+    return tuple(sorted({_parse_hhmm(value) for value in values}))
+
+
+def _parse_hhmm(value: str) -> int:
+    parts = value.strip().split(":")
+    if len(parts) != 2:
+        raise Hf1mBarsAuditError(f"Invalid event time `{value}`. Use HH:MM ET.")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise Hf1mBarsAuditError(f"Invalid event time `{value}`. Use HH:MM ET.") from exc
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise Hf1mBarsAuditError(f"Invalid event time `{value}`. Use HH:MM ET.")
+    return hour * 60 + minute
+
+
+def _minute_to_hhmm(value: int) -> str:
+    return f"{value // 60:02d}:{value % 60:02d}"
+
+
+def _event_time_bucket(event_minute: int) -> str:
+    if 570 <= event_minute <= 584:
+        return "open_fakeout_risk"
+    if 585 <= event_minute <= 630:
+        return "real_money_morning"
+    if 631 <= event_minute <= 720:
+        return "late_morning_dead_zone"
+    if 840 <= event_minute <= 930:
+        return "afternoon_runner_window"
+    if 931 <= event_minute <= 960:
+        return "closing_ramp_dump_window"
+    return "other_event_window"
+
+
 def _empty_candidate_day_df(pl):
     return pl.DataFrame(
         schema={
@@ -675,6 +1048,53 @@ def _empty_candidate_day_df(pl):
             "cost_grade": pl.Utf8,
         }
     )
+
+
+def _empty_candidate_event_df(pl, *, forward_windows: tuple[int, ...]):
+    schema = {
+        "ticker": pl.Utf8,
+        "market_date": pl.Date,
+        "market_month": pl.Utf8,
+        "event_time_et": pl.Utf8,
+        "time_bucket": pl.Utf8,
+        "rows_to_event": pl.Int64,
+        "event_ohlc_sanity_failure_count": pl.Int64,
+        "regular_open_price": pl.Float64,
+        "latest_bar_minute_to_event": pl.Int64,
+        "event_staleness_minutes": pl.Int64,
+        "event_price": pl.Float64,
+        "event_high_so_far": pl.Float64,
+        "event_low_so_far": pl.Float64,
+        "event_volume_to_time": pl.Float64,
+        "event_dollar_volume_to_time": pl.Float64,
+        "event_return_from_open_pct": pl.Float64,
+        "event_high_from_open_pct": pl.Float64,
+        "event_low_from_open_pct": pl.Float64,
+    }
+    for window in forward_windows:
+        schema.update(
+            {
+                f"forward_{window}m_row_count": pl.Int64,
+                f"forward_{window}m_close_price": pl.Float64,
+                f"forward_{window}m_high_price": pl.Float64,
+                f"forward_{window}m_low_price": pl.Float64,
+                f"forward_{window}m_return_pct": pl.Float64,
+                f"forward_{window}m_max_up_pct": pl.Float64,
+                f"forward_{window}m_max_down_pct": pl.Float64,
+            }
+        )
+    schema.update(
+        {
+            "low_price_universe": pl.Int64,
+            "gross_candidate_event": pl.Int64,
+            "blocked_low_history_to_event": pl.Int64,
+            "blocked_stale_event_price": pl.Int64,
+            "blocked_context_reasons": pl.Utf8,
+            "decision_grade": pl.Boolean,
+            "cost_grade": pl.Utf8,
+        }
+    )
+    return pl.DataFrame(schema=schema)
 
 
 def _candidate_day_summary(
@@ -781,6 +1201,141 @@ def _candidate_day_summary(
     }
 
 
+def _candidate_event_summary(
+    event_df,
+    *,
+    options: HfCandidateEventOptions,
+    run_id: str,
+    path: Path,
+    resolved: ResolvedDataPath,
+    schema: dict[str, Any],
+    mapping: dict[str, str],
+    pl,
+    chunks: list[tuple[date, date]],
+    event_times: tuple[str, ...],
+    forward_windows: tuple[int, ...],
+) -> dict[str, Any]:
+    event_count = int(event_df.height)
+    active_months = _df_n_unique(event_df, "market_month")
+    blocked_low_history = _df_sum_int(event_df, "blocked_low_history_to_event")
+    blocked_stale = _df_sum_int(event_df, "blocked_stale_event_price")
+    top_tickers = _top_counts(
+        event_df,
+        pl,
+        "ticker",
+        total=event_count,
+        top_n=options.top_n,
+        count_label="candidate_event_count",
+    )
+    top_months = _top_counts(
+        event_df,
+        pl,
+        "market_month",
+        total=event_count,
+        top_n=options.top_n,
+        count_label="candidate_event_count",
+    )
+    top_event_times = _top_counts(
+        event_df,
+        pl,
+        "event_time_et",
+        total=event_count,
+        top_n=len(event_times),
+        count_label="candidate_event_count",
+    )
+    top_time_buckets = _top_counts(
+        event_df,
+        pl,
+        "time_bucket",
+        total=event_count,
+        top_n=10,
+        count_label="candidate_event_count",
+    )
+    top1_ticker_pct = float(top_tickers[0]["pct_of_candidates"]) if top_tickers else 0.0
+    top10_ticker_pct = round(sum(float(row["pct_of_candidates"]) for row in top_tickers[:10]), 6)
+    top_month_pct = float(top_months[0]["pct_of_candidates"]) if top_months else 0.0
+    gate_status, gate_reasons = _candidate_event_gate(
+        event_count=event_count,
+        active_months=active_months,
+        top1_ticker_pct=top1_ticker_pct,
+        top10_ticker_pct=top10_ticker_pct,
+        top_month_pct=top_month_pct,
+        options=options,
+    )
+    stat = path.stat()
+    return {
+        "run_id": run_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "metadata": {
+            "dataset": DATASET_NAME,
+            "scope": "hf_1m_candidate_event_segmentation_gross_only",
+            "decision_grade": False,
+            "cost_grade": "none",
+            "cost_grade_reason": "Candidate events are derived from 1m OHLCV only; no bid/ask, NBBO, L2, news, float, halt, or KIS tradability evidence.",
+            "pass_meaning": "PASS only means there are enough event-time gross candidates to continue falsification work. It does not approve setup backtests or live trading.",
+        },
+        "path_resolution": _path_resolution_payload(resolved),
+        "file": {
+            "path": str(path),
+            "exists": True,
+            "size_bytes": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        },
+        "schema": {
+            "columns": [{"name": name, "dtype": str(dtype)} for name, dtype in schema.items()],
+            "column_mapping": mapping,
+        },
+        "thresholds": {
+            "min_price": options.min_price,
+            "max_price": options.max_price,
+            "min_rows_to_event": options.min_rows_to_event,
+            "max_event_staleness_minutes": options.max_event_staleness_minutes,
+            "min_event_dollar_volume": options.min_event_dollar_volume,
+            "min_event_move_pct": options.min_event_move_pct,
+            "min_candidate_events": options.min_candidate_events,
+            "min_active_months": options.min_active_months,
+            "max_top_ticker_pct": options.max_top_ticker_pct,
+            "max_top10_ticker_pct": options.max_top10_ticker_pct,
+            "max_top_month_pct": options.max_top_month_pct,
+            "event_times_et": list(event_times),
+            "forward_windows_minutes": list(forward_windows),
+            "chunk_months": options.chunk_months,
+        },
+        "processing": {
+            "start_date": chunks[0][0].isoformat() if chunks else None,
+            "end_date": (chunks[-1][1] - timedelta(days=1)).isoformat() if chunks else None,
+            "chunk_count": len(chunks),
+            "chunks": [
+                {
+                    "start_date": start.isoformat(),
+                    "end_date": (end - timedelta(days=1)).isoformat(),
+                }
+                for start, end in chunks
+            ],
+        },
+        "candidate_event_count": event_count,
+        "active_candidate_month_count": active_months,
+        "candidate_flag_counts": {
+            "gross_candidate_event": event_count,
+            "blocked_low_history_to_event": blocked_low_history,
+            "blocked_stale_event_price": blocked_stale,
+        },
+        "concentration": {
+            "top1_ticker_pct": top1_ticker_pct,
+            "top10_ticker_pct": top10_ticker_pct,
+            "top_month_pct": top_month_pct,
+            "top_tickers": top_tickers,
+            "top_months": top_months,
+            "event_time_counts": top_event_times,
+            "time_bucket_counts": top_time_buckets,
+        },
+        "candidate_event_gate": {
+            "status": gate_status,
+            "reasons": gate_reasons,
+        },
+    }
+
+
 def _candidate_day_gate(
     *,
     candidate_count: int,
@@ -819,16 +1374,62 @@ def _candidate_day_gate(
     return "PASS", ["gross_candidate_day_segmentation_passed_minimum_coverage_checks"]
 
 
-def _top_counts(df, pl, column: str, *, total: int, top_n: int) -> list[dict[str, Any]]:
+def _candidate_event_gate(
+    *,
+    event_count: int,
+    active_months: int,
+    top1_ticker_pct: float,
+    top10_ticker_pct: float,
+    top_month_pct: float,
+    options: HfCandidateEventOptions,
+) -> tuple[str, list[str]]:
+    blockers: list[str] = []
+    failures: list[str] = []
+    if event_count < options.min_candidate_events:
+        blockers.append(
+            f"candidate_event_count_lt_{options.min_candidate_events}: {event_count}"
+        )
+    if active_months < options.min_active_months:
+        blockers.append(
+            f"active_candidate_month_count_lt_{options.min_active_months}: {active_months}"
+        )
+    if top1_ticker_pct > options.max_top_ticker_pct:
+        failures.append(
+            f"top1_ticker_pct_gt_{options.max_top_ticker_pct}: {top1_ticker_pct}"
+        )
+    if top10_ticker_pct > options.max_top10_ticker_pct:
+        failures.append(
+            f"top10_ticker_pct_gt_{options.max_top10_ticker_pct}: {top10_ticker_pct}"
+        )
+    if top_month_pct > options.max_top_month_pct:
+        failures.append(
+            f"top_month_pct_gt_{options.max_top_month_pct}: {top_month_pct}"
+        )
+    if failures:
+        return "FAIL", failures + blockers
+    if blockers:
+        return "BLOCKED", blockers
+    return "PASS", ["gross_candidate_event_segmentation_passed_minimum_coverage_checks"]
+
+
+def _top_counts(
+    df,
+    pl,
+    column: str,
+    *,
+    total: int,
+    top_n: int,
+    count_label: str = "candidate_day_count",
+) -> list[dict[str, Any]]:
     if total <= 0 or column not in df.columns:
         return []
     top = (
         df.group_by(column)
-        .agg(pl.len().alias("candidate_day_count"))
-        .sort(["candidate_day_count", column], descending=[True, False])
+        .agg(pl.len().alias(count_label))
+        .sort([count_label, column], descending=[True, False])
         .head(top_n)
         .with_columns(
-            ((pl.col("candidate_day_count") / float(total)) * 100.0)
+            ((pl.col(count_label) / float(total)) * 100.0)
             .round(6)
             .alias("pct_of_candidates")
         )
@@ -956,6 +1557,66 @@ def _candidate_day_markdown(summary: dict[str, Any]) -> str:
             "## Caveat",
             "",
             "- PASS only means gross OHLCV candidate-day coverage is sufficient for falsification work.",
+            "- These rows are not setup backtest results and do not approve live execution.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _candidate_event_markdown(summary: dict[str, Any]) -> str:
+    metadata = summary.get("metadata", {})
+    gate = summary.get("candidate_event_gate", {})
+    flags = summary.get("candidate_flag_counts", {})
+    concentration = summary.get("concentration", {})
+    thresholds = summary.get("thresholds", {})
+    lines = [
+        "# HF Candidate-Event Segmentation",
+        "",
+        f"- Dataset: `{metadata.get('dataset')}`",
+        f"- Scope: `{metadata.get('scope')}`",
+        f"- Decision grade: `{metadata.get('decision_grade')}`",
+        f"- Cost grade: `{metadata.get('cost_grade')}`",
+        f"- Candidate-event gate: `{gate.get('status')}`",
+        f"- Candidate events: {summary.get('candidate_event_count', 0)}",
+        f"- Active candidate months: {summary.get('active_candidate_month_count', 0)}",
+        "",
+        "## Event Windows",
+        "",
+        f"- Event times ET: {', '.join(thresholds.get('event_times_et', []))}",
+        f"- Forward windows minutes: {thresholds.get('forward_windows_minutes', [])}",
+        "",
+        "## Flag Counts",
+        "",
+        f"- Gross candidate events: {flags.get('gross_candidate_event', 0)}",
+        f"- Low history to event: {flags.get('blocked_low_history_to_event', 0)}",
+        "",
+        "## Concentration",
+        "",
+        f"- Top 1 ticker %: {concentration.get('top1_ticker_pct', 0)}",
+        f"- Top 10 ticker %: {concentration.get('top10_ticker_pct', 0)}",
+        f"- Top month %: {concentration.get('top_month_pct', 0)}",
+        "",
+        "## Thresholds",
+        "",
+        f"- Price: {thresholds.get('min_price')} to {thresholds.get('max_price')}",
+        f"- Min rows to event: {thresholds.get('min_rows_to_event')}",
+        f"- Max event staleness minutes: {thresholds.get('max_event_staleness_minutes')}",
+        f"- Min event dollar volume: {thresholds.get('min_event_dollar_volume')}",
+        f"- Min event move pct: {thresholds.get('min_event_move_pct')}",
+        f"- Min candidate events: {thresholds.get('min_candidate_events')}",
+        "",
+        "## Gate Reasons",
+        "",
+    ]
+    for reason in gate.get("reasons", []):
+        lines.append(f"- {reason}")
+    lines.extend(
+        [
+            "",
+            "## Caveat",
+            "",
+            "- Candidate generation uses only information available at the event time.",
+            "- Forward returns/max-up/max-down are diagnostic outcome columns only.",
             "- These rows are not setup backtest results and do not approve live execution.",
         ]
     )

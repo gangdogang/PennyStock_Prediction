@@ -184,6 +184,21 @@ Windows 메모리가 부족하면 더 작은 date chunk 로 실행한다.
 
 이 명령은 1분봉 parquet 를 ticker-day 단위로 분해해 `candidate_days.csv` 와 gate summary 를 만든다. `PASS` 는 gross candidate-day coverage 가 충분하다는 뜻일 뿐 setup backtest, cost/fill, live 가능 판정이 아니다.
 
+Hugging Face candidate-event segmentation:
+
+```bash
+PSR_DATA_ROOT=/path/to/Penny_Stock_Data ./scripts/psradar segment-hf-candidate-events --run-id hf_events_$(date +%Y%m%d)
+```
+
+Windows:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 segment-hf-candidate-events --run-id hf_events_20260507 --chunk-months 1
+```
+
+이 명령은 09:45/10:30/14:00/15:30 ET event-time 후보를 만들고, 후보 생성에는 event 시점까지의 OHLCV 만 사용한다. event 시점 최신 bar 가 기본 2분보다 오래됐으면 stale 로 제외한다. 이후 30/60/120분 regular-session gross return/max-up/max-down 은 결과 진단 컬럼일 뿐이며 산출물은 `decision_grade=false`, `cost_grade=none` 이다.
+
 Coverage shortfall planning:
 
 ```bash

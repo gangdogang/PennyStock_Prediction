@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ from penny_stock_radar.config import (
 from penny_stock_radar.services.hf_1m_bars import (
     HfCandidateDayOptions,
     HfCandidateDaySegmenter,
+    HfCandidateEventOptions,
+    HfCandidateEventSegmenter,
     Hf1mBarsAuditError,
     Hf1mBarsAuditOptions,
     Hf1mBarsAuditor,
@@ -258,6 +261,89 @@ def test_hf_candidate_day_cli_writes_segmentation_artifacts(tmp_path: Path) -> N
     assert "cost_grade=none" in result.output
 
 
+def test_hf_candidate_event_segmenter_uses_event_time_features_only(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "event_hf_1m.parquet"
+    _write_event_parquet(parquet_path)
+
+    result = HfCandidateEventSegmenter().run(
+        HfCandidateEventOptions(
+            parquet_path=parquet_path,
+            output_root=tmp_path / "candidate_events",
+            run_id="fixture",
+            event_times_et=("09:45",),
+            forward_windows_minutes=(30, 60),
+            min_rows_to_event=2,
+            max_event_staleness_minutes=2,
+            min_event_dollar_volume=100,
+            min_event_move_pct=5,
+            min_candidate_events=1,
+            min_active_months=1,
+            max_top_ticker_pct=100,
+            max_top10_ticker_pct=100,
+            max_top_month_pct=100,
+            chunk_months=1,
+        )
+    )
+
+    summary = json.loads(result.summary_json_path.read_text(encoding="utf-8"))
+    assert summary["metadata"]["decision_grade"] is False
+    assert summary["metadata"]["cost_grade"] == "none"
+    assert summary["candidate_event_gate"]["status"] == "PASS"
+    assert summary["candidate_event_count"] == 1
+    assert summary["thresholds"]["event_times_et"] == ["09:45"]
+    rows = list(csv.DictReader(result.event_csv_path.open(encoding="utf-8")))
+    assert len(rows) == 1
+    assert rows[0]["ticker"] == "ABCD"
+    assert rows[0]["event_staleness_minutes"] == "0"
+    assert "forward_30m_return_pct" in rows[0]
+    assert (
+        rows[0]["blocked_context_reasons"]
+        == "gross_ohlcv_event_only_missing_l1_news_float_halt_kis_tradability"
+    )
+
+
+def test_hf_candidate_event_cli_writes_segmentation_artifacts(tmp_path: Path) -> None:
+    parquet_path = tmp_path / "event_hf_1m.parquet"
+    _write_event_parquet(parquet_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "segment-hf-candidate-events",
+            "--parquet-path",
+            str(parquet_path),
+            "--output-root",
+            str(tmp_path / "candidate_events"),
+            "--run-id",
+            "cli",
+            "--event-time",
+            "09:45",
+            "--forward-window",
+            "30",
+            "--min-rows-to-event",
+            "2",
+            "--max-event-staleness-minutes",
+            "2",
+            "--min-event-dollar-volume",
+            "100",
+            "--min-event-move-pct",
+            "5",
+            "--min-candidate-events",
+            "1",
+            "--min-active-months",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = tmp_path / "candidate_events" / "cli"
+    assert (export_dir / "candidate_events.csv").exists()
+    assert (export_dir / "candidate_event_summary.json").exists()
+    assert (export_dir / "candidate_event_summary.md").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
 def _write_tiny_parquet(path: Path) -> None:
     _write_parquet(
         path,
@@ -306,6 +392,86 @@ def _write_tiny_parquet(path: Path) -> None:
                 "low": 5.0,
                 "close": 5.1,
                 "volume": 500,
+            },
+        ],
+    )
+
+
+def _write_event_parquet(path: Path) -> None:
+    _write_parquet(
+        path,
+        [
+            {
+                "ticker": "ABCD",
+                "timestamp": datetime(2026, 5, 1, 13, 30, tzinfo=timezone.utc),
+                "open": 1.0,
+                "high": 1.02,
+                "low": 0.99,
+                "close": 1.0,
+                "volume": 200,
+            },
+            {
+                "ticker": "ABCD",
+                "timestamp": datetime(2026, 5, 1, 13, 45, tzinfo=timezone.utc),
+                "open": 1.0,
+                "high": 1.12,
+                "low": 1.0,
+                "close": 1.08,
+                "volume": 300,
+            },
+            {
+                "ticker": "ABCD",
+                "timestamp": datetime(2026, 5, 1, 14, 15, tzinfo=timezone.utc),
+                "open": 1.08,
+                "high": 1.20,
+                "low": 1.05,
+                "close": 1.15,
+                "volume": 400,
+            },
+            {
+                "ticker": "ABCD",
+                "timestamp": datetime(2026, 5, 1, 14, 45, tzinfo=timezone.utc),
+                "open": 1.15,
+                "high": 1.25,
+                "low": 1.10,
+                "close": 1.18,
+                "volume": 500,
+            },
+            {
+                "ticker": "WEAK",
+                "timestamp": datetime(2026, 5, 1, 13, 30, tzinfo=timezone.utc),
+                "open": 2.0,
+                "high": 2.02,
+                "low": 1.99,
+                "close": 2.0,
+                "volume": 100,
+            },
+            {
+                "ticker": "WEAK",
+                "timestamp": datetime(2026, 5, 1, 13, 45, tzinfo=timezone.utc),
+                "open": 2.0,
+                "high": 2.03,
+                "low": 1.98,
+                "close": 2.01,
+                "volume": 100,
+            },
+            {
+                "ticker": "STALE",
+                "timestamp": datetime(2026, 5, 1, 13, 30, tzinfo=timezone.utc),
+                "open": 2.0,
+                "high": 2.1,
+                "low": 1.9,
+                "close": 2.0,
+                "volume": 1000,
+            },
+            {
+                "ticker": "STALE",
+                "timestamp": datetime(2026, 5, 1, 13, 35, tzinfo=timezone.utc),
+                "open": 2.0,
+                "high": 2.5,
+                "low": 2.0,
+                "close": 2.4,
+                "volume": 1000,
             },
         ],
     )

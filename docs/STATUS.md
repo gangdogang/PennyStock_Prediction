@@ -1,6 +1,6 @@
 # Status
 
-최종 정리일: 2026-05-06
+최종 정리일: 2026-05-07
 
 ## 현재 capabilities
 
@@ -58,6 +58,7 @@
 - `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약하고 shortfall 섹션을 자동 포함한다.
 - `audit-hf-1m-bars` CLI 는 외부 CryptoSpartan Hugging Face 1m OHLCV parquet 를 repo 로 복사하지 않고 Polars lazy scan 으로 schema, row/ticker/timestamp 범위, OHLC sanity, duplicate ticker/timestamp, ET session count, low-price row count, high-move day count, top ticker row count 를 `data/backtest_lab/audits/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 JSON/MD 로 감사할 수 있다. 경로는 `PSR_HF_STOCKS_1M_PATH`, `PSR_DATA_ROOT`, repo-local fallback 순서로 해석한다.
 - `segment-hf-candidate-days` CLI 는 같은 HF parquet 를 ticker-day 단위로 분해해 low-price universe, early volume momentum, afternoon runner, posthoc high-move label, low session coverage blocker, concentration gate 를 `data/backtest_lab/candidate_days/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 CSV/JSON/MD 로 남긴다. 산출물은 항상 `decision_grade=False`, `cost_grade=none` 이며 `PASS` 는 gross candidate-day coverage 통과만 의미한다. Windows 메모리 압박을 줄이기 위해 기본 3개월 단위 date chunk 로 처리하고 `--chunk-months 1` 로 더 줄일 수 있다.
+- `segment-hf-candidate-events` CLI 는 같은 HF parquet 를 ticker-day 보다 엄격한 event-time 단위로 분해한다. 09:45/10:30/14:00/15:30 ET 시점까지 관측 가능한 OHLCV feature 로만 후보 이벤트를 만들고, event 시점 최신 bar 가 기본 2분보다 오래된 stale 후보는 제외한다. 이후 30/60/120분 regular-session gross return/max-up/max-down 을 결과 컬럼으로 붙인다. 이 산출물도 `decision_grade=False`, `cost_grade=none` 이며 setup backtest/entry/stop/sizing 근거가 아니다.
 - `report-coverage-shortfall` CLI 는 Step 0 blocker 를 binary `BLOCKED` 가 아니라 minute bar 개월 수, cost-eligible overlap %, corporate action 개월 수의 부족분으로 정량화한다. 산출물은 `operational_planning_only_not_decision_grade` stamp 를 포함하며, vendor 비용은 사용자가 입력한 월 단가만 사용한다.
 - `audit-universe-tradability` CLI 는 replay/watchlist/scanner universe 의 listing exchange 를 PIT universe, Nasdaq Symbol Directory, 선택적 yfinance cache 순서로 확인해 KIS tradable/untradable/unknown 비율을 JSON/CSV/MD 로 산출한다. untradable+unknown 이 30% 이상이면 `universe_kis_untradable_pct_high` blocker 로 기록된다.
 - `run-benchmark-suite` CLI 와 `services/benchmark_suite.py` 는 strategy expectancy 를 cash, same-universe random entry, random time within day, top-gainer naive, volume-leader naive, opposite-side diagnostic 6개 benchmark 대비 incremental 로 비교할 entry-event/report 배선을 제공한다. 실제 execution 전 cost-eligible source policy 를 먼저 적용하며, BLOCKED 상태에서는 benchmark entry generation 도 거부한다.
