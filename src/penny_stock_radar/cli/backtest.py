@@ -1502,6 +1502,9 @@ def audit_hf_1m_bars(
     except Hf1mBarsAuditError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
     except OSError as exc:
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
@@ -1560,9 +1563,27 @@ def segment_hf_candidate_days(
         min=1,
         help="Minimum active candidate months required for segmentation PASS.",
     ),
+    chunk_months: int = typer.Option(
+        3,
+        "--chunk-months",
+        min=1,
+        help="Process the parquet in date chunks to reduce memory pressure.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Optional inclusive ET start date, YYYY-MM-DD.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Optional inclusive ET end date, YYYY-MM-DD.",
+    ),
 ) -> None:
     """Segment HF 1m bars into gross ticker-day candidates before setup backtests."""
     try:
+        parsed_start = date.fromisoformat(start_date) if start_date is not None else None
+        parsed_end = date.fromisoformat(end_date) if end_date is not None else None
         result = HfCandidateDaySegmenter().run(
             HfCandidateDayOptions(
                 parquet_path=parquet_path,
@@ -1573,6 +1594,9 @@ def segment_hf_candidate_days(
                 min_regular_rows=min_regular_rows,
                 min_candidate_days=min_candidate_days,
                 min_active_months=min_active_months,
+                chunk_months=chunk_months,
+                start_date=parsed_start,
+                end_date=parsed_end,
             )
         )
     except Hf1mBarsAuditError as exc:

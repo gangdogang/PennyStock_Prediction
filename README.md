@@ -176,6 +176,12 @@ $env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
 .\scripts\psradar.ps1 segment-hf-candidate-days --run-id hf_candidates_20260507
 ```
 
+Windows 메모리가 부족하면 더 작은 date chunk 로 실행한다.
+
+```powershell
+.\scripts\psradar.ps1 segment-hf-candidate-days --run-id hf_candidates_20260507 --chunk-months 1
+```
+
 이 명령은 1분봉 parquet 를 ticker-day 단위로 분해해 `candidate_days.csv` 와 gate summary 를 만든다. `PASS` 는 gross candidate-day coverage 가 충분하다는 뜻일 뿐 setup backtest, cost/fill, live 가능 판정이 아니다.
 
 Coverage shortfall planning:

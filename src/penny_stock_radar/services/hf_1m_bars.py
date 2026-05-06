@@ -3,9 +3,9 @@ from __future__ import annotations
 import importlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from ..config import ResolvedDataPath, resolve_hf_stocks_1m_path
 
@@ -53,6 +53,9 @@ class HfCandidateDayOptions:
     max_top10_ticker_pct: float = 35.0
     max_top_month_pct: float = 20.0
     top_n: int = 25
+    chunk_months: int = 3
+    start_date: date | None = None
+    end_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,9 +153,6 @@ class HfCandidateDaySegmenter:
                 f"Available columns: {', '.join(schema.keys())}"
             )
         auditable = _with_audit_columns(lf, schema, mapping, pl)
-        daily = _candidate_day_lazy_frame(auditable, pl, options)
-        candidate_rows = daily.filter(pl.col("gross_candidate_day") == 1)
-
         run_id = options.run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         export_dir = _unique_export_dir(options.output_root / run_id)
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -160,8 +160,23 @@ class HfCandidateDaySegmenter:
         summary_json_path = export_dir / "candidate_day_summary.json"
         summary_md_path = export_dir / "candidate_day_summary.md"
 
-        candidate_df = _collect_lazy(
-            candidate_rows.sort(["market_date", "ticker"])
+        start_date, end_exclusive = _candidate_date_bounds(auditable, pl, options)
+        chunks = list(_iter_date_chunks(start_date, end_exclusive, options.chunk_months))
+        frames = []
+        for chunk_start, chunk_end in chunks:
+            chunk_auditable = auditable.filter(
+                (pl.col("__psr_et_date") >= chunk_start)
+                & (pl.col("__psr_et_date") < chunk_end)
+            )
+            daily = _candidate_day_lazy_frame(chunk_auditable, pl, options)
+            candidate_rows = daily.filter(pl.col("gross_candidate_day") == 1)
+            candidate_chunk = _collect_lazy(candidate_rows.sort(["market_date", "ticker"]))
+            if candidate_chunk.height:
+                frames.append(candidate_chunk)
+        candidate_df = (
+            pl.concat(frames, how="vertical_relaxed").sort(["market_date", "ticker"])
+            if frames
+            else _empty_candidate_day_df(pl)
         )
         candidate_df.write_csv(candidate_csv_path)
         summary = _candidate_day_summary(
@@ -173,6 +188,7 @@ class HfCandidateDaySegmenter:
             schema=schema,
             mapping=mapping,
             pl=pl,
+            chunks=chunks,
         )
         summary_json_path.write_text(
             json.dumps(summary, indent=2, ensure_ascii=True, sort_keys=True, default=str) + "\n",
@@ -560,6 +576,107 @@ def _candidate_day_lazy_frame(auditable, pl, options: HfCandidateDayOptions):
     )
 
 
+def _candidate_date_bounds(auditable, pl, options: HfCandidateDayOptions) -> tuple[date, date]:
+    if options.start_date is not None:
+        start = options.start_date
+    else:
+        row = _collect_lazy(
+            auditable.select(pl.col("__psr_et_date").min().alias("min_date"))
+        ).to_dicts()[0]
+        value = row.get("min_date")
+        if value is None:
+            raise Hf1mBarsAuditError("HF candidate-day segmentation found no dated rows.")
+        start = _coerce_date(value)
+
+    if options.end_date is not None:
+        end_exclusive = options.end_date + timedelta(days=1)
+    else:
+        row = _collect_lazy(
+            auditable.select(pl.col("__psr_et_date").max().alias("max_date"))
+        ).to_dicts()[0]
+        value = row.get("max_date")
+        if value is None:
+            raise Hf1mBarsAuditError("HF candidate-day segmentation found no dated rows.")
+        end_exclusive = _coerce_date(value) + timedelta(days=1)
+
+    if end_exclusive <= start:
+        raise Hf1mBarsAuditError(
+            f"Invalid candidate-day date range: start={start} end_exclusive={end_exclusive}"
+        )
+    return start, end_exclusive
+
+
+def _iter_date_chunks(
+    start: date,
+    end_exclusive: date,
+    chunk_months: int,
+) -> Iterable[tuple[date, date]]:
+    current = start
+    months = max(int(chunk_months), 1)
+    while current < end_exclusive:
+        next_date = min(_add_months(current, months), end_exclusive)
+        yield current, next_date
+        current = next_date
+
+
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
+
+
+def _coerce_date(value: object) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
+
+
+def _empty_candidate_day_df(pl):
+    return pl.DataFrame(
+        schema={
+            "ticker": pl.Utf8,
+            "market_date": pl.Date,
+            "row_count": pl.Int64,
+            "premarket_row_count": pl.Int64,
+            "regular_row_count": pl.Int64,
+            "afterhours_row_count": pl.Int64,
+            "ohlc_sanity_failure_count": pl.Int64,
+            "regular_open_price": pl.Float64,
+            "regular_close_price": pl.Float64,
+            "regular_high_price": pl.Float64,
+            "regular_low_price": pl.Float64,
+            "full_day_high_price": pl.Float64,
+            "full_day_low_price": pl.Float64,
+            "full_day_volume": pl.Float64,
+            "full_day_dollar_volume": pl.Float64,
+            "early_high_price": pl.Float64,
+            "early_close_price": pl.Float64,
+            "early_volume": pl.Float64,
+            "early_dollar_volume": pl.Float64,
+            "afternoon_start_price": pl.Float64,
+            "afternoon_high_price": pl.Float64,
+            "afternoon_volume": pl.Float64,
+            "afternoon_dollar_volume": pl.Float64,
+            "market_month": pl.Utf8,
+            "early_high_from_open_pct": pl.Float64,
+            "afternoon_high_from_start_pct": pl.Float64,
+            "full_day_high_from_open_pct": pl.Float64,
+            "low_price_universe": pl.Int64,
+            "early_volume_momentum_candidate": pl.Int64,
+            "afternoon_runner_candidate": pl.Int64,
+            "posthoc_high_move_label": pl.Int64,
+            "blocked_low_regular_session_coverage": pl.Int64,
+            "gross_candidate_day": pl.Int64,
+            "blocked_context_reasons": pl.Utf8,
+            "decision_grade": pl.Boolean,
+            "cost_grade": pl.Utf8,
+        }
+    )
+
+
 def _candidate_day_summary(
     candidate_df,
     *,
@@ -570,6 +687,7 @@ def _candidate_day_summary(
     schema: dict[str, Any],
     mapping: dict[str, str],
     pl,
+    chunks: list[tuple[date, date]],
 ) -> dict[str, Any]:
     candidate_count = int(candidate_df.height)
     active_months = _df_n_unique(candidate_df, "market_month")
@@ -627,6 +745,19 @@ def _candidate_day_summary(
             "max_top_ticker_pct": options.max_top_ticker_pct,
             "max_top10_ticker_pct": options.max_top10_ticker_pct,
             "max_top_month_pct": options.max_top_month_pct,
+            "chunk_months": options.chunk_months,
+        },
+        "processing": {
+            "start_date": chunks[0][0].isoformat() if chunks else None,
+            "end_date": (chunks[-1][1] - timedelta(days=1)).isoformat() if chunks else None,
+            "chunk_count": len(chunks),
+            "chunks": [
+                {
+                    "start_date": start.isoformat(),
+                    "end_date": (end - timedelta(days=1)).isoformat(),
+                }
+                for start, end in chunks
+            ],
         },
         "candidate_day_count": candidate_count,
         "active_candidate_month_count": active_months,

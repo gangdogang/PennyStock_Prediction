@@ -211,6 +211,7 @@ def test_hf_candidate_day_segmenter_writes_candidate_days(tmp_path: Path) -> Non
             max_top_ticker_pct=100,
             max_top10_ticker_pct=100,
             max_top_month_pct=100,
+            chunk_months=1,
         )
     )
 
@@ -218,6 +219,7 @@ def test_hf_candidate_day_segmenter_writes_candidate_days(tmp_path: Path) -> Non
     assert summary["metadata"]["decision_grade"] is False
     assert summary["metadata"]["cost_grade"] == "none"
     assert summary["candidate_day_gate"]["status"] == "PASS"
+    assert summary["processing"]["chunk_count"] == 1
     assert summary["candidate_day_count"] >= 1
     assert summary["candidate_flag_counts"]["posthoc_high_move_label"] >= 1
     csv_text = result.candidate_csv_path.read_text(encoding="utf-8")
