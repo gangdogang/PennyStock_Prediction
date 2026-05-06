@@ -246,8 +246,11 @@ class HistoricalL1Quote(BaseModel):
     timestamp: datetime
     bid_price: float | None = None
     ask_price: float | None = None
+    bid_exchange: str | None = None
+    ask_exchange: str | None = None
     last_price: float | None = None
     source: str
+    subscription_continuous: bool = True
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -291,6 +294,9 @@ class HistoricalCoverageReport(BaseModel):
     expected_interval_count: int
     covered_interval_count: int
     interval_coverage_pct: float
+    tier1_continuous_symbol_count: int | None = None
+    tier2_rotation_symbol_count: int | None = None
+    rotation_gap_seconds_p90: float | None = None
     notes: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
 

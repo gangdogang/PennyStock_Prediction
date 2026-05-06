@@ -11,10 +11,13 @@ from penny_stock_radar.services.research_data_coverage import (
 
 
 def test_research_data_coverage_classifies_cost_sources_and_writes_artifacts(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "research.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     with get_connection(db_path) as connection:
         connection.execute(
             """
@@ -129,5 +132,39 @@ def test_research_data_coverage_classifies_cost_sources_and_writes_artifacts(
     assert report["summary"]["strategy_dates_cost_eligible_overlap"] is True
     assert report["summary"]["kis_tradable_universe_pct"] == 100.0
     assert "minute_bars_6_month_coverage_missing" in report["summary"]["blockers"]
+    assert report["shortfall"]["planning_stamp"] == "operational_planning_only_not_decision_grade"
+    assert report["shortfall"]["blockers"][0]["blocker_name"] == "minute_bars_months_shortfall"
     assert result.csv_path.exists()
     assert "Alpaca IEX" in result.summary_path.read_text(encoding="utf-8")
+
+
+def _write_kis_consolidation_verdict(base_dir: Path) -> None:
+    path = base_dir / "automation" / "state" / "source_validation" / "latest_kis_consolidation.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "source_name": "kis_l1_snapshot",
+                "classification": "nbbo_consolidated",
+                "reason": "fixture verdict",
+                "evidence": {
+                    "bid_exchange_distinct_count": 2,
+                    "ask_exchange_distinct_count": 2,
+                    "bid_ask_exchange_differ_rate": 0.5,
+                    "quote_update_frequency_hz": 1.5,
+                    "spread_distribution_p50": 0.02,
+                    "spread_distribution_p90": 0.02,
+                    "spread_distribution_p99": 0.02,
+                    "sample_size": 40,
+                    "sample_window": [
+                        "2026-05-01T09:30:00-04:00",
+                        "2026-05-01T09:30:39-04:00",
+                    ],
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )

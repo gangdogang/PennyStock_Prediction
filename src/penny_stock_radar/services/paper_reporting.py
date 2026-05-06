@@ -26,6 +26,7 @@ from ..db import (
 from ..models import PaperOrder, PaperPosition, PaperTradingRun
 from .paper_bucket_policy import bucket_uses_predictor_weight, paper_bucket_policy
 from .paper_runtime import paper_market_date
+from .replay_grade_stamper import load_replay_grade
 from .trading_support import predicted_rank_band
 
 
@@ -46,6 +47,7 @@ class PaperReportPaths:
     catalyst_kpis: Path
     run_manifest: Path
     performance_gate: Path
+    replay_summary: Path
 
 
 def paper_report_paths(export_dir: Path) -> PaperReportPaths:
@@ -66,6 +68,7 @@ def paper_report_paths(export_dir: Path) -> PaperReportPaths:
         catalyst_kpis=base / "paper_catalyst_kpis.csv",
         run_manifest=base / "run_manifest.json",
         performance_gate=base / "paper_performance_gate.json",
+        replay_summary=base / "replay_summary.json",
     )
 
 
@@ -73,7 +76,7 @@ def read_csv_rows(path: Path) -> list[dict[str, str]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
+        reader = csv.DictReader(_non_comment_lines(handle))
         return [dict(row) for row in reader]
 
 
@@ -81,8 +84,19 @@ def read_csv_header(path: Path) -> list[str]:
     if not path.exists() or path.stat().st_size == 0:
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
+        reader = csv.DictReader(_non_comment_lines(handle))
         return list(reader.fieldnames or [])
+
+
+def read_replay_grade(export_dir: Path) -> dict[str, object] | None:
+    return load_replay_grade(export_dir)
+
+
+def _non_comment_lines(handle):
+    for line in handle:
+        if line.lstrip().startswith("#"):
+            continue
+        yield line
 
 
 def archive_paper_performance_export(
@@ -942,6 +956,7 @@ class PaperReportingService:
         pair_diff_rows = read_csv_rows(self.paths.bucket_pair_diff)
         capacity_rows = read_csv_rows(self.paths.capacity_report)
         manifest_payload = self._load_json_object(self.paths.run_manifest)
+        replay_grade = read_replay_grade(self.export_dir)
         predictor_effect = self._predictor_effect_from_manifest(manifest_payload)
         coverage_gate = self._step0_coverage_gate_summary()
         failures: list[str] = []
@@ -1170,6 +1185,9 @@ class PaperReportingService:
             edge_judgment_blockers.append(
                 "performance review gate failed; predictor edge 판단 금지"
             )
+        if replay_grade and replay_grade.get("decision_grade") is False:
+            reason = str(replay_grade.get("grade_reason") or "unknown")
+            edge_judgment_blockers.append(f"replay decision_grade false; {reason}")
         edge_judgment_allowed = not edge_judgment_blockers
 
         return {
@@ -1179,6 +1197,7 @@ class PaperReportingService:
             "warning_count": len(warnings),
             "edge_judgment_allowed": edge_judgment_allowed,
             "edge_judgment_blockers": edge_judgment_blockers,
+            "replay_grade": replay_grade,
             "step0_coverage_gate": coverage_gate,
             "required_buckets": list(self.comparison_buckets),
             "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -1271,7 +1290,7 @@ class PaperReportingService:
         if not path.exists():
             return []
         with path.open("r", encoding="utf-8", newline="") as handle:
-            return [dict(row) for row in csv.DictReader(handle)]
+            return [dict(row) for row in csv.DictReader(_non_comment_lines(handle))]
 
     def _group_trade_rows(self, trade_rows: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
         grouped: dict[str, list[dict[str, object]]] = {}

@@ -31,6 +31,43 @@ from penny_stock_radar.db import insert_watchlist
 EASTERN = ZoneInfo("America/New_York")
 
 
+def _write_kis_consolidation_verdict(
+    base_dir: Path,
+    *,
+    classification: str = "nbbo_consolidated",
+    reason: str = "fixture verdict",
+) -> None:
+    path = base_dir / "automation" / "state" / "source_validation" / "latest_kis_consolidation.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "source_name": "kis_l1_snapshot",
+                "classification": classification,
+                "reason": reason,
+                "evidence": {
+                    "bid_exchange_distinct_count": 2,
+                    "ask_exchange_distinct_count": 2,
+                    "bid_ask_exchange_differ_rate": 0.5,
+                    "quote_update_frequency_hz": 1.5,
+                    "spread_distribution_p50": 0.02,
+                    "spread_distribution_p90": 0.02,
+                    "spread_distribution_p99": 0.02,
+                    "sample_size": 40,
+                    "sample_window": [
+                        "2026-04-10T09:30:00-04:00",
+                        "2026-04-10T09:30:39-04:00",
+                    ],
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_report_backtest_coverage_command_rejects_invalid_session(
     monkeypatch,
     tmp_path: Path,
@@ -138,7 +175,7 @@ def test_capture_kis_l1_window_repeats_capture_and_reports_summary(
             assert incoming_settings.database_path == db_path
             self._index = 0
 
-        def capture_l1_quotes(self, *, symbols):
+        def capture_l1_quotes(self, *, symbols, quote_stamper=None):
             captured_symbols.append(list(symbols))
             summary = summaries[self._index]
             self._index += 1
@@ -166,8 +203,8 @@ def test_capture_kis_l1_window_repeats_capture_and_reports_summary(
     assert result.exit_code == 0
     assert captured_symbols == [["AAA"], ["AAA"]]
     assert sleep_calls == [0.01]
-    assert "iteration=1 symbols=1 new_rows=1 distinct_minutes=1" in result.stderr
-    assert "iteration=2 symbols=1 new_rows=2 distinct_minutes=1" in result.stderr
+    assert "iteration=1 symbols=1 universe=1 new_rows=1 distinct_minutes=1" in result.stderr
+    assert "iteration=2 symbols=1 universe=1 new_rows=2 distinct_minutes=1" in result.stderr
     assert "duplicate minute bucket rows=1" in result.stderr
     assert "stale timestamp fallback rows=1" in result.stderr
     assert "L1 capture pass 1/2" in result.stdout
@@ -178,9 +215,14 @@ def test_capture_kis_l1_window_repeats_capture_and_reports_summary(
     assert settings.backtest_coverage_gate_path.exists()
 
 
-def test_run_falsification_audit_writes_research_artifacts(tmp_path: Path) -> None:
+def test_run_falsification_audit_writes_research_artifacts(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     snapshot = create_snapshot_run(
         db_path,
         source="historical",
@@ -291,10 +333,13 @@ def test_run_falsification_audit_writes_research_artifacts(tmp_path: Path) -> No
 
 
 def test_run_falsification_audit_builds_matched_random_entry_benchmark(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     snapshot = create_snapshot_run(
         db_path,
         source="historical",
@@ -399,10 +444,13 @@ def test_run_falsification_audit_builds_matched_random_entry_benchmark(
 
 
 def test_run_falsification_audit_blocks_matched_without_strategy_date_cost_overlap(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     snapshot = create_snapshot_run(
         db_path,
         source="historical",
@@ -504,10 +552,13 @@ def test_run_falsification_audit_blocks_matched_without_strategy_date_cost_overl
 
 
 def test_run_falsification_audit_cost_source_policy_excludes_alpaca_iex(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     insert_historical_l1_quotes(
         db_path,
         [
@@ -590,10 +641,13 @@ def test_run_falsification_audit_cost_source_policy_excludes_alpaca_iex(
 
 
 def test_run_falsification_audit_blocks_matched_when_strategy_date_has_only_alpaca_cost(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
+    monkeypatch.chdir(tmp_path)
+    _write_kis_consolidation_verdict(tmp_path)
     snapshot = create_snapshot_run(
         db_path,
         source="historical",

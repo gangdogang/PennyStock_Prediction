@@ -6,6 +6,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 import time
 from zoneinfo import ZoneInfo
 
@@ -20,7 +21,21 @@ from ..db import (
     get_connection,
 )
 from ..services.backtest_data import BacktestDataManager
+from ..services.benchmark_suite import BenchmarkSuiteOptions, BenchmarkSuiteRunner
+from ..services.multiday_catalyst_replay import (
+    CatalystEntryRule,
+    CatalystExitRule,
+    MultidayCatalystReplayRunner,
+)
 from ..services.kis_historical import KISHistoricalDataService
+from ..services.kis_websocket_rotation import (
+    KisWebSocketRotationManager,
+    RotationPolicy,
+)
+from ..services.kis_quote_consolidation_check import (
+    evaluate_kis_quote_consolidation,
+    write_consolidation_verdict,
+)
 from ..services.alpaca_historical import (
     ALPACA_DIAGNOSTIC_WARNING,
     AlpacaHistoricalDataService,
@@ -28,6 +43,13 @@ from ..services.alpaca_historical import (
     build_quote_windows_from_strategy_run_dir,
     build_quote_windows_from_trade_log,
 )
+from ..services.ibkr_historical import (
+    IBKR_NBBO_SOURCE,
+    IbkrHistoricalConfig,
+    backfill_ibkr_historical_quotes,
+    ibkr_backfill_summary_to_dict,
+)
+from ..services.coverage_shortfall import estimate_shortfall, shortfall_report_to_dict
 from ..services.nasdaq_symbol_directory import NasdaqSymbolDirectoryArchiver
 from ..services.sec_edgar_pit import (
     SecEdgarPitBackfillOptions,
@@ -261,6 +283,19 @@ def _resolve_l1_capture_symbols(
         prefer_reportable=False,
     )
     return [str(row["symbol"]).upper() for row in watchlist_rows]
+
+
+def _rotation_priority_data(
+    symbols: list[str],
+    *,
+    priority_metric: str,
+) -> dict[str, float]:
+    normalized = priority_metric.strip().lower()
+    if normalized not in {"dollar_volume", "watchlist_rank", "volatility"}:
+        raise ValueError(
+            "--rotation-priority-metric must be dollar_volume, watchlist_rank, or volatility."
+        )
+    return {symbol: float(len(symbols) - index) for index, symbol in enumerate(symbols)}
 
 
 @app.command("run-premkt-predictor")
@@ -972,6 +1007,102 @@ def backfill_alpaca_iex_quotes(
     console.print(ALPACA_DIAGNOSTIC_WARNING)
 
 
+@app.command("backfill-ibkr-historical-quotes")
+def backfill_ibkr_historical_quotes_command(
+    symbols_file: Path = typer.Option(
+        ...,
+        "--symbols-file",
+        help="Text/CSV file with one symbol per line or first CSV column.",
+    ),
+    market_date_start: str = typer.Option(
+        ...,
+        "--market-date-start",
+        help="Inclusive market date start in YYYY-MM-DD.",
+    ),
+    market_date_end: str = typer.Option(
+        ...,
+        "--market-date-end",
+        help="Inclusive market date end in YYYY-MM-DD.",
+    ),
+    paper_account: bool = typer.Option(
+        True,
+        "--paper-account/--live-account",
+        help="Use IBKR paper gateway/TWS defaults. Historical calls are supported from paper sessions.",
+    ),
+    rate_limit_per_minute: int = typer.Option(
+        60,
+        "--rate-limit-per-minute",
+        min=1,
+        help="Maximum IBKR historical tick requests per rolling minute.",
+    ),
+    chunk_size_seconds: int = typer.Option(
+        1800,
+        "--chunk-size-seconds",
+        min=1,
+        help="Historical tick request chunk size in seconds.",
+    ),
+    reqhistoricalticks_count: int = typer.Option(
+        1000,
+        "--reqHistoricalTicks-count",
+        min=1,
+        max=1000,
+        help="IBKR reqHistoricalTicks count per request.",
+    ),
+    out_summary: Path = typer.Option(
+        ...,
+        "--out-summary",
+        help="JSON summary output path.",
+    ),
+) -> None:
+    """Backfill IBKR historical NBBO bid/ask ticks into historical_l1_quotes."""
+    import penny_stock_radar.cli as root_cli
+
+    try:
+        symbols = _normalize_symbol_list(None, symbols_file=symbols_file)
+        if not symbols:
+            raise ValueError("--symbols-file did not contain any symbols.")
+        start = date.fromisoformat(market_date_start)
+        end = date.fromisoformat(market_date_end)
+        config = IbkrHistoricalConfig(
+            paper_account=paper_account,
+            rate_limit_per_minute=rate_limit_per_minute,
+            chunk_size_seconds=chunk_size_seconds,
+            reqHistoricalTicks_count=reqhistoricalticks_count,
+        )
+    except (OSError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    settings = root_cli.get_settings()
+    try:
+        summary = backfill_ibkr_historical_quotes(
+            symbols=symbols,
+            market_date_start=start,
+            market_date_end=end,
+            db_path=settings.database_path,
+            config=config,
+        )
+    except RuntimeError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    payload = {
+        "command": "backfill-ibkr-historical-quotes",
+        "created_at": datetime.now().isoformat(),
+        "source": IBKR_NBBO_SOURCE,
+        "config": asdict(config),
+        **ibkr_backfill_summary_to_dict(summary),
+    }
+    _write_run_json(out_summary, payload)
+    console.print(
+        "IBKR historical NBBO backfill inserted "
+        f"[bold]{summary.rows_inserted}[/bold] rows for "
+        f"[bold]{summary.requested_symbols}[/bold] symbols. Summary: [bold]{out_summary}[/bold]"
+    )
+    if summary.failed_chunks:
+        console.print(f"Failed chunks: [bold]{len(summary.failed_chunks)}[/bold]")
+
+
 @app.command("archive-nasdaq-symbol-directory")
 def archive_nasdaq_symbol_directory(
     market_date: str | None = typer.Option(
@@ -1271,6 +1402,74 @@ def audit_research_data_coverage(
         console.print("No coverage blockers in this report. Run falsification audit next.")
 
 
+@app.command("report-coverage-shortfall")
+def report_coverage_shortfall(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to quantify. Defaults to data/backtest_lab/.",
+    ),
+    target_minute_bars_months: float = typer.Option(
+        6.0,
+        "--target-minute-bars-months",
+        help="Required historical minute-bar span in months.",
+    ),
+    target_cost_eligible_overlap_pct: float = typer.Option(
+        80.0,
+        "--target-cost-eligible-overlap-pct",
+        help="Required percent of minute-bar dates with cost-eligible quote/spread overlap.",
+    ),
+    target_corporate_action_months: float = typer.Option(
+        12.0,
+        "--target-corporate-action-months",
+        help="Required corporate-action inventory span in months.",
+    ),
+    vendor_quote_source: str | None = typer.Option(
+        None,
+        "--vendor-quote-source",
+        help="Vendor/source label for purchased quote data. Used only for planning metadata.",
+    ),
+    vendor_quote_cost_per_month_usd: float | None = typer.Option(
+        None,
+        "--vendor-quote-cost-per-month-usd",
+        help="Input vendor unit cost per month in USD. No unknown vendor prices are inferred.",
+    ),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Optional JSON output path, e.g. automation/state/shortfall/<run_id>.json.",
+    ),
+) -> None:
+    """Quantify coverage blockers for operational planning."""
+    target = {
+        "target_minute_bars_months": target_minute_bars_months,
+        "target_cost_eligible_overlap_pct": target_cost_eligible_overlap_pct,
+        "target_corporate_action_months": target_corporate_action_months,
+        "vendor_quote_source": vendor_quote_source,
+        "vendor_quote_cost_per_month_usd": vendor_quote_cost_per_month_usd,
+    }
+    try:
+        payload = shortfall_report_to_dict(estimate_shortfall(db_path, target))
+        payload["db_path"] = str(db_path)
+        payload["target"] = target
+        if out is not None:
+            _write_run_json(out, payload)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    blockers = payload.get("blockers", [])
+    console.print(
+        "Coverage shortfall "
+        f"blockers={len(blockers)} archive_days={payload['total_calendar_days_archive_path']} "
+        f"vendor_cost_usd={payload['total_cost_usd_vendor_path']}."
+    )
+    console.print(f"Stamp: {payload['planning_stamp']}")
+    console.print(payload["recommendation"])
+    if out is not None:
+        console.print(f"Coverage shortfall JSON: {out}")
+
+
 @app.command("audit-universe-tradability")
 def audit_universe_tradability(
     db_path: Path = typer.Option(
@@ -1474,6 +1673,260 @@ def run_falsification_audit(
     console.print(f"Summary: [bold]{result.summary_path}[/bold]")
     console.print(f"Null baseline CSV: [bold]{result.null_baseline_path}[/bold]")
     console.print(f"Matched random-entry CSV: [bold]{result.matched_random_entry_path}[/bold]")
+
+
+@app.command("run-benchmark-suite")
+def run_benchmark_suite(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB to inspect before benchmark entry generation.",
+    ),
+    export_root: Path = typer.Option(
+        Path("data/backtest_lab/research_runs"),
+        "--export-root",
+        help="Directory where a timestamped benchmark suite run is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to benchmark_suite_<timestamp>.",
+    ),
+    strategy_run_dir: Path | None = typer.Option(
+        None,
+        "--strategy-run-dir",
+        help="Replay output directory containing paper_trade_log.csv for matched diagnostics.",
+    ),
+    strategy_trade_log: Path | None = typer.Option(
+        None,
+        "--strategy-trade-log",
+        help="Explicit paper_trade_log.csv path for opposite-side and random-time matching.",
+    ),
+    strategy_bucket: str | None = typer.Option(
+        None,
+        "--strategy-bucket",
+        help="Optional bucket filter for strategy entry schedule, e.g. predictor_weighted.",
+    ),
+    strategy_kpis_path: Path | None = typer.Option(
+        None,
+        "--strategy-kpis-path",
+        help="Optional JSON file with strategy KPI values for incremental comparison.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Optional inclusive first market date in YYYY-MM-DD.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Optional inclusive last market date in YYYY-MM-DD.",
+    ),
+    seed: int = typer.Option(
+        20260506,
+        "--seed",
+        help="Deterministic benchmark seed.",
+    ),
+    entries_per_date: int = typer.Option(
+        1,
+        "--entries-per-date",
+        min=1,
+        help="Random-entry samples to generate per market date once cost policy passes.",
+    ),
+    top_n: int = typer.Option(
+        5,
+        "--top-n",
+        min=1,
+        help="Naive top-gainer and volume-leader entries per market date.",
+    ),
+) -> None:
+    """Generate the Phase 0 benchmark-suite report, or a blocked report if cost evidence is missing."""
+    try:
+        market_dates = (
+            tuple(date.fromisoformat(value) for value in _date_strings(start_date, end_date))
+            if start_date and end_date
+            else ()
+        )
+        result = BenchmarkSuiteRunner().run(
+            BenchmarkSuiteOptions(
+                db_path=db_path,
+                export_root=export_root,
+                run_id=run_id,
+                market_dates=market_dates,
+                strategy_run_dir=strategy_run_dir,
+                strategy_trade_log=strategy_trade_log,
+                strategy_bucket=strategy_bucket,
+                strategy_kpis_path=strategy_kpis_path,
+                seed=seed,
+                entries_per_date=entries_per_date,
+                top_n=top_n,
+            )
+        )
+    except ValueError as exc:
+        console.print(f"Invalid benchmark-suite date option: {exc}")
+        raise typer.Exit(code=1) from exc
+    except sqlite3.Error as exc:
+        console.print(f"Failed to inspect benchmark-suite database: {exc}")
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(f"Failed to write benchmark-suite artifacts: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(
+        f"Benchmark suite [bold]{result.status}[/bold] at [bold]{result.export_dir}[/bold]."
+    )
+    console.print(f"Report: [bold]{result.report_path}[/bold]")
+    console.print(f"Entries CSV: [bold]{result.entries_path}[/bold]")
+
+
+@app.command("run-multiday-catalyst-replay")
+def run_multiday_catalyst_replay_command(
+    db_path: Path = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Historical research DB with PIT universe, SEC filings, and historical bars.",
+    ),
+    export_root: Path = typer.Option(
+        Path("data/backtest_lab/replays/multiday_catalyst"),
+        "--export-root",
+        help="Directory where the replay run directory is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to multiday_catalyst_<dates>_<timestamp>.",
+    ),
+    start_date: str = typer.Option(
+        ...,
+        "--start-date",
+        help="Inclusive first catalyst market date in YYYY-MM-DD.",
+    ),
+    end_date: str = typer.Option(
+        ...,
+        "--end-date",
+        help="Inclusive last catalyst market date in YYYY-MM-DD.",
+    ),
+    entry_time: str = typer.Option(
+        "d_plus_1_open",
+        "--entry-time",
+        help="Entry timing: d_close, d_plus_1_open, or d_plus_1_0935.",
+    ),
+    require_sec_filing_within_days: int = typer.Option(
+        1,
+        "--require-sec-filing-within-days",
+        min=1,
+        help="Require a SEC filing effective within this many calendar days ending on D.",
+    ),
+    min_dollar_volume_d: float = typer.Option(
+        1_000_000.0,
+        "--min-dollar-volume-d",
+        min=0.0,
+        help="Minimum catalyst-day dollar volume from historical bars.",
+    ),
+    max_holding_days: int = typer.Option(
+        5,
+        "--max-holding-days",
+        min=1,
+        help="Maximum trading days to hold from entry day.",
+    ),
+    exit_on_volume_exhaustion: bool = typer.Option(
+        True,
+        "--exit-on-volume-exhaustion/--no-exit-on-volume-exhaustion",
+        help="Exit when volume dries up after catalyst day.",
+    ),
+    exit_on_follow_on_filing: bool = typer.Option(
+        True,
+        "--exit-on-follow-on-filing/--no-exit-on-follow-on-filing",
+        help="Exit when a follow-on SEC filing appears after catalyst day.",
+    ),
+    structure_stop: str = typer.Option(
+        "d_minus_1_low",
+        "--structure-stop",
+        help="Structure stop: d_minus_1_low, n_day_low, or atr_multiple.",
+    ),
+    structure_stop_param: float = typer.Option(
+        1.0,
+        "--structure-stop-param",
+        min=0.01,
+        help="N for n_day_low, or ATR multiple for atr_multiple.",
+    ),
+    symbol: list[str] | None = typer.Option(
+        None,
+        "--symbol",
+        help="Optional explicit symbol filter. Repeat or comma-separate.",
+    ),
+    passed_only: bool = typer.Option(
+        True,
+        "--passed-only/--all-universe-rows",
+        help="Use only passed PIT universe rows when resolving the universe.",
+    ),
+    require_kis_tradable: bool = typer.Option(
+        True,
+        "--require-kis-tradable/--allow-kis-untradable",
+        help="Exclude KIS-untradable PIT universe symbols before entry generation.",
+    ),
+    allow_live_db: bool = typer.Option(
+        False,
+        "--allow-live-db",
+        help="Allow using data/penny_stock_radar.sqlite3. Disabled by default for replay safety.",
+    ),
+) -> None:
+    """Run the scaffolded D to D+5 multi-day catalyst replay."""
+    try:
+        parsed_entry_time = _parse_catalyst_entry_time(entry_time)
+        parsed_structure_stop = _parse_catalyst_structure_stop(structure_stop)
+        filters = {
+            "export_root": export_root,
+            "run_id": run_id,
+            "symbols": _normalize_symbol_list(symbol),
+            "passed_only": passed_only,
+            "require_kis_tradable": require_kis_tradable,
+            "allow_live_db": allow_live_db,
+        }
+        result = MultidayCatalystReplayRunner().run(
+            db_path=db_path,
+            market_date_start=date.fromisoformat(start_date),
+            market_date_end=date.fromisoformat(end_date),
+            entry_rule=CatalystEntryRule(
+                entry_time=parsed_entry_time,
+                require_sec_filing_within_days=require_sec_filing_within_days,
+                min_dollar_volume_d=min_dollar_volume_d,
+            ),
+            exit_rule=CatalystExitRule(
+                max_holding_days=max_holding_days,
+                exit_on_volume_exhaustion=exit_on_volume_exhaustion,
+                exit_on_follow_on_filing=exit_on_follow_on_filing,
+                structure_stop=parsed_structure_stop,
+                structure_stop_param=structure_stop_param,
+            ),
+            universe_filter=filters,
+        )
+    except (ValueError, OSError, sqlite3.Error) as exc:
+        console.print(f"Failed to run multiday catalyst replay: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Multiday catalyst replay wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"Manifest: [bold]{result.manifest_path}[/bold]")
+    console.print(f"Summary: [bold]{result.summary_path}[/bold]")
+    console.print(f"Trades CSV: [bold]{result.trades_path}[/bold]")
+
+
+def _parse_catalyst_entry_time(
+    value: str,
+) -> Literal["d_close", "d_plus_1_open", "d_plus_1_0935"]:
+    normalized = value.strip().lower()
+    if normalized not in {"d_close", "d_plus_1_open", "d_plus_1_0935"}:
+        raise ValueError("--entry-time must be d_close, d_plus_1_open, or d_plus_1_0935.")
+    return normalized  # type: ignore[return-value]
+
+
+def _parse_catalyst_structure_stop(
+    value: str,
+) -> Literal["d_minus_1_low", "n_day_low", "atr_multiple"]:
+    normalized = value.strip().lower()
+    if normalized not in {"d_minus_1_low", "n_day_low", "atr_multiple"}:
+        raise ValueError("--structure-stop must be d_minus_1_low, n_day_low, or atr_multiple.")
+    return normalized  # type: ignore[return-value]
 
 
 @app.command("audit-pit-universe-reconstruction")
@@ -1833,6 +2286,50 @@ def capture_kis_l1(
         console.print(f"No L1 quote returned: {', '.join(summary.skipped_symbols)}")
 
 
+@app.command("evaluate-kis-quote-consolidation")
+def evaluate_kis_quote_consolidation_command(
+    sample_window_days: int = typer.Option(
+        5,
+        min=1,
+        help="How many recent market dates of KIS L1 rows to evaluate.",
+    ),
+    reference_source: str | None = typer.Option(
+        None,
+        help="Optional reference source to compare at identical quote timestamps.",
+    ),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        help="JSON output path for this validation run.",
+    ),
+) -> None:
+    """Evaluate whether KIS L1 snapshots have NBBO-like consolidation evidence."""
+    import penny_stock_radar.cli as root_cli
+
+    normalized_reference = reference_source.lower() if reference_source else None
+    if normalized_reference not in {None, "ibkr_nbbo", "polygon_nbbo_free"}:
+        console.print("--reference-source must be ibkr_nbbo, polygon_nbbo_free, or omitted.")
+        raise typer.Exit(code=1)
+
+    settings = root_cli.get_settings()
+    root_cli.init_database(settings.database_path)
+    verdict = evaluate_kis_quote_consolidation(
+        settings.database_path,
+        sample_window_days=sample_window_days,
+        reference_source=normalized_reference,
+    )
+    output_path, latest_path = write_consolidation_verdict(verdict, out)
+    console.print(
+        "KIS quote consolidation: "
+        f"[bold]{verdict.classification}[/bold] "
+        f"sample_size={verdict.evidence.sample_size} "
+        f"freq_hz={verdict.evidence.quote_update_frequency_hz:.3f}"
+    )
+    console.print(f"Reason: {verdict.reason}")
+    console.print(f"Validation JSON: {output_path}")
+    console.print(f"Latest verdict JSON: {latest_path}")
+
+
 @app.command("capture-kis-l1-window")
 def capture_kis_l1_window(
     symbol: list[str] = typer.Option(
@@ -1868,6 +2365,28 @@ def capture_kis_l1_window(
         None,
         help="Optional JSON path for the latest coverage gate snapshot.",
     ),
+    rotation_tier1_size: int | None = typer.Option(
+        None,
+        min=0,
+        help=(
+            "Continuous subscription tier size. Defaults to the resolved universe size, "
+            "which keeps the legacy non-rotation path."
+        ),
+    ),
+    rotation_tier2_concurrent: int = typer.Option(
+        10,
+        min=0,
+        help="Number of tier2 symbols to rotate into each active capture window.",
+    ),
+    rotation_window_seconds: int = typer.Option(
+        300,
+        min=1,
+        help="Seconds between tier2 rotation steps.",
+    ),
+    rotation_priority_metric: str = typer.Option(
+        "watchlist_rank",
+        help="Rotation priority metric: dollar_volume, watchlist_rank, or volatility.",
+    ),
 ) -> None:
     """Capture KIS L1 quotes repeatedly to build interval coverage for the current session."""
     import penny_stock_radar.cli as root_cli
@@ -1887,14 +2406,44 @@ def capture_kis_l1_window(
         console.print("No symbols available. Build a watchlist first or pass `--symbol` explicitly.")
         raise typer.Exit(code=1)
 
+    capture_universe = symbols[:limit]
+    try:
+        priority_data = _rotation_priority_data(
+            capture_universe,
+            priority_metric=rotation_priority_metric,
+        )
+    except ValueError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    rotation_manager = KisWebSocketRotationManager()
+    rotation_policy = RotationPolicy(
+        tier1_size=len(capture_universe) if rotation_tier1_size is None else rotation_tier1_size,
+        tier2_window_seconds=rotation_window_seconds,
+        tier2_concurrent=rotation_tier2_concurrent,
+        priority_metric=rotation_priority_metric.strip().lower(),  # type: ignore[arg-type]
+    )
+    slots = rotation_manager.assign_tiers(capture_universe, priority_data, rotation_policy)
+    slot_counts = rotation_manager.slot_counts(slots)
     service = KISHistoricalDataService(settings)
     total_inserted = 0
     unresolved: set[str] = set()
     skipped: set[str] = set()
     market_date: str | None = None
+    elapsed_since_rotation = 0.0
     try:
         for index in range(iterations):
-            summary = service.capture_l1_quotes(symbols=symbols[:limit])
+            if index > 0:
+                elapsed_since_rotation += interval_seconds
+                slots = rotation_manager.next_rotation_step(
+                    slots,
+                    int(elapsed_since_rotation),
+                )
+                elapsed_since_rotation %= rotation_window_seconds
+            active_symbols = rotation_manager.active_symbols(slots)
+            summary = service.capture_l1_quotes(
+                symbols=active_symbols,
+                quote_stamper=rotation_manager.stamp_quote,
+            )
             market_date = summary.market_date
             total_inserted += summary.inserted_rows
             unresolved.update(summary.unresolved_symbols)
@@ -1902,6 +2451,7 @@ def capture_kis_l1_window(
             typer.echo(
                 "iteration="
                 f"{index + 1} symbols={summary.requested_symbols} "
+                f"universe={len(capture_universe)} "
                 f"new_rows={summary.inserted_rows} distinct_minutes={summary.distinct_minute_keys}",
                 err=True,
             )
@@ -1944,9 +2494,16 @@ def capture_kis_l1_window(
             manager = BacktestDataManager(settings)
             report = manager.build_l1_coverage_report(
                 market_date,
-                symbols=symbols[:limit],
+                symbols=capture_universe,
                 session=coverage_session,
                 source="kis_l1_snapshot",
+                tier1_continuous_symbol_count=slot_counts[
+                    "tier1_continuous_symbol_count"
+                ],
+                tier2_rotation_symbol_count=slot_counts[
+                    "tier2_rotation_symbol_count"
+                ],
+                rotation_gap_seconds_p90=rotation_manager.rotation_gap_seconds_p90(slots),
             )
             report_path = manager.export_coverage_report_json(report)
             gate_status = manager.build_coverage_gate_status(

@@ -206,7 +206,7 @@ class PremktReplayValidationEvaluator:
             return []
         try:
             with path.open("r", encoding="utf-8", newline="") as handle:
-                return list(csv.DictReader(handle))
+                return list(csv.DictReader(_non_comment_lines(handle)))
         except OSError:
             if not allow_missing:
                 missing.append(path.name)
@@ -725,3 +725,10 @@ class PremktReplayValidationEvaluator:
 
     def _truthy(self, value: Any) -> bool:
         return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _non_comment_lines(handle):
+    for line in handle:
+        if line.lstrip().startswith("#"):
+            continue
+        yield line

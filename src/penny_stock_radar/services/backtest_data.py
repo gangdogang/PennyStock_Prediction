@@ -110,6 +110,9 @@ class BacktestDataManager:
         symbols: Iterable[str],
         session: str = "premarket",
         source: str = "historical_l1_quotes",
+        tier1_continuous_symbol_count: int | None = None,
+        tier2_rotation_symbol_count: int | None = None,
+        rotation_gap_seconds_p90: float | None = None,
     ) -> HistoricalCoverageReport:
         market_date_str = self._coerce_market_date(market_date).isoformat()
         expected_symbols = sorted({symbol.upper() for symbol in symbols if symbol})
@@ -141,9 +144,27 @@ class BacktestDataManager:
             expected_interval_count=expected_intervals,
             covered_interval_count=covered_intervals,
             interval_coverage_pct=self._pct(covered_intervals, expected_intervals),
+            tier1_continuous_symbol_count=tier1_continuous_symbol_count,
+            tier2_rotation_symbol_count=tier2_rotation_symbol_count,
+            rotation_gap_seconds_p90=rotation_gap_seconds_p90,
             notes=[
                 f"session={session}",
                 f"window={start_at.isoformat()}->{end_at.isoformat()}",
+                *(
+                    [f"tier1_continuous_symbol_count={tier1_continuous_symbol_count}"]
+                    if tier1_continuous_symbol_count is not None
+                    else []
+                ),
+                *(
+                    [f"tier2_rotation_symbol_count={tier2_rotation_symbol_count}"]
+                    if tier2_rotation_symbol_count is not None
+                    else []
+                ),
+                *(
+                    [f"rotation_gap_seconds_p90={rotation_gap_seconds_p90}"]
+                    if rotation_gap_seconds_p90 is not None
+                    else []
+                ),
                 *quality_notes,
             ],
         )

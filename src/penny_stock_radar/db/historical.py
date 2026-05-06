@@ -28,8 +28,11 @@ def insert_historical_l1_quotes(
             quote.timestamp.isoformat(),
             quote.bid_price,
             quote.ask_price,
+            quote.bid_exchange,
+            quote.ask_exchange,
             quote.last_price,
             quote.source,
+            int(bool(quote.subscription_continuous)),
             quote.created_at.isoformat(),
         )
         for quote in quotes
@@ -45,11 +48,14 @@ def insert_historical_l1_quotes(
                 quote_at,
                 bid_price,
                 ask_price,
+                bid_exchange,
+                ask_exchange,
                 last_price,
                 source,
+                subscription_continuous,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -264,10 +270,13 @@ def insert_historical_coverage_report(
                 expected_interval_count,
                 covered_interval_count,
                 interval_coverage_pct,
+                tier1_continuous_symbol_count,
+                tier2_rotation_symbol_count,
+                rotation_gap_seconds_p90,
                 notes,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 report.market_date,
@@ -279,6 +288,9 @@ def insert_historical_coverage_report(
                 report.expected_interval_count,
                 report.covered_interval_count,
                 report.interval_coverage_pct,
+                report.tier1_continuous_symbol_count,
+                report.tier2_rotation_symbol_count,
+                report.rotation_gap_seconds_p90,
                 json.dumps(report.notes),
                 report.created_at.isoformat(),
             ),

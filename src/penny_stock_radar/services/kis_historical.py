@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 import logging
 import time as time_module
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -137,6 +137,7 @@ class KISHistoricalDataService:
         *,
         symbols: Iterable[str],
         source: str = "kis_l1_snapshot",
+        quote_stamper: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> HistoricalIngestSummary:
         requested_symbols = sorted({str(symbol).upper() for symbol in symbols if str(symbol).strip()})
         if not requested_symbols:
@@ -197,6 +198,8 @@ class KISHistoricalDataService:
             if quote.market_date != snapshot_date:
                 snapshot_mismatch_count += 1
                 quote = quote.model_copy(update={"market_date": snapshot_date})
+            if quote_stamper is not None:
+                quote = HistoricalL1Quote(**quote_stamper(quote.model_dump()))
             quote_at_utc = quote.timestamp.astimezone(ZoneInfo("UTC"))
             now_utc = self._utc_now()
             delta_minutes = abs((now_utc - quote_at_utc).total_seconds()) / 60.0
@@ -399,6 +402,16 @@ class KISHistoricalDataService:
         bid_price = self._coerce_float(book_output.get("pbid1"))
         ask_price = self._coerce_float(book_output.get("pask1"))
         last_price = self._coerce_float(meta_output.get("last") or book_output.get("last"))
+        bid_exchange = self._extract_exchange_code(
+            book_output,
+            meta_output,
+            keys=("pbid1_excd", "bid1_excd", "bid_excd", "bid_exchange", "bid_mkt"),
+        )
+        ask_exchange = self._extract_exchange_code(
+            book_output,
+            meta_output,
+            keys=("pask1_excd", "ask1_excd", "ask_excd", "ask_exchange", "ask_mkt"),
+        )
         if bid_price is None and ask_price is None and last_price is None:
             return None, used_timestamp_fallback
         return (
@@ -408,11 +421,26 @@ class KISHistoricalDataService:
                 timestamp=timestamp,
                 bid_price=bid_price,
                 ask_price=ask_price,
+                bid_exchange=bid_exchange,
+                ask_exchange=ask_exchange,
                 last_price=last_price,
                 source=source,
             ),
             used_timestamp_fallback,
         )
+
+    def _extract_exchange_code(
+        self,
+        *rows: dict[str, Any],
+        keys: tuple[str, ...],
+    ) -> str | None:
+        for row in rows:
+            for key in keys:
+                value = row.get(key)
+                normalized = str(value or "").strip().upper()
+                if normalized:
+                    return normalized
+        return None
 
     def _minute_next_key(self, row: dict[str, Any], *, nmin: int) -> str | None:
         timestamp = self._parse_market_timestamp(row.get("xymd"), row.get("xhms"))

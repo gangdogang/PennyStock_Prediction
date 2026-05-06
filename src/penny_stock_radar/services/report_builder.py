@@ -18,6 +18,7 @@ from ..db import (
     fetch_latest_social_signals,
     fetch_latest_watchlist,
 )
+from .paper_reporting import read_replay_grade
 from .report_markdown import render_markdown
 
 LABEL_MAP = {
@@ -118,6 +119,16 @@ class ReportBuilder:
         selection = fetch_scan_selection(database_path)
         selected_scan_id = selection.get("selected_scan_id")
         project_root = _project_root(database_path)
+        report = dict(
+            fetch_latest_replay_report(
+                database_path,
+                scan_id=selected_scan_id,
+            )
+            or {}
+        )
+        replay_grade = read_replay_grade(project_root / "sample_outputs" / "paper_trading")
+        if replay_grade:
+            report["replay_grade"] = replay_grade
         return {
             "meta": {
                 "scan_id": selected_scan_id,
@@ -207,13 +218,7 @@ class ReportBuilder:
                     scan_id=selected_scan_id,
                 )
             ],
-            "report": dict(
-                fetch_latest_replay_report(
-                    database_path,
-                    scan_id=selected_scan_id,
-                )
-                or {}
-            ),
+            "report": report,
         }
 
     def export_json(self, database_path: Path, output_path: Path, limit: int = 20) -> dict[str, object]:
@@ -1193,10 +1198,12 @@ def _render_leaderboard(rows: list[dict[str, Any]]) -> str:
 def _render_report_card(report: dict[str, Any]) -> str:
     if not report:
         return "<div class='report-card empty'>저장된 리플레이 리포트가 없습니다.</div>"
+    grade = _replay_grade_label(report.get("replay_grade"))
     return (
         "<article class='report-card'>"
         f"<div class='eyebrow'>Replay Label · {_escape_text(_translate_label(report.get('label')))}</div>"
         "<div class='report-grid'>"
+        f"{_score_item_html('Decision Grade', grade)}"
         f"{_score_item_html('Expectancy', _format_float(report.get('expectancy')))}"
         f"{_score_item_html('Profit Factor', _format_float(report.get('profit_factor')))}"
         f"{_score_item_html('Precision@K', _format_float(report.get('precision_at_k')))}"
@@ -1206,6 +1213,18 @@ def _render_report_card(report: dict[str, Any]) -> str:
         "</div>"
         "</article>"
     )
+
+
+def _replay_grade_label(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    decision = value.get("decision_grade")
+    reason = str(value.get("grade_reason") or "")
+    if decision is True:
+        return "True"
+    if decision is False:
+        return f"False · {reason}" if reason else "False"
+    return "-"
 
 
 def _render_table(

@@ -12,27 +12,26 @@ from statistics import mean, median
 from typing import Any
 
 from ..db import get_connection
+from .external_data_validator import (
+    DEFAULT_POLICY_FILE,
+    KIS_L1_SOURCE,
+    LEGACY_COST_ELIGIBLE_EXACT_SOURCES,
+    LEGACY_COST_ELIGIBLE_SOURCE_PREFIXES,
+    LEGACY_DIAGNOSTIC_ONLY_EXACT_SOURCES,
+    LEGACY_DIAGNOSTIC_ONLY_SOURCE_PREFIXES,
+    cost_policy_sql_matchers,
+    cost_source_policy_summary,
+    is_cost_eligible_source,
+    is_diagnostic_only_source,
+)
 from .paper_runtime import write_csv
 from .universe_tradability_audit import audit_universe, report_to_dict
 
 
-COST_ELIGIBLE_EXACT_SOURCES = frozenset(
-    {
-        "kis_l1_snapshot",
-        "full_nbbo",
-        "full_sip",
-        "nbbo_sip",
-        "cta_utp_sip",
-    }
-)
-COST_ELIGIBLE_SOURCE_PREFIXES = ("full_nbbo_", "full_sip_", "nbbo_sip_", "vendor_nbbo_", "vendor_sip_")
-DIAGNOSTIC_ONLY_EXACT_SOURCES = frozenset(
-    {
-        "alpaca_iex_historical_quotes",
-        "alpaca_iex_diagnostic",
-    }
-)
-DIAGNOSTIC_ONLY_SOURCE_PREFIXES = ("alpaca_iex_",)
+COST_ELIGIBLE_EXACT_SOURCES = LEGACY_COST_ELIGIBLE_EXACT_SOURCES
+COST_ELIGIBLE_SOURCE_PREFIXES = LEGACY_COST_ELIGIBLE_SOURCE_PREFIXES
+DIAGNOSTIC_ONLY_EXACT_SOURCES = LEGACY_DIAGNOSTIC_ONLY_EXACT_SOURCES
+DIAGNOSTIC_ONLY_SOURCE_PREFIXES = LEGACY_DIAGNOSTIC_ONLY_SOURCE_PREFIXES
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +341,14 @@ class FalsificationResearchAuditor:
                 if "historical_l1_quotes" in table_names
                 else {}
             )
+            l1_continuous_source_counts = (
+                self._l1_spread_source_counts(
+                    connection,
+                    subscription_continuous=True,
+                )
+                if "historical_l1_quotes" in table_names
+                else {}
+            )
             minute_spread_source_counts = (
                 self._minute_spread_source_counts(connection)
                 if "historical_minute_bars" in table_names
@@ -370,6 +377,7 @@ class FalsificationResearchAuditor:
             "minute_spread": _distribution(minute_spreads),
             **_cost_source_policy_fields(
                 l1_source_counts=l1_source_counts,
+                l1_cost_eligible_source_counts=l1_continuous_source_counts,
                 minute_spread_source_counts=minute_spread_source_counts,
             ),
             "cost_rule": (
@@ -391,6 +399,15 @@ class FalsificationResearchAuditor:
             return _empty_cost_audit(cost_rule="Cost samples restricted to strategy market_date overlap.")
         l1_source_counts = (
             self._l1_spread_source_counts(connection, market_dates=market_dates)
+            if "historical_l1_quotes" in table_names
+            else {}
+        )
+        l1_continuous_source_counts = (
+            self._l1_spread_source_counts(
+                connection,
+                market_dates=market_dates,
+                subscription_continuous=True,
+            )
             if "historical_l1_quotes" in table_names
             else {}
         )
@@ -424,6 +441,7 @@ class FalsificationResearchAuditor:
             "minute_spread": _distribution(minute_spreads),
             **_cost_source_policy_fields(
                 l1_source_counts=l1_source_counts,
+                l1_cost_eligible_source_counts=l1_continuous_source_counts,
                 minute_spread_source_counts=minute_spread_source_counts,
             ),
             "cost_rule": (
@@ -437,8 +455,13 @@ class FalsificationResearchAuditor:
         connection: sqlite3.Connection,
         *,
         market_dates: list[str] | None = None,
+        subscription_continuous: bool | None = None,
     ) -> dict[str, int]:
         date_clause, date_params = _market_date_filter_sql(market_dates)
+        subscription_clause = _l1_subscription_continuous_filter_sql(
+            connection,
+            subscription_continuous=subscription_continuous,
+        )
         rows = connection.execute(
             f"""
             SELECT source, COUNT(*) AS row_count
@@ -448,6 +471,7 @@ class FalsificationResearchAuditor:
               AND bid_price > 0
               AND ask_price >= bid_price
               {date_clause}
+              {subscription_clause}
             GROUP BY source
             ORDER BY source ASC
             """,
@@ -486,6 +510,10 @@ class FalsificationResearchAuditor:
     ) -> list[float]:
         date_clause, date_params = _market_date_filter_sql(market_dates)
         source_clause, source_params = _cost_eligible_source_filter_sql("source")
+        subscription_clause = _l1_subscription_continuous_filter_sql(
+            connection,
+            subscription_continuous=True,
+        )
         rows = connection.execute(
             f"""
             WITH eligible AS (
@@ -500,6 +528,7 @@ class FalsificationResearchAuditor:
                   AND bid_price > 0
                   AND ask_price >= bid_price
                   {date_clause}
+                  {subscription_clause}
                   AND {source_clause}
             )
             SELECT bid_price, ask_price
@@ -1548,6 +1577,7 @@ def _empty_cost_audit(*, cost_rule: str) -> dict[str, Any]:
         "minute_spread": _empty_distribution(),
         **_cost_source_policy_fields(
             l1_source_counts={},
+            l1_cost_eligible_source_counts={},
             minute_spread_source_counts={},
         ),
         "cost_rule": cost_rule,
@@ -1557,23 +1587,18 @@ def _empty_cost_audit(*, cost_rule: str) -> dict[str, Any]:
 def _cost_source_policy_fields(
     *,
     l1_source_counts: dict[str, int],
+    l1_cost_eligible_source_counts: dict[str, int] | None = None,
     minute_spread_source_counts: dict[str, int],
 ) -> dict[str, Any]:
-    l1_cost_eligible = _filter_source_counts(l1_source_counts, _is_cost_eligible_source)
+    l1_cost_eligible = _filter_source_counts(
+        l1_cost_eligible_source_counts or l1_source_counts,
+        _is_cost_eligible_source,
+    )
     minute_cost_eligible = _filter_source_counts(minute_spread_source_counts, _is_cost_eligible_source)
     l1_diagnostic = _filter_source_counts(l1_source_counts, _is_diagnostic_only_source)
     minute_diagnostic = _filter_source_counts(minute_spread_source_counts, _is_diagnostic_only_source)
     return {
-        "cost_source_policy": {
-            "cost_eligible_exact_sources": sorted(COST_ELIGIBLE_EXACT_SOURCES),
-            "cost_eligible_source_prefixes": list(COST_ELIGIBLE_SOURCE_PREFIXES),
-            "diagnostic_only_exact_sources": sorted(DIAGNOSTIC_ONLY_EXACT_SOURCES),
-            "diagnostic_only_source_prefixes": list(DIAGNOSTIC_ONLY_SOURCE_PREFIXES),
-            "diagnostic_only_warning": (
-                "Alpaca IEX is a single-exchange diagnostic feed. It is excluded from "
-                "cost distributions, matched random-entry cost overlap, and edge approval evidence."
-            ),
-        },
+        "cost_source_policy": cost_source_policy_summary(DEFAULT_POLICY_FILE),
         "l1_source_counts": dict(sorted(l1_source_counts.items())),
         "l1_cost_eligible_source_counts": l1_cost_eligible,
         "l1_diagnostic_only_source_counts": l1_diagnostic,
@@ -1646,34 +1671,45 @@ def _market_date_filter_sql(market_dates: list[str] | None) -> tuple[str, tuple[
     return f"AND market_date IN ({placeholders})", dates
 
 
+def _l1_subscription_continuous_filter_sql(
+    connection: sqlite3.Connection,
+    *,
+    subscription_continuous: bool | None,
+) -> str:
+    if subscription_continuous is None:
+        return ""
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(historical_l1_quotes)").fetchall()
+    }
+    if "subscription_continuous" not in columns:
+        return ""
+    value = 1 if subscription_continuous else 0
+    return f"AND COALESCE(subscription_continuous, 1) = {value}"
+
+
 def _cost_eligible_source_filter_sql(column_name: str) -> tuple[str, tuple[str, ...]]:
-    exact_sources = tuple(sorted(COST_ELIGIBLE_EXACT_SOURCES))
+    exact_sources, prefixes = cost_policy_sql_matchers(DEFAULT_POLICY_FILE)
     clauses: list[str] = []
     params: list[str] = []
     if exact_sources:
         placeholders = ", ".join("?" for _ in exact_sources)
         clauses.append(f"{column_name} IN ({placeholders})")
         params.extend(exact_sources)
-    for prefix in COST_ELIGIBLE_SOURCE_PREFIXES:
+    for prefix in prefixes:
         clauses.append(f"{column_name} LIKE ?")
         params.append(f"{prefix}%")
+    if not clauses:
+        return "(1 = 0)", ()
     return "(" + " OR ".join(clauses) + ")", tuple(params)
 
 
 def _is_cost_eligible_source(source: str | None) -> bool:
-    normalized = str(source or "").strip().lower()
-    if not normalized or _is_diagnostic_only_source(normalized):
-        return False
-    if normalized in COST_ELIGIBLE_EXACT_SOURCES:
-        return True
-    return any(normalized.startswith(prefix) for prefix in COST_ELIGIBLE_SOURCE_PREFIXES)
+    return is_cost_eligible_source(source, policy_file=DEFAULT_POLICY_FILE)
 
 
 def _is_diagnostic_only_source(source: str | None) -> bool:
-    normalized = str(source or "").strip().lower()
-    if normalized in DIAGNOSTIC_ONLY_EXACT_SOURCES:
-        return True
-    return any(normalized.startswith(prefix) for prefix in DIAGNOSTIC_ONLY_SOURCE_PREFIXES)
+    return is_diagnostic_only_source(source, policy_file=DEFAULT_POLICY_FILE)
 
 
 def _source_count_total(counts: Any) -> int:

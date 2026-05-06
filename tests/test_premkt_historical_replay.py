@@ -37,6 +37,12 @@ class VolumeProbabilityModel:
         return probabilities
 
 
+def _read_csv_with_comments(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        lines = (line for line in handle if not line.lstrip().startswith("#"))
+        return list(csv.DictReader(lines))
+
+
 def test_replay_cli_rejects_live_db_path(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
@@ -105,17 +111,13 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     progress = json.loads((export_dir / "progress.json").read_text(encoding="utf-8"))
     summary = json.loads((export_dir / "replay_summary.json").read_text(encoding="utf-8"))
     predictions = list(csv.DictReader((export_dir / "premkt_predictions_replay.csv").open(encoding="utf-8")))
-    kpis = list(csv.DictReader((export_dir / "paper_backtest_kpis.csv").open(encoding="utf-8")))
-    pair_diff = list(csv.DictReader((export_dir / "paper_bucket_pair_diff.csv").open(encoding="utf-8")))
+    kpis = _read_csv_with_comments(export_dir / "paper_backtest_kpis.csv")
+    pair_diff = _read_csv_with_comments(export_dir / "paper_bucket_pair_diff.csv")
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
-    setup_features = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
-    setup_kpis = list(csv.DictReader((export_dir / "paper_setup_state_kpis.csv").open(encoding="utf-8")))
-    setup_transitions = list(
-        csv.DictReader((export_dir / "paper_setup_transition_matrix.csv").open(encoding="utf-8"))
-    )
-    add_trim_runner = list(
-        csv.DictReader((export_dir / "paper_add_trim_runner_diagnostics.csv").open(encoding="utf-8"))
-    )
+    setup_features = _read_csv_with_comments(export_dir / "paper_setup_features.csv")
+    setup_kpis = _read_csv_with_comments(export_dir / "paper_setup_state_kpis.csv")
+    setup_transitions = _read_csv_with_comments(export_dir / "paper_setup_transition_matrix.csv")
+    add_trim_runner = _read_csv_with_comments(export_dir / "paper_add_trim_runner_diagnostics.csv")
 
     assert manifest["local_only"] is True
     assert manifest["db_path"] == str(db_path)
@@ -127,6 +129,10 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert date_progress["loaded_symbol_count"] == 1
     assert date_progress["simulated_time_count"] == 2
     assert summary["conclusion_status"] == "smoke_only"
+    assert summary["replay_grade"]["decision_grade"] is False
+    assert "falsification_audit_missing" in summary["replay_grade"]["grade_reason"]
+    kpi_text = (export_dir / "paper_backtest_kpis.csv").read_text(encoding="utf-8")
+    assert kpi_text.startswith("# decision_grade=False, reason=")
     assert summary["conclusion_status"] != "comparable"
     assert set(summary["bucket_results"]) == {
         "predictor_weighted",
@@ -258,7 +264,7 @@ def test_replay_resume_skips_completed_dates(monkeypatch, tmp_path: Path) -> Non
     assert second.exit_code == 0, second.stdout
     progress = json.loads((export_dir / "progress.json").read_text(encoding="utf-8"))
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
-    setup_rows = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
+    setup_rows = _read_csv_with_comments(export_dir / "paper_setup_features.csv")
     assert progress["dates"]["2026-04-10"]["status"] == "completed"
     assert len(trade_rows) > 0
     assert len(trade_rows) == len({(row["bucket"], row["symbol"], row["event"]) for row in trade_rows})
@@ -306,12 +312,12 @@ def test_replay_trade_log_uses_entry_label_for_exit_attribution(
         for row in trade_rows
         if row["bucket"] == "predictor_weighted" and row["event"] == "EXIT"
     )
-    label_kpis = list(csv.DictReader((export_dir / "paper_entry_label_kpis.csv").open(encoding="utf-8")))
-    label_matrix = list(csv.DictReader((export_dir / "paper_entry_exit_label_matrix.csv").open(encoding="utf-8")))
-    stop_diagnostics = list(csv.DictReader((export_dir / "paper_stop_out_diagnostics.csv").open(encoding="utf-8")))
-    symbol_losses = list(csv.DictReader((export_dir / "paper_symbol_loss_concentration.csv").open(encoding="utf-8")))
-    hold_buckets = list(csv.DictReader((export_dir / "paper_hold_bucket_kpis.csv").open(encoding="utf-8")))
-    path_diagnostics = list(csv.DictReader((export_dir / "paper_exit_path_diagnostics.csv").open(encoding="utf-8")))
+    label_kpis = _read_csv_with_comments(export_dir / "paper_entry_label_kpis.csv")
+    label_matrix = _read_csv_with_comments(export_dir / "paper_entry_exit_label_matrix.csv")
+    stop_diagnostics = _read_csv_with_comments(export_dir / "paper_stop_out_diagnostics.csv")
+    symbol_losses = _read_csv_with_comments(export_dir / "paper_symbol_loss_concentration.csv")
+    hold_buckets = _read_csv_with_comments(export_dir / "paper_hold_bucket_kpis.csv")
+    path_diagnostics = _read_csv_with_comments(export_dir / "paper_exit_path_diagnostics.csv")
 
     assert exit_row["exit_reason"] == "stop_loss"
     assert exit_row["analysis_label"] == "OPENING_RANGE_CANDIDATE"
@@ -500,7 +506,7 @@ def test_entry_setup_state_filter_blocks_watch_leader_entries(
 
     assert result.exit_code == 0, result.stdout
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
-    setup_rows = list(csv.DictReader((export_dir / "paper_setup_features.csv").open(encoding="utf-8")))
+    setup_rows = _read_csv_with_comments(export_dir / "paper_setup_features.csv")
     entry_rows = [row for row in trade_rows if row["event"] == "ENTRY"]
 
     assert entry_rows
@@ -606,7 +612,7 @@ def test_replay_breakeven_stop_after_r_moves_stop_to_entry(
 
     assert result.exit_code == 0, result.stdout
     trade_rows = list(csv.DictReader((export_dir / "paper_trade_log.csv").open(encoding="utf-8")))
-    path_diagnostics = list(csv.DictReader((export_dir / "paper_exit_path_diagnostics.csv").open(encoding="utf-8")))
+    path_diagnostics = _read_csv_with_comments(export_dir / "paper_exit_path_diagnostics.csv")
     exit_row = next(
         row
         for row in trade_rows

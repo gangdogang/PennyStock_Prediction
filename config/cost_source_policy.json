@@ -1,0 +1,163 @@
+{
+  "cost_eligible_sources": [
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "cta_utp_sip",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "full_nbbo",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "full_nbbo_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "full_sip",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "full_sip_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "Legacy conditional default: cost eligible only when latest KIS consolidation verdict is nbbo_consolidated.",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "kis_l1_snapshot",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "automation/state/source_validation/latest_kis_consolidation.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "nbbo_sip",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "nbbo_sip_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "vendor_nbbo_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "internal_default_policy",
+        "redistribution_allowed": true
+      },
+      "name": "vendor_sip_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    }
+  ],
+  "diagnostic_only_sources": [
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "personal_use",
+        "redistribution_allowed": false
+      },
+      "name": "alpaca_iex_*",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "personal_use",
+        "redistribution_allowed": false
+      },
+      "name": "alpaca_iex_diagnostic",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    },
+    {
+      "decision_reason": "legacy default cost source policy",
+      "license": {
+        "citation_required": false,
+        "documented_at": "docs/BACKTEST_ROADMAP_KO.md",
+        "license_type": "personal_use",
+        "redistribution_allowed": false
+      },
+      "name": "alpaca_iex_historical_quotes",
+      "validated_at": "1970-01-01T00:00:00Z",
+      "verdict_path": "config/cost_source_policy.json"
+    }
+  ],
+  "rejected_sources": []
+}

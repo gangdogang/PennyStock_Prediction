@@ -29,6 +29,12 @@ from .paper_runtime import (
 from .premkt_model_scoring import PremktModelScorer
 from .premkt_predictor import PremktPredictor
 from .replay_bar_cache import ReplayBarCursor, ReplayBarSeriesCache
+from .replay_grade_stamper import (
+    ReplayGrade,
+    csv_decision_grade_comment,
+    replay_grade_to_dict,
+    stamp_replay_run,
+)
 from .setup_state import SETUP_STATES, AISetupJudgeV1, SetupContext, SetupContextBuilder, SetupJudgement
 
 EASTERN = ZoneInfo("America/New_York")
@@ -220,8 +226,10 @@ class PremktHistoricalReplayRunner:
             self._run_market_date(market_date, progress)
 
         summary = self._build_summary(progress)
+        replay_grade = stamp_replay_run(self.export_dir)
+        summary["replay_grade"] = replay_grade_to_dict(replay_grade)
         self._export_predictions()
-        self._export_trades_and_kpis(summary)
+        self._export_trades_and_kpis(summary, replay_grade=replay_grade)
         self._write_json(self._summary_path, summary)
         self._write_json(self._progress_path, progress)
         return ReplayResult(
@@ -1605,52 +1613,68 @@ class PremktHistoricalReplayRunner:
     def _export_predictions(self) -> None:
         _write_csv(self.export_dir / "premkt_predictions_replay.csv", self._prediction_rows)
 
-    def _export_trades_and_kpis(self, summary: dict[str, object]) -> None:
+    def _export_trades_and_kpis(
+        self,
+        summary: dict[str, object],
+        *,
+        replay_grade: ReplayGrade,
+    ) -> None:
         _write_csv(self.export_dir / "paper_trade_log.csv", self._trade_rows)
         bucket_rows = [
             {"bucket": bucket, **values}
             for bucket, values in dict(summary["bucket_results"]).items()
         ]
-        _write_csv(self.export_dir / "paper_backtest_kpis.csv", bucket_rows)
+        comment = csv_decision_grade_comment(replay_grade)
+        _write_csv(self.export_dir / "paper_backtest_kpis.csv", bucket_rows, header_comment=comment)
         _write_csv(
             self.export_dir / "paper_entry_label_kpis.csv",
             list(summary.get("entry_label_results", [])),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_entry_exit_label_matrix.csv",
             self._entry_exit_label_matrix(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_stop_out_diagnostics.csv",
             self._stop_out_diagnostics(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_symbol_loss_concentration.csv",
             self._symbol_loss_concentration(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_hold_bucket_kpis.csv",
             self._hold_bucket_kpis(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_exit_path_diagnostics.csv",
             self._exit_path_diagnostics(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_setup_features.csv",
             self._setup_feature_rows,
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_setup_state_kpis.csv",
             self._setup_state_kpis(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_setup_transition_matrix.csv",
             self._setup_transition_matrix(),
+            header_comment=comment,
         )
         _write_csv(
             self.export_dir / "paper_add_trim_runner_diagnostics.csv",
             self._add_trim_runner_diagnostics(),
+            header_comment=comment,
         )
         pair_rows = [
             {"left_bucket": left, "right_bucket": right, **_pair_diff(dict(summary["bucket_results"]), left, right)}
@@ -1660,7 +1684,7 @@ class PremktHistoricalReplayRunner:
                 (PREDICTOR_WEIGHTED_BUCKET, WATCHLIST_BLIND_MOMENTUM_BUCKET),
             )
         ]
-        _write_csv(self.export_dir / "paper_bucket_pair_diff.csv", pair_rows)
+        _write_csv(self.export_dir / "paper_bucket_pair_diff.csv", pair_rows, header_comment=comment)
         _write_csv(
             self.export_dir / "paper_bucket_trade_diff.csv",
             [
@@ -1670,6 +1694,7 @@ class PremktHistoricalReplayRunner:
                     **_pair_diff(dict(summary["bucket_results"]), PREDICTOR_WEIGHTED_BUCKET, MOMENTUM_ONLY_BUCKET),
                 }
             ],
+            header_comment=comment,
         )
         self._write_json(
             self.export_dir / "data_quality_warnings.json",
@@ -2073,7 +2098,12 @@ def _round_optional(value: object, digits: int = 6) -> object:
     return round(float(value), digits)
 
 
-def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
+def _write_csv(
+    path: Path,
+    rows: list[dict[str, object]],
+    *,
+    header_comment: str | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames: list[str] = []
     seen_fieldnames: set[str] = set()
@@ -2083,9 +2113,11 @@ def _write_csv(path: Path, rows: list[dict[str, object]]) -> None:
                 fieldnames.append(key)
                 seen_fieldnames.add(key)
     if not fieldnames:
-        path.write_text("", encoding="utf-8")
+        path.write_text((header_comment + "\n") if header_comment else "", encoding="utf-8")
         return
     with path.open("w", encoding="utf-8", newline="") as handle:
+        if header_comment:
+            handle.write(header_comment + "\n")
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
@@ -2095,7 +2127,14 @@ def _read_csv(path: Path) -> list[dict[str, object]]:
     if not path.exists() or path.stat().st_size == 0:
         return []
     with path.open("r", encoding="utf-8", newline="") as handle:
-        return [dict(row) for row in csv.DictReader(handle)]
+        return [dict(row) for row in csv.DictReader(_non_comment_lines(handle))]
+
+
+def _non_comment_lines(handle: Iterable[str]) -> Iterable[str]:
+    for line in handle:
+        if line.lstrip().startswith("#"):
+            continue
+        yield line
 
 
 def _utc_now_iso() -> str:

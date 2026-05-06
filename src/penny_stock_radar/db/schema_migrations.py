@@ -269,6 +269,32 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 "TEXT NOT NULL DEFAULT 'premkt_prediction'",
             )
             _ensure_column(connection, "premkt_predictions", "market_date", "TEXT")
+            _ensure_column(connection, "historical_l1_quotes", "bid_exchange", "TEXT")
+            _ensure_column(connection, "historical_l1_quotes", "ask_exchange", "TEXT")
+            _ensure_column(
+                connection,
+                "historical_l1_quotes",
+                "subscription_continuous",
+                "INTEGER NOT NULL DEFAULT 1",
+            )
+            _ensure_column(
+                connection,
+                "historical_coverage_reports",
+                "tier1_continuous_symbol_count",
+                "INTEGER",
+            )
+            _ensure_column(
+                connection,
+                "historical_coverage_reports",
+                "tier2_rotation_symbol_count",
+                "INTEGER",
+            )
+            _ensure_column(
+                connection,
+                "historical_coverage_reports",
+                "rotation_gap_seconds_p90",
+                "REAL",
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_historical_minute_bars_date_symbol_time

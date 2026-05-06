@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..db import get_connection
+from .coverage_shortfall import estimate_shortfall, shortfall_report_to_dict
 from .falsification_research import _is_cost_eligible_source, _is_diagnostic_only_source
 from .paper_runtime import write_csv
 from .universe_tradability_audit import (
@@ -77,6 +78,16 @@ class ResearchDataCoverageAuditor:
             "date_count": len(date_rows),
             "by_date": date_rows,
             "summary": summary,
+            "shortfall": shortfall_report_to_dict(
+                estimate_shortfall(
+                    options.db_path,
+                    {
+                        "target_minute_bars_months": 6,
+                        "target_cost_eligible_overlap_pct": 80,
+                        "target_corporate_action_months": 12,
+                    },
+                )
+            ),
             "policy": {
                 "alpaca_iex": (
                     "diagnostic-only; excluded from cost evidence and matched "
@@ -125,6 +136,19 @@ def _date_rows(
         AND ask_price >= bid_price
         """,
     )
+    l1_continuous_counts = _source_counts_by_date(
+        connection,
+        table_names,
+        "historical_l1_quotes",
+        "market_date",
+        f"""
+        bid_price IS NOT NULL
+        AND ask_price IS NOT NULL
+        AND bid_price > 0
+        AND ask_price >= bid_price
+        {_l1_subscription_continuous_clause(connection, table_names)}
+        """,
+    )
     minute_spread_counts = _source_counts_by_date(
         connection,
         table_names,
@@ -151,7 +175,7 @@ def _date_rows(
                     "kis_tradable_universe_pct"
                 ),
                 "l1_cost_eligible_quote_count": _classified_count(
-                    l1_date_counts,
+                    l1_continuous_counts.get(market_date, {}),
                     cost_eligible=True,
                 ),
                 "l1_diagnostic_only_alpaca_iex_count": _classified_count(
@@ -441,6 +465,21 @@ def _source_counts_by_date(
     return counts
 
 
+def _l1_subscription_continuous_clause(
+    connection: sqlite3.Connection,
+    table_names: set[str],
+) -> str:
+    if "historical_l1_quotes" not in table_names:
+        return ""
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(historical_l1_quotes)").fetchall()
+    }
+    if "subscription_continuous" not in columns:
+        return ""
+    return "AND COALESCE(subscription_continuous, 1) = 1"
+
+
 def _sec_cutoff_counts(
     connection: sqlite3.Connection,
     table_names: set[str],
@@ -555,6 +594,16 @@ def _empty_report(
             "blockers": [reason],
             "next_allowed_action": "create/fill the research database before falsification audit",
         },
+        "shortfall": shortfall_report_to_dict(
+            estimate_shortfall(
+                options.db_path,
+                {
+                    "target_minute_bars_months": 6,
+                    "target_cost_eligible_overlap_pct": 80,
+                    "target_corporate_action_months": 12,
+                },
+            )
+        ),
     }
 
 
@@ -579,6 +628,7 @@ def _write_result(export_dir: Path, report: dict[str, Any]) -> ResearchDataCover
 
 def _markdown_summary(report: dict[str, Any]) -> str:
     summary = report.get("summary", {})
+    shortfall = report.get("shortfall", {})
     blockers = summary.get("blockers", [])
     lines = [
         "# Research Data Coverage Audit",
@@ -590,6 +640,7 @@ def _markdown_summary(report: dict[str, Any]) -> str:
         f"- KIS tradable universe: {summary.get('kis_tradable_universe_pct')}",
         f"- Diagnostic-only data present: {summary.get('diagnostic_only_data_presence', {}).get('present', False) if isinstance(summary.get('diagnostic_only_data_presence'), dict) else False}",
         f"- Next allowed action: {summary.get('next_allowed_action')}",
+        f"- Shortfall stamp: `{shortfall.get('planning_stamp')}`",
         "",
         "## Blockers",
         "",
@@ -600,6 +651,12 @@ def _markdown_summary(report: dict[str, Any]) -> str:
         lines.append("- none")
     lines.extend(
         [
+            "",
+            "## Shortfall",
+            "",
+            f"- Recommendation: {shortfall.get('recommendation')}",
+            f"- Archive path days: {shortfall.get('total_calendar_days_archive_path', 0)}",
+            f"- Vendor path cost USD: {shortfall.get('total_cost_usd_vendor_path', [0, 0])}",
             "",
             "## Policy",
             "",
