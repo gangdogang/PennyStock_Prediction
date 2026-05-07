@@ -106,7 +106,7 @@
 - 2026-05-07: Windows fixed run `fade_short_3mo_fb_stop15_0945_fixed` 는 389건, win 52.4%, total -$1,689, avg -$4.34. stop-out 비율은 크게 개선됐지만 breakeven win 61.5% 를 못 넘고 2025-04/05/06 모두 음수라 strategy 후보로 보지 않는다.
 - 2026-05-07: 수동 `paper_trade_log.csv` 해석을 반복하지 않도록 `audit-replay-bucket-robustness` CLI 를 추가했다. 단일 bucket 의 expectancy, breakeven win%, 월별 일관성, top symbol/date 제거, exit reason 분해를 JSON/CSV 로 남기며 `BLOCKED` / `REJECT` / `PROMISING_DIAGNOSTIC` 를 출력한다. 이 산출물은 항상 `decision_grade=false` 로 strategy approval 이 아니다.
 - 2026-05-07: Windows Mito OHLCV candidate-event 파이프라인 실행 결과 segmentation/robustness 는 PASS 했지만 same ticker/day random event-time benchmark 는 FAIL 했다. Exact `candidate_events.csv` 입력 기준 `candidate_events=308,247`, random controls 616,494, mean edge -0.194203%, median edge -0.015499%, win-rate edge -1.728851% 로 모두 음수다. OHLCV-only event timing edge 는 현재 기준 rejected 로 본다.
-- 다음 우선순위는 `audit-mito-event-random-benchmark-breakdown` 으로 event_time/month/bucket 별 pocket 을 확인하는 것이다. 그래도 setup backtest 는 아직 금지이며, pocket 이 보여도 fresh holdout 전용 hypothesis 로만 기록한다.
+- 2026-05-07: `audit-mito-event-random-benchmark-breakdown` exact run 도 `breakdown_rows=1,296`, `surviving_pockets=0`, gate FAIL 로 끝났다. 따라서 OHLCV-only intraday event timing 개발은 중단하고 SEC filing catalyst/trap tier 기반 edge-source inventory 로 이동한다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.
