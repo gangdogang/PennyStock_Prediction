@@ -82,6 +82,12 @@ from ..services.filing_catalyst_tier_audit import (
     FilingCatalystTierAuditOptions,
     FilingCatalystTierAuditor,
 )
+from ..services.filing_event_audit import (
+    DEFAULT_OUTPUT_ROOT as DEFAULT_MITO_FILING_EVENT_AUDIT_ROOT,
+    FilingEventAuditError,
+    FilingEventAuditOptions,
+    FilingEventAuditor,
+)
 from ..services.hf_1m_bars import (
     DEFAULT_AUDIT_ROOT as DEFAULT_HF_1M_BARS_AUDIT_ROOT,
     HfCandidateDayOptions,
@@ -2617,6 +2623,83 @@ def audit_mito_event_random_benchmark_breakdown(
         "Summary: "
         f"breakdown_rows={result.report.get('breakdown_row_count', 0)} "
         f"surviving_pockets={result.report.get('surviving_pocket_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("audit-mito-candidate-event-filing-tiers")
+def audit_mito_candidate_event_filing_tiers(
+    candidate_event_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROOT,
+        "--candidate-event-root",
+        help="candidate_events.csv file, or root containing mito candidate-event run folders.",
+    ),
+    classified_filings_csv: Path = typer.Option(
+        ...,
+        "--classified-filings-csv",
+        help="classified_filings.csv from audit-filing-catalyst-tiers.",
+    ),
+    random_events_csv: Path | None = typer.Option(
+        None,
+        "--random-events-csv",
+        help="Optional random_events.csv from run-mito-event-random-benchmark.",
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_MITO_FILING_EVENT_AUDIT_ROOT,
+        "--output-root",
+        help="Directory where filing-tier event audit outputs are written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    max_filing_age_days: int = typer.Option(5, "--max-filing-age-days", min=0),
+    primary_random_mode: str = typer.Option("same_time_bucket", "--primary-random-mode"),
+    primary_window_minutes: int = typer.Option(120, "--primary-window-minutes", min=1),
+    min_sample_count: int = typer.Option(100, "--min-sample-count", min=1),
+    min_mean_edge_pct: float = typer.Option(0.10, "--min-mean-edge-pct"),
+    min_win_rate_edge_pct: float = typer.Option(2.0, "--min-win-rate-edge-pct"),
+    min_ex_trap_improvement_pct: float = typer.Option(
+        0.10,
+        "--min-ex-trap-improvement-pct",
+    ),
+) -> None:
+    """Join mito candidate/random events to SEC filing catalyst tiers."""
+    try:
+        result = FilingEventAuditor().audit(
+            FilingEventAuditOptions(
+                candidate_event_root=candidate_event_root,
+                classified_filings_csv=classified_filings_csv,
+                random_events_csv=random_events_csv,
+                output_root=output_root,
+                run_id=run_id,
+                max_filing_age_days=max_filing_age_days,
+                primary_random_mode=primary_random_mode,
+                primary_window_minutes=primary_window_minutes,
+                min_sample_count=min_sample_count,
+                min_mean_edge_pct=min_mean_edge_pct,
+                min_win_rate_edge_pct=min_win_rate_edge_pct,
+                min_ex_trap_improvement_pct=min_ex_trap_improvement_pct,
+            )
+        )
+    except (FilingEventAuditError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("filing_event_gate", {})
+    primary = result.report.get("primary_diagnostics", {})
+    tier_1 = primary.get("tier_1_primary_row") or {}
+    ex_trap = primary.get("ex_trap_primary_row") or {}
+    console.print(f"Mito candidate-event filing tier audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_events={result.report.get('input', {}).get('candidate_event_count', 0)} "
+        f"matched_filings={result.report.get('matched_filing_count', 0)} "
+        f"tier1_n={tier_1.get('paired_random_sample_count') or tier_1.get('candidate_sample_count')} "
+        f"tier1_mean_edge={tier_1.get('mean_edge_pct')} "
+        f"ex_trap_improvement={ex_trap.get('mean_improvement_vs_all_pct')} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"
     )

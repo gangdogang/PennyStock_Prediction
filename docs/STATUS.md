@@ -58,6 +58,7 @@
 - `backfill-finra-otc-daily-list` CLI 는 FINRA OTC Daily List JSON/CSV 를 symbol change/name change/deleted/split/dividend/corporate action staging artifact 로 저장한다. `--write-database` 는 최소 `corporate_actions` inventory 에만 insert 하며, current-only rows 는 historical survivorship blocker 를 자동 해소하지 않는다.
 - `audit-research-data-coverage` CLI 는 falsification audit 전 날짜별 minute bars, PIT universe, cost-eligible L1, diagnostic-only Alpaca IEX, minute spread source split, corporate action coverage, SEC cutoff coverage 를 JSON/CSV/MD 로 요약하고 shortfall 섹션을 자동 포함한다.
 - `audit-filing-catalyst-tiers` CLI 는 filings DB 또는 `sec_edgar_pit_filings.csv` 를 읽어 SEC filing rows 를 `tier_1`, `tier_2`, `tier_3`, `trap`, `unknown` 으로 분류한다. trap/dilution override 가 bullish keyword 보다 우선하며, 이 산출물은 news/filing edge-source inventory 일 뿐 `decision_grade=False`, `cost_grade=none` 이다.
+- `audit-mito-candidate-event-filing-tiers` CLI 는 Mito `candidate_events.csv`, paired `random_events.csv`, SEC `classified_filings.csv` 를 symbol/date 기준으로 join 해 filing tier별 candidate-vs-random edge, trap 제외 효과, matched filing coverage 를 JSON/CSV/MD 로 산출한다. 이 산출물도 `decision_grade=False`, `cost_grade=none` 이며, 통과하더라도 edge-source diagnostic 이지 전략 승인이 아니다.
 - `audit-hf-1m-bars` CLI 는 외부 CryptoSpartan Hugging Face 1m OHLCV parquet 를 repo 로 복사하지 않고 Polars lazy scan 으로 schema, row/ticker/timestamp 범위, OHLC sanity, duplicate ticker/timestamp, ET session count, low-price row count, high-move day count, top ticker row count 를 `data/backtest_lab/audits/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 JSON/MD 로 감사할 수 있다. 경로는 `PSR_HF_STOCKS_1M_PATH`, `PSR_DATA_ROOT`, repo-local fallback 순서로 해석한다.
 - `segment-hf-candidate-days` CLI 는 같은 HF parquet 를 ticker-day 단위로 분해해 low-price universe, early volume momentum, afternoon runner, posthoc high-move label, low session coverage blocker, concentration gate 를 `data/backtest_lab/candidate_days/hf_cryptospartan_alpaca_bars_1m/<run_id>/` 아래 CSV/JSON/MD 로 남긴다. 산출물은 항상 `decision_grade=False`, `cost_grade=none` 이며 `PASS` 는 gross candidate-day coverage 통과만 의미한다. Windows 메모리 압박을 줄이기 위해 기본 3개월 단위 date chunk 로 처리하고 `--chunk-months 1` 로 더 줄일 수 있다.
 - `segment-hf-candidate-events` CLI 는 같은 HF parquet 를 ticker-day 보다 엄격한 event-time 단위로 분해한다. 09:45/10:30/14:00/15:30 ET 시점까지 관측 가능한 OHLCV feature 로만 후보 이벤트를 만들고, event 시점 최신 bar 가 기본 2분보다 오래된 stale 후보는 제외한다. 이후 30/60/120분 regular-session gross return/max-up/max-down 을 결과 컬럼으로 붙인다. 이 산출물도 `decision_grade=False`, `cost_grade=none` 이며 setup backtest/entry/stop/sizing 근거가 아니다.
@@ -241,11 +242,28 @@ Random benchmark fail reason:
 - breakdown 도 `surviving_pockets=0` / `no_breakdown_pocket_beats_random_thresholds` 로 실패했다. 따라서 현재 OHLCV-only event timing 은 폐기하고 intraday setup/entry/stop 튜닝으로 넘어가지 않는다.
 - 다음 기본 방향은 SEC filing catalyst/trap tier 같은 edge-source inventory 로 이동한다.
 
+## 2026-05-07 SEC filing catalyst/trap inventory 결과
+
+Mito candidate universe 에 SEC filing point-in-time inventory 를 붙일 수 있는 기본 데이터는 확보됐다.
+
+| run | 결과 |
+| --- | --- |
+| `mito_candidate_symbols_20260507.txt` | Mito candidate-event universe symbol 4,991개 |
+| `sec_pit_mito_candidates_20260507` | 2024-01-01~2026-03-31 SEC PIT backfill, eligible 68,469, diagnostic-after-cutoff 58,396, written 68,469 |
+| `filing_tiers_mito_candidates_20260507` | classified filings 68,634건, symbols 2,494개, gate PASS, `decision_grade=false`, `cost_grade=none` |
+
+해석:
+
+- Filing tier inventory 는 이제 비어 있지 않다. 다음 검증은 filing 자체의 PASS/FAIL 이 아니라 candidate/random event outcome 에 붙였을 때 `tier_1` 이 random 을 이기는지, `trap` 제거가 long 손실을 줄이는지다.
+- SEC filing rows 는 08:00 ET cutoff 기준 eligible/diagnostic 을 구분했지만, classified filing inventory 자체는 bid/ask, NBBO, halt, borrow, float, execution cost 를 포함하지 않는다.
+- trap/dilution 은 bullish keyword 보다 우선 분류되므로 avoid-long filter 후보로 볼 수 있다. 하지만 random benchmark 와 월별/심볼/날짜 robustness 를 통과하기 전까지 entry filter 로 승격하지 않는다.
+- 다음 실행 명령은 `audit-mito-candidate-event-filing-tiers` 로, exact Mito candidate events / exact random controls / SEC classified filings 를 같은 run 에서 join 한다.
+
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - 즉시 사용 우선순위는 `audit-replay-bucket-robustness --run-dir <replay_dir> --bucket fade_short` 로 fixed 결과를 machine-readable reject gate 에 통과시키는 것이다. 이 gate 는 strategy approval 이 아니라 과최적화 방지용 reject 장치다.
-- Mito exact random benchmark 와 breakdown 이 모두 FAIL 했으므로 OHLCV-only intraday timing 개발은 중단한다. 다음 작업은 SEC filing catalyst/trap tier inventory 를 실제 replay/watchlist universe 와 붙여 `trap/dilution avoid-long` 또는 `tier_1 catalyst-only` 가 null benchmark 를 이길 수 있는지 보는 쪽이다.
+- Mito exact random benchmark 와 breakdown 이 모두 FAIL 했으므로 OHLCV-only intraday timing 개발은 중단한다. 다음 작업은 `audit-mito-candidate-event-filing-tiers` 로 SEC filing catalyst/trap tier inventory 를 exact candidate/random event outcome 과 붙여 `trap/dilution avoid-long` 또는 `tier_1 catalyst-only` 가 null benchmark 를 이길 수 있는지 보는 쪽이다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
 - 즉시 순서는 setup backtest 가 아니라 `setup_alerts` diagnostic bus / setup taxonomy v0 를 먼저 고정한 뒤, `audit-pit-universe-reconstruction` 으로 exact PIT 가능 날짜와 diagnostic-only 날짜를 분리하고, `run-falsification-audit` overnight run 으로 governance/data-bias-cost/null/stop-geometry/benchmark blocker 를 산출하는 것이다. `PASS` 전에는 setup_state, entry label, score cutoff, stop, sizing, add/trim tuning 을 하지 않는다.
 - Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
