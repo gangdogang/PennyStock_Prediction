@@ -203,6 +203,7 @@
 | `fade_short_june_2025` | 2025-06 | stop 7%, target 5% | 292 | 56.5% | -$1,283 | -$4.40 | +$22.83 / -$39.76 |
 | `fade_short_june_v2` | 2025-06 | stop 7%, target 10% | 229 | 43.2% | -$1,005 | -$4.39 | +$43.76 / -$41.05 |
 | `fade_short_3mo` | 2025-04~06 | stop 7%, target 10% | 1,013 | 38.9% | -$6,746 | -$6.66 | +$43.89 / -$38.83 |
+| `fade_short_3mo_fb_stop15_0945_fixed` | 2025-04~06 | stop 15%, target 10%, 09:45+, FAILED_BREAKOUT, ask-side cover fill | 389 | 52.4% | -$1,689 | -$4.34 | +$18.35 / -$29.37 |
 
 핵심 해석:
 
@@ -212,6 +213,7 @@
 - setup_state 별 3개월 결과는 `FAILED_BREAKOUT` avg -$4.98, `EXIT_FAIL` avg -$9.92, `DEAD_PUMP` avg -$11.38 이다. 다음 진단은 `FAILED_BREAKOUT` 만 남기고, fixed 7% stop 대신 더 넓은 stop 또는 structure/HOD stop 근사를 검증하는 쪽이 합리적이다.
 - 현재 로컬 코드에는 `paper_short_stop_pct=15.0` 과 `fade_short` entry state `FAILED_BREAKOUT` only 변경이 들어와 있다. 대화 중 나온 `09:45` 이후 진입 지연은 기본 코드 변경으로 들어와 있지 않으며, `--min-entry-time 09:45` replay 옵션으로 별도 검증해야 한다. 이 변경은 아직 replay 검증 전인 hypothesis 이며, PASS 전 stop/filter tuning 금지 원칙상 decision-grade 전략 변경이 아니라 diagnostic ablation 으로만 다룬다.
 - 2026-05-07 추가 보정: `fade_short` replay branch 도 이제 `--min-entry-time`, `--entry-setup-states`, `--require-l1-quotes-for-entries` 를 적용한다. Short exit fill 은 long `sell()` 재사용을 중단하고 ask-side `buy_to_cover()` 모델을 사용한다. 따라서 이 변경 전 `fade_short_3mo_fb_stop15_0945` 계열 결과는 filter/fill 검증용으로 재사용하지 않는다.
+- fixed run 해석: filter/fill 보정 후 stop-out 비율은 54.9% -> 30.8%, win% 는 38.9% -> 52.4%, avg pnl 은 -$6.66 -> -$4.34 로 개선됐다. 하지만 breakeven win% 61.5% 대비 실제 win% 가 부족하고, 2025-04/05/06 전월이 음수다. 15% stop / 10% target geometry 는 평균 수익(+18.35)이 평균 손실(-29.37)을 이기지 못해 strategy 후보로 승격하지 않는다.
 
 ## 다음 우선순위
 
