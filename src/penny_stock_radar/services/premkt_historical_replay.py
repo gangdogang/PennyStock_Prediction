@@ -49,7 +49,7 @@ REPLAY_BUCKETS = (
     WATCHLIST_BLIND_MOMENTUM_BUCKET,
     FADE_SHORT_BUCKET,
 )
-_FADE_SHORT_ENTRY_STATES = {"DEAD_PUMP", "FAILED_BREAKOUT", "EXIT_FAIL"}
+_FADE_SHORT_ENTRY_STATES = {"FAILED_BREAKOUT"}
 DEFAULT_ENTRY_LABELS = (
     "OPENING_RANGE_CANDIDATE",
     "CONDITIONAL_ENTRY",
@@ -1202,7 +1202,7 @@ class PremktHistoricalReplayRunner:
                 PREDICTOR_WEIGHTED_BUCKET: "watchlist + predictor score/weight + live momentum from historical bars",
                 MOMENTUM_ONLY_BUCKET: "watchlist metadata + momentum; predictor score/weight ignored",
                 WATCHLIST_BLIND_MOMENTUM_BUCKET: "same scanned symbols; watchlist/predictor metadata removed before decision",
-                FADE_SHORT_BUCKET: "short-side fade on DEAD_PUMP/FAILED_BREAKOUT setup_state; direction=SHORT; P&L inverted",
+                FADE_SHORT_BUCKET: "short-side fade on FAILED_BREAKOUT setup_state; direction=SHORT; P&L inverted",
             },
             "entry_label_policy": {
                 "include": list(self.options.entry_labels),

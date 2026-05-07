@@ -194,6 +194,24 @@
 - 현재 backtest_lab DB 범위(2025-04-01~06-30)에서 이 가설은 통계적으로 robust 하지 않음.
 - `STARTER_VALID + ORC`, `STARTER_VALID + 09:00 + no_conditional`, `breakeven_stop` 단독 가설은 현재 기준 strategy 후보가 아니라 `rejected / regime-dependent / diagnostic-only` 로 취급한다.
 
+## 2026-05-07 fade_short 진단 결과 (Windows replay_outputs)
+
+`fade_short` 는 short 실거래 전략 승인이 아니라 opposite-side / retail crowding fade 진단 bucket 으로 해석한다. Short locate, SSR, borrow cost, L1 spread/cost blocker 가 있으므로 `run-falsification-audit` PASS 와 cost-adjusted benchmark 전에는 live 후보가 아니다.
+
+| run | 기간 | 설정 | 거래수 | win% | 총손익 | avg pnl | avg win/loss |
+| --- | --- | --- | ---: | ---: | ---: | ---: | --- |
+| `fade_short_june_2025` | 2025-06 | stop 7%, target 5% | 292 | 56.5% | -$1,283 | -$4.40 | +$22.83 / -$39.76 |
+| `fade_short_june_v2` | 2025-06 | stop 7%, target 10% | 229 | 43.2% | -$1,005 | -$4.39 | +$43.76 / -$41.05 |
+| `fade_short_3mo` | 2025-04~06 | stop 7%, target 10% | 1,013 | 38.9% | -$6,746 | -$6.66 | +$43.89 / -$38.83 |
+
+핵심 해석:
+
+- target 을 5% 에서 10% 로 키워도 June avg pnl 이 -$4.40 -> -$4.39 로 거의 동일했다. 단순 target/stop 비율 문제가 아니라 entry timing, stop geometry, universe/regime 문제로 본다.
+- 3개월 기준 exit breakdown 은 `short_stop_loss` 556건 avg -$41.88, `short_target` 343건 avg +$47.81, `session_end` 114건 avg +$1.25 다. 장마감 청산 bucket 이 약하게 양수라 fade 방향성은 일부 보이나, 7% fixed stop 이 정규장 초반 변동성에 먼저 맞는 구조가 핵심 blocker 다.
+- 월별 결과는 2025-04 -$3,317, 2025-05 -$2,424, 2025-06 -$1,005 로 개선됐지만 전 기간 음수다. 4월 관세/레짐 충격을 포함하면 robust 하지 않다.
+- setup_state 별 3개월 결과는 `FAILED_BREAKOUT` avg -$4.98, `EXIT_FAIL` avg -$9.92, `DEAD_PUMP` avg -$11.38 이다. 다음 진단은 `FAILED_BREAKOUT` 만 남기고, fixed 7% stop 대신 더 넓은 stop 또는 structure/HOD stop 근사를 검증하는 쪽이 합리적이다.
+- 현재 로컬 코드에는 `paper_short_stop_pct=15.0` 과 `fade_short` entry state `FAILED_BREAKOUT` only 변경이 들어와 있다. 대화 중 나온 `09:45` 이후 진입 지연은 기본 코드 변경으로 들어와 있지 않으며, `--min-entry-time 09:45` replay 옵션으로 별도 검증해야 한다. 이 변경은 아직 replay 검증 전인 hypothesis 이며, PASS 전 stop/filter tuning 금지 원칙상 decision-grade 전략 변경이 아니라 diagnostic ablation 으로만 다룬다.
+
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.

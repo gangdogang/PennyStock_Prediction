@@ -1,10 +1,9 @@
-"""FadeShortSetup — short-side fade on DEAD_PUMP / FAILED_BREAKOUT.
+"""FadeShortSetup — short-side fade on FAILED_BREAKOUT.
 
-Structural rationale: the opposite-side diagnostic confirms that the
-same entry signals used by long momentum produce 83% win rate on the
-short side (even after 25-50%/yr borrow cost). This setup systematizes
-that edge using existing setup_state classification without any new data
-requirements. It is intentionally conservative:
+Structural rationale: this is an opposite-side / retail crowding diagnostic,
+not an approved short strategy. The latest Apr-Jun 2025 Windows replay was
+negative, so this setup remains gated while stop geometry and FAILED_BREAKOUT
+only ablations are tested. It is intentionally conservative:
 
     - Only fires in regular session (09:35-15:45 ET) to avoid halt risk
     - Hard gate: spread_pct <= paper_max_short_spread_pct (default 0.02)
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
 
 FADE_SHORT_BUCKET = "fade_short"
 
-_FADE_SETUP_STATES = {"DEAD_PUMP", "FAILED_BREAKOUT", "EXIT_FAIL"}
+_FADE_SETUP_STATES = {"FAILED_BREAKOUT"}
 
 _REGULAR_SESSION_START_HOUR_ET = 9
 _REGULAR_SESSION_START_MINUTE_ET = 35
@@ -64,7 +63,7 @@ def _in_regular_fade_window(now: datetime) -> bool:
 
 
 class FadeShortSetup:
-    """Short-side fade triggered by DEAD_PUMP / FAILED_BREAKOUT setup state."""
+    """Short-side fade triggered by FAILED_BREAKOUT setup state."""
 
     setup_id = "fade_short"
     bucket_compatibility = (FADE_SHORT_BUCKET,)
@@ -117,7 +116,7 @@ class FadeShortSetup:
             size_fraction=settings.paper_short_entry_size_fraction,
             stop_price=stop_above_entry,
             target_price=target,
-            reason="fade_short_dead_pump",
+            reason="fade_short_failed_breakout",
             metadata={"setup_state": (ctx.setup_judgement.setup_state if ctx.setup_judgement else ""), "direction": "SHORT"},
         )
 
