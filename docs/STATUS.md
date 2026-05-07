@@ -216,10 +216,34 @@
 - 2026-05-07 추가 보정: `fade_short` replay branch 도 이제 `--min-entry-time`, `--entry-setup-states`, `--require-l1-quotes-for-entries` 를 적용한다. Short exit fill 은 long `sell()` 재사용을 중단하고 ask-side `buy_to_cover()` 모델을 사용한다. 따라서 이 변경 전 `fade_short_3mo_fb_stop15_0945` 계열 결과는 filter/fill 검증용으로 재사용하지 않는다.
 - fixed run 해석: filter/fill 보정 후 stop-out 비율은 54.9% -> 30.8%, win% 는 38.9% -> 52.4%, avg pnl 은 -$6.66 -> -$4.34 로 개선됐다. 하지만 breakeven win% 61.5% 대비 실제 win% 가 부족하고, 2025-04/05/06 전월이 음수다. 15% stop / 10% target geometry 는 평균 수익(+18.35)이 평균 손실(-29.37)을 이기지 못해 strategy 후보로 승격하지 않는다.
 
+## 2026-05-07 Mito OHLCV candidate-event 반증 결과
+
+Mito OHLCV-only candidate event 는 gross coverage / 분산은 통과했지만 same ticker/day random event-time benchmark 를 이기지 못했다.
+
+| run | 결과 |
+| --- | --- |
+| `mito_events_20260507_rerun_2` | `candidate_events=308,247`, active months 27, segmentation gate PASS |
+| `mito_event_robustness_20260507` | `events=616,494`, active years 3, robustness gate PASS |
+| `mito_event_random_20260507` | `candidate_events=616,494`, random controls 1,232,988, random benchmark gate FAIL |
+
+Random benchmark fail reason:
+
+- `mean_edge_pct_lt_0.1: -0.190468`
+- `median_edge_pct_lt_0.0: -0.024584`
+- `win_rate_edge_pct_lt_2.0: -1.779876`
+
+해석:
+
+- Mito event distribution 자체는 top ticker 제거 후에도 무너지지 않으므로 데이터 커버리지/분산은 충분하다.
+- 하지만 candidate event 의 120분 forward outcome 이 같은 ticker/day random event-time 대비 평균, 중앙값, 승률에서 모두 밀렸다. 따라서 현재 OHLCV-only event timing 은 edge-source 로 보지 않는다.
+- `segment-mito-candidate-events` 출력은 308,247건인데 robustness/random benchmark 는 616,494건이다. 이는 기본 root 입력이 여러 candidate-event run folder 를 함께 읽어 중복 합산했을 가능성이 높다. 최종 archive 용 benchmark 는 segmentation 출력의 `candidate_events.csv` 파일 하나를 `--candidate-event-root` / `--input-root` 로 직접 지정해 다시 남긴다. 단, 동일 run 이 중복된 것이라면 edge 방향은 바뀌지 않는다.
+- 이 결과로 intraday setup/entry/stop 튜닝으로 넘어가지 않는다. 다음 단계는 breakdown 으로 혹시 살아남는 pocket 이 있는지 확인하되, 발견되더라도 fresh holdout 전용 hypothesis 로만 기록한다. 기본 방향은 SEC filing catalyst/trap tier 같은 edge-source inventory 로 이동한다.
+
 ## 다음 우선순위
 
 - `BACKTEST_ROADMAP_KO.md` Step -1 성능평가 배선 검증은 완료됐다.
 - 즉시 사용 우선순위는 `audit-replay-bucket-robustness --run-dir <replay_dir> --bucket fade_short` 로 fixed 결과를 machine-readable reject gate 에 통과시키는 것이다. 이 gate 는 strategy approval 이 아니라 과최적화 방지용 reject 장치다.
+- Mito root-level random benchmark 가 FAIL 했으므로, Windows 에서는 같은 결과를 exact `candidate_events.csv` 입력으로 재실행해 중복 run 합산을 제거한 archive 를 만든다. 그 다음 `audit-mito-event-random-benchmark-breakdown` 으로 event_time/month/bucket pocket 을 확인하되, 결과가 좋아도 fresh holdout 전용 hypothesis 로만 취급한다.
 - PremktPredictor 학습 준비 4단계는 point-in-time historical replay runner 구현으로 시작했다. 핵심 원칙은 과거 날짜 D의 판단에 D 이후 데이터와 cutoff 이후 feature 를 쓰지 않는 것이다.
 - 즉시 순서는 setup backtest 가 아니라 `setup_alerts` diagnostic bus / setup taxonomy v0 를 먼저 고정한 뒤, `audit-pit-universe-reconstruction` 으로 exact PIT 가능 날짜와 diagnostic-only 날짜를 분리하고, `run-falsification-audit` overnight run 으로 governance/data-bias-cost/null/stop-geometry/benchmark blocker 를 산출하는 것이다. `PASS` 전에는 setup_state, entry label, score cutoff, stop, sizing, add/trim tuning 을 하지 않는다.
 - Windows historical replay 는 기존 손실 attribution 산출물을 재사용하지 말고 `k1=0,k2=0` baseline 과 label ablation 을 2026-05-01 이후 코드로 다시 생성한다.
