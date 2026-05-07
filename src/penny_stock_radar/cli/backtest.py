@@ -62,6 +62,7 @@ from ..services.premkt_entry_signal_audit import (
     DEFAULT_SIGNAL_SETUP_STATES,
     PremktEntrySignalAuditor,
 )
+from ..services.replay_bucket_robustness import ReplayBucketRobustnessAuditor
 from ..services.setup_alerts import (
     DEFAULT_SETUP_ALERT_ROOT,
     SetupAlertBus,
@@ -201,6 +202,15 @@ def _normalize_optional_csv_filter(value: str | None) -> tuple[str, ...] | None:
         if normalized and normalized not in values:
             values.append(normalized)
     return tuple(values)
+
+
+def _fraction_from_pct(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value) / 100.0
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_mito_input_path(input_root: Path | None) -> Path:
@@ -821,6 +831,92 @@ def audit_premkt_entry_signal(
         console.print(f"CSV outputs: [bold]{next(iter(result.csv_paths.values())).parent}[/bold]")
     for warning in report.get("warnings", [])[:8]:
         console.print(f"- {warning}")
+
+
+@app.command("audit-replay-bucket-robustness")
+def audit_replay_bucket_robustness(
+    run_dir: Path = typer.Option(
+        ...,
+        "--run-dir",
+        help="Replay output directory containing paper_trade_log.csv.",
+    ),
+    bucket: str = typer.Option(
+        ...,
+        "--bucket",
+        help="Bucket to audit, e.g. fade_short or predictor_weighted.",
+    ),
+    trade_log: Path | None = typer.Option(
+        None,
+        "--trade-log",
+        help="Optional explicit paper_trade_log.csv path.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        help="JSON audit report output path. Defaults under run-dir.",
+    ),
+    csv_dir: Path | None = typer.Option(
+        None,
+        "--csv-dir",
+        help="CSV output directory. Defaults under run-dir.",
+    ),
+    top_n: int = typer.Option(
+        5,
+        "--top-n",
+        min=1,
+        help="Top symbols/dates to include in concentration stress checks.",
+    ),
+    min_trades: int = typer.Option(
+        100,
+        "--min-trades",
+        min=1,
+        help="Minimum closed trades before a bucket can be judged.",
+    ),
+    min_months: int = typer.Option(
+        3,
+        "--min-months",
+        min=1,
+        help="Minimum distinct market months before a bucket can be judged.",
+    ),
+    require_all_months_positive: bool = typer.Option(
+        True,
+        "--require-all-months-positive/--allow-negative-months",
+        help="Reject judged buckets unless every month is positive.",
+    ),
+) -> None:
+    """Audit whether a replay bucket survives first-order robustness checks."""
+    output = output or (run_dir / f"replay_bucket_robustness_{bucket}.json")
+    csv_dir = csv_dir or (run_dir / f"replay_bucket_robustness_{bucket}")
+    try:
+        result = ReplayBucketRobustnessAuditor().audit(
+            run_dir=run_dir,
+            trade_log_path=trade_log,
+            bucket=bucket,
+            output_path=output,
+            csv_dir=csv_dir,
+            top_n=top_n,
+            min_trades=min_trades,
+            min_months=min_months,
+            require_all_months_positive=require_all_months_positive,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        console.print(f"Failed to audit replay bucket robustness: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    report = result.report
+    overall = report.get("overall", {})
+    console.print(
+        f"Replay bucket robustness wrote [bold]{output}[/bold]: "
+        f"[bold]{report.get('status')}[/bold] "
+        f"n={overall.get('trade_count')} "
+        f"total={format_optional_number(overall.get('total_net_pnl'))} "
+        f"avg={format_optional_number(overall.get('avg_net_pnl'))} "
+        f"win%={format_optional_percent(_fraction_from_pct(overall.get('win_rate_pct')))} "
+        f"breakeven%={format_optional_percent(_fraction_from_pct(overall.get('breakeven_win_rate_pct')))}"
+    )
+    console.print(f"CSV outputs: [bold]{csv_dir}[/bold]")
+    for reason in report.get("status_reasons", [])[:8]:
+        console.print(f"- {reason}")
 
 
 @app.command("build-setup-alerts-from-features")

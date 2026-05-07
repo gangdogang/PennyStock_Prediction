@@ -148,6 +148,14 @@ Phase 0 falsification data coverage audit:
 ./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
+Replay bucket robustness / reject gate:
+
+```powershell
+.\scripts\psradar.ps1 audit-replay-bucket-robustness --run-dir data\backtest_lab\replays\<run_id> --bucket fade_short
+```
+
+이 명령은 `paper_trade_log.csv` 를 읽어 total/avg expectancy, breakeven win%, 월별 일관성, top symbol/date 제거, exit reason 분해를 JSON/CSV 로 남긴다. 산출물은 과최적화 방지용 reject gate 이며 strategy approval 이 아니다.
+
 SEC filing catalyst tier/trap inventory:
 
 ```bash
