@@ -94,7 +94,10 @@ from ..services.hf_candidate_event_robustness import (
     HfCandidateEventRobustnessOptions,
 )
 from ..services.hf_event_random_benchmark import (
+    DEFAULT_HF_EVENT_RANDOM_BREAKDOWN_ROOT,
     DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT,
+    HfEventRandomBenchmarkBreakdownAuditor,
+    HfEventRandomBenchmarkBreakdownOptions,
     HfEventRandomBenchmarkError,
     HfEventRandomBenchmarkOptions,
     HfEventRandomBenchmarkRunner,
@@ -130,6 +133,9 @@ MITO_CANDIDATE_EVENT_ROBUSTNESS_ROOT = Path(
 )
 MITO_EVENT_RANDOM_BENCHMARK_ROOT = Path(
     "data/backtest_lab/event_random_benchmarks/mito_ohlcv_1m"
+)
+MITO_EVENT_RANDOM_BREAKDOWN_ROOT = Path(
+    "data/backtest_lab/event_random_breakdowns/mito_ohlcv_1m"
 )
 
 
@@ -1899,6 +1905,72 @@ def run_hf_event_random_benchmark(
         console.print(f"- {reason}")
 
 
+@app.command("audit-hf-event-random-benchmark-breakdown")
+def audit_hf_event_random_benchmark_breakdown(
+    candidate_event_root: Path = typer.Option(
+        DEFAULT_HF_CANDIDATE_EVENT_ROOT,
+        "--candidate-event-root",
+        help="candidate_events.csv file, or root containing candidate-event run folders.",
+    ),
+    benchmark_run_dir: Path = typer.Option(
+        DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT,
+        "--benchmark-run-dir",
+        help="Benchmark run directory containing random_events.csv, or root whose latest run is used.",
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_HF_EVENT_RANDOM_BREAKDOWN_ROOT,
+        "--output-root",
+        help="Directory where random benchmark breakdown outputs are written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    dimension: list[str] | None = typer.Option(
+        None,
+        "--dimension",
+        help="Breakdown dimension. Repeat to override defaults: event_year, market_month, event_time_et, time_bucket.",
+    ),
+    primary_random_mode: str = typer.Option("same_time_bucket", "--primary-random-mode"),
+    min_sample_count: int = typer.Option(500, "--min-sample-count", min=1),
+    min_mean_edge_pct: float = typer.Option(0.10, "--min-mean-edge-pct"),
+    min_median_edge_pct: float = typer.Option(0.0, "--min-median-edge-pct"),
+    min_win_rate_edge_pct: float = typer.Option(2.0, "--min-win-rate-edge-pct"),
+) -> None:
+    """Break down HF candidate-vs-random outcomes by year/time/window pockets."""
+    try:
+        result = HfEventRandomBenchmarkBreakdownAuditor().audit(
+            HfEventRandomBenchmarkBreakdownOptions(
+                candidate_event_root=candidate_event_root,
+                benchmark_run_dir=benchmark_run_dir,
+                output_root=output_root,
+                run_id=run_id,
+                dimensions=tuple(
+                    dimension or ("event_year", "market_month", "event_time_et", "time_bucket")
+                ),
+                primary_random_mode=primary_random_mode,
+                min_sample_count=min_sample_count,
+                min_mean_edge_pct=min_mean_edge_pct,
+                min_median_edge_pct=min_median_edge_pct,
+                min_win_rate_edge_pct=min_win_rate_edge_pct,
+            )
+        )
+    except (HfEventRandomBenchmarkError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("breakdown_gate", {})
+    console.print(f"HF event random benchmark breakdown wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"breakdown_rows={result.report.get('breakdown_row_count', 0)} "
+        f"surviving_pockets={result.report.get('surviving_pocket_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
 @app.command("audit-hf-candidate-event-robustness")
 def audit_hf_candidate_event_robustness(
     input_root: Path = typer.Option(
@@ -2305,6 +2377,73 @@ def run_mito_event_random_benchmark(
         "Summary: "
         f"candidate_events={result.report.get('candidate_event_count', 0)} "
         f"random_controls={result.report.get('random_control_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("audit-mito-event-random-benchmark-breakdown")
+def audit_mito_event_random_benchmark_breakdown(
+    candidate_event_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROOT,
+        "--candidate-event-root",
+        help="candidate_events.csv file, or root containing mito candidate-event run folders.",
+    ),
+    benchmark_run_dir: Path = typer.Option(
+        MITO_EVENT_RANDOM_BENCHMARK_ROOT,
+        "--benchmark-run-dir",
+        help="Mito benchmark run directory containing random_events.csv, or root whose latest run is used.",
+    ),
+    output_root: Path = typer.Option(
+        MITO_EVENT_RANDOM_BREAKDOWN_ROOT,
+        "--output-root",
+        help="Directory where mito random benchmark breakdown outputs are written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    dimension: list[str] | None = typer.Option(
+        None,
+        "--dimension",
+        help="Breakdown dimension. Repeat to override defaults: event_year, market_month, event_time_et, time_bucket.",
+    ),
+    primary_random_mode: str = typer.Option("same_time_bucket", "--primary-random-mode"),
+    min_sample_count: int = typer.Option(500, "--min-sample-count", min=1),
+    min_mean_edge_pct: float = typer.Option(0.10, "--min-mean-edge-pct"),
+    min_median_edge_pct: float = typer.Option(0.0, "--min-median-edge-pct"),
+    min_win_rate_edge_pct: float = typer.Option(2.0, "--min-win-rate-edge-pct"),
+) -> None:
+    """Break down mito candidate-vs-random outcomes by year/time/window pockets."""
+    try:
+        result = HfEventRandomBenchmarkBreakdownAuditor().audit(
+            HfEventRandomBenchmarkBreakdownOptions(
+                candidate_event_root=candidate_event_root,
+                benchmark_run_dir=benchmark_run_dir,
+                output_root=output_root,
+                run_id=run_id,
+                dataset_name=MITO_DATASET_NAME,
+                dimensions=tuple(
+                    dimension or ("event_year", "market_month", "event_time_et", "time_bucket")
+                ),
+                primary_random_mode=primary_random_mode,
+                min_sample_count=min_sample_count,
+                min_mean_edge_pct=min_mean_edge_pct,
+                min_median_edge_pct=min_median_edge_pct,
+                min_win_rate_edge_pct=min_win_rate_edge_pct,
+            )
+        )
+    except (HfEventRandomBenchmarkError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("breakdown_gate", {})
+    console.print(f"Mito event random benchmark breakdown wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"breakdown_rows={result.report.get('breakdown_row_count', 0)} "
+        f"surviving_pockets={result.report.get('surviving_pocket_count', 0)} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"
     )

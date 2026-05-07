@@ -29,8 +29,17 @@ from .hf_candidate_event_robustness import DEFAULT_HF_CANDIDATE_EVENT_ROOT
 DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT = Path(
     "data/backtest_lab/event_random_benchmarks/hf_cryptospartan_alpaca_bars_1m"
 )
+DEFAULT_HF_EVENT_RANDOM_BREAKDOWN_ROOT = Path(
+    "data/backtest_lab/event_random_breakdowns/hf_cryptospartan_alpaca_bars_1m"
+)
 DEFAULT_RANDOM_MODES = ("same_time_bucket", "any_regular_time")
 DEFAULT_FORWARD_WINDOWS = (30, 60, 120)
+DEFAULT_BREAKDOWN_DIMENSIONS = (
+    "event_year",
+    "market_month",
+    "event_time_et",
+    "time_bucket",
+)
 
 BUCKET_MINUTE_RANGES = {
     "open_fakeout_risk": (570, 584),
@@ -71,6 +80,31 @@ class HfEventRandomBenchmarkOptions:
 
 @dataclass(frozen=True, slots=True)
 class HfEventRandomBenchmarkResult:
+    export_dir: Path
+    summary_json_path: Path
+    summary_md_path: Path
+    csv_paths: dict[str, Path]
+    report: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class HfEventRandomBenchmarkBreakdownOptions:
+    candidate_event_root: Path = DEFAULT_HF_CANDIDATE_EVENT_ROOT
+    benchmark_run_dir: Path = DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT
+    output_root: Path = DEFAULT_HF_EVENT_RANDOM_BREAKDOWN_ROOT
+    run_id: str | None = None
+    dataset_name: str = DATASET_NAME
+    dimensions: tuple[str, ...] = DEFAULT_BREAKDOWN_DIMENSIONS
+    primary_random_mode: str = "same_time_bucket"
+    min_sample_count: int = 500
+    min_mean_edge_pct: float = 0.10
+    min_median_edge_pct: float = 0.0
+    min_win_rate_edge_pct: float = 2.0
+    top_n: int = 25
+
+
+@dataclass(frozen=True, slots=True)
+class HfEventRandomBenchmarkBreakdownResult:
     export_dir: Path
     summary_json_path: Path
     summary_md_path: Path
@@ -239,6 +273,129 @@ class HfEventRandomBenchmarkRunner:
         )
 
 
+class HfEventRandomBenchmarkBreakdownAuditor:
+    def audit(
+        self,
+        options: HfEventRandomBenchmarkBreakdownOptions,
+    ) -> HfEventRandomBenchmarkBreakdownResult:
+        candidate_events, candidate_files = _load_candidate_events(options.candidate_event_root)
+        if not candidate_events:
+            raise HfEventRandomBenchmarkError(
+                f"No candidate_events.csv rows found under {options.candidate_event_root}"
+            )
+        benchmark_run_dir = _resolve_benchmark_run_dir(options.benchmark_run_dir)
+        random_events_path = benchmark_run_dir / "random_events.csv"
+        random_events = _load_random_events(random_events_path)
+        if not random_events:
+            raise HfEventRandomBenchmarkError(
+                f"No random_events.csv rows found at {random_events_path}"
+            )
+
+        random_by_key = {
+            (int(row["candidate_row_id"]), str(row["benchmark_mode"])): row
+            for row in random_events
+        }
+        random_modes = tuple(
+            sorted({str(row["benchmark_mode"]) for row in random_events if row.get("benchmark_mode")})
+        )
+        forward_windows = _forward_windows_from_rows(candidate_events, random_events)
+        if not forward_windows:
+            raise HfEventRandomBenchmarkError(
+                "No forward_*m_return_pct columns found in candidate/random rows."
+            )
+        dimensions = tuple(dict.fromkeys(options.dimensions or DEFAULT_BREAKDOWN_DIMENSIONS))
+        top_tickers = _top_tickers(candidate_events, top_n=max(options.top_n, 10))
+        cohorts = {
+            "all": list(candidate_events),
+            "ex_top_10": _exclude_top_tickers(candidate_events, top_tickers, 10),
+        }
+        breakdown_rows = _breakdown_comparison_rows(
+            cohorts=cohorts,
+            random_modes=random_modes,
+            random_by_key=random_by_key,
+            forward_windows=forward_windows,
+            dimensions=dimensions,
+        )
+        surviving_rows = _surviving_breakdown_rows(breakdown_rows, options=options)
+        gate_status = "PASS" if surviving_rows else "FAIL"
+        gate_reasons = (
+            ["at_least_one_breakdown_pocket_beats_random"]
+            if surviving_rows
+            else ["no_breakdown_pocket_beats_random_thresholds"]
+        )
+
+        run_id = options.run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        export_dir = _unique_export_dir(options.output_root / run_id)
+        export_dir.mkdir(parents=True, exist_ok=True)
+        csv_paths = {
+            "breakdown_summary": export_dir / "breakdown_summary.csv",
+            "surviving_pockets": export_dir / "surviving_pockets.csv",
+        }
+        _write_csv(csv_paths["breakdown_summary"], breakdown_rows)
+        _write_csv(csv_paths["surviving_pockets"], surviving_rows)
+
+        report = {
+            "run_id": run_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {
+                "dataset": options.dataset_name,
+                "scope": "event_random_benchmark_breakdown_gross_only",
+                "decision_grade": False,
+                "cost_grade": "none",
+                "cost_grade_reason": (
+                    "Breakdown uses existing candidate/random OHLCV outcome rows only; "
+                    "no bid/ask, NBBO, L2, fill, news, float, halt, or KIS tradability evidence."
+                ),
+                "pass_meaning": (
+                    "PASS only means at least one OHLCV breakdown pocket survived the same "
+                    "ticker/day random-time null. It does not approve setup backtests."
+                ),
+                "multiple_testing_warning": (
+                    "Breakdown pockets are hypothesis generators and require a fresh holdout."
+                ),
+            },
+            "input": {
+                "candidate_event_root": str(options.candidate_event_root),
+                "candidate_file_count": len(candidate_files),
+                "candidate_files": [str(path) for path in candidate_files],
+                "benchmark_run_dir": str(benchmark_run_dir),
+                "random_events_path": str(random_events_path),
+            },
+            "thresholds": {
+                "dimensions": list(dimensions),
+                "primary_random_mode": options.primary_random_mode,
+                "min_sample_count": options.min_sample_count,
+                "min_mean_edge_pct": options.min_mean_edge_pct,
+                "min_median_edge_pct": options.min_median_edge_pct,
+                "min_win_rate_edge_pct": options.min_win_rate_edge_pct,
+            },
+            "candidate_event_count": len(candidate_events),
+            "random_event_count": len(random_events),
+            "breakdown_row_count": len(breakdown_rows),
+            "surviving_pocket_count": len(surviving_rows),
+            "breakdown_gate": {
+                "status": gate_status,
+                "reasons": gate_reasons,
+            },
+            "top_surviving_pockets": surviving_rows[:25],
+            "csv_outputs": {name: str(path) for name, path in csv_paths.items()},
+        }
+        summary_json_path = export_dir / "event_random_breakdown_summary.json"
+        summary_md_path = export_dir / "event_random_breakdown_summary.md"
+        summary_json_path.write_text(
+            json.dumps(report, indent=2, ensure_ascii=True, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        summary_md_path.write_text(_markdown_breakdown_report(report), encoding="utf-8")
+        return HfEventRandomBenchmarkBreakdownResult(
+            export_dir=export_dir,
+            summary_json_path=summary_json_path,
+            summary_md_path=summary_md_path,
+            csv_paths=csv_paths,
+            report=report,
+        )
+
+
 def _load_candidate_events(input_root: Path) -> tuple[list[dict[str, str]], list[Path]]:
     if input_root.is_file():
         files = [input_root]
@@ -267,6 +424,41 @@ def _load_candidate_events(input_root: Path) -> tuple[list[dict[str, str]], list
                 cleaned["time_bucket"] = cleaned.get("time_bucket") or "UNKNOWN"
                 events.append(cleaned)
     return events, files
+
+
+def _resolve_benchmark_run_dir(path: Path) -> Path:
+    if (path / "random_events.csv").exists():
+        return path
+    candidates = (
+        [
+            child
+            for child in path.iterdir()
+            if child.is_dir() and (child / "random_events.csv").exists()
+        ]
+        if path.exists()
+        else []
+    )
+    if not candidates:
+        raise HfEventRandomBenchmarkError(
+            f"No benchmark run with random_events.csv found under {path}"
+        )
+    return max(candidates, key=lambda child: (child / "random_events.csv").stat().st_mtime)
+
+
+def _load_random_events(path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            candidate_row_id = (row.get("candidate_row_id") or "").strip()
+            benchmark_mode = (row.get("benchmark_mode") or "").strip()
+            if not candidate_row_id or not benchmark_mode:
+                continue
+            cleaned = {key: (value or "").strip() for key, value in row.items()}
+            cleaned["candidate_row_id"] = candidate_row_id
+            cleaned["benchmark_mode"] = benchmark_mode
+            rows.append(cleaned)
+    return rows
 
 
 def _build_random_plan(
@@ -616,6 +808,161 @@ def _random_quality_rows(
     return rows
 
 
+def _forward_windows_from_rows(
+    candidate_events: list[dict[str, str]],
+    random_events: list[dict[str, str]],
+) -> tuple[int, ...]:
+    windows: set[int] = set()
+    for rows in (candidate_events, random_events):
+        for row in rows[:50]:
+            for key in row:
+                if key.startswith("forward_") and key.endswith("m_return_pct"):
+                    raw = key.removeprefix("forward_").removesuffix("m_return_pct")
+                    try:
+                        windows.add(int(raw))
+                    except ValueError:
+                        continue
+    return tuple(sorted(windows))
+
+
+def _breakdown_comparison_rows(
+    *,
+    cohorts: dict[str, list[dict[str, str]]],
+    random_modes: tuple[str, ...],
+    random_by_key: dict[tuple[int, str], dict[str, Any]],
+    forward_windows: tuple[int, ...],
+    dimensions: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    metrics = ("return_pct", "max_up_pct", "max_down_pct")
+    for cohort_name, cohort_events in cohorts.items():
+        for dimension in dimensions:
+            grouped_events = _events_by_dimension(cohort_events, dimension)
+            for dimension_value, events in grouped_events.items():
+                for mode in random_modes:
+                    for window in forward_windows:
+                        for metric in metrics:
+                            comparison = _comparison_row_for_events(
+                                events,
+                                random_by_key=random_by_key,
+                                benchmark_mode=mode,
+                                window=window,
+                                metric=metric,
+                            )
+                            rows.append(
+                                {
+                                    "cohort": cohort_name,
+                                    "dimension": dimension,
+                                    "dimension_value": dimension_value,
+                                    "benchmark_mode": mode,
+                                    "window_minutes": window,
+                                    "metric": metric,
+                                    **comparison,
+                                }
+                            )
+    return rows
+
+
+def _events_by_dimension(
+    events: list[dict[str, str]],
+    dimension: str,
+) -> dict[str, list[dict[str, str]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for event in events:
+        value = _dimension_value(event, dimension)
+        grouped.setdefault(value, []).append(event)
+    return dict(sorted(grouped.items(), key=lambda item: item[0]))
+
+
+def _dimension_value(event: dict[str, str], dimension: str) -> str:
+    if dimension == "event_year":
+        return (event.get("market_date") or "")[:4] or "UNKNOWN"
+    value = (event.get(dimension) or "").strip()
+    return value or "UNKNOWN"
+
+
+def _comparison_row_for_events(
+    events: list[dict[str, str]],
+    *,
+    random_by_key: dict[tuple[int, str], dict[str, Any]],
+    benchmark_mode: str,
+    window: int,
+    metric: str,
+) -> dict[str, Any]:
+    candidate_values: list[float] = []
+    random_values: list[float] = []
+    missing_random = 0
+    for event in events:
+        random_row = random_by_key.get((int(event["candidate_row_id"]), benchmark_mode))
+        if random_row is None or str(random_row.get("random_control_valid")).lower() != "true":
+            missing_random += 1
+            continue
+        candidate_value = _to_float(event.get(f"forward_{window}m_{metric}"))
+        random_value = _to_float(random_row.get(f"forward_{window}m_{metric}"))
+        if candidate_value is None or random_value is None:
+            continue
+        candidate_values.append(candidate_value)
+        random_values.append(random_value)
+    candidate_stats = _stats(candidate_values)
+    random_stats = _stats(random_values)
+    return {
+        "paired_sample_count": len(candidate_values),
+        "candidate_mean": candidate_stats["mean"],
+        "random_mean": random_stats["mean"],
+        "mean_edge_pct": _round_none(_subtract(candidate_stats["mean"], random_stats["mean"])),
+        "candidate_median": candidate_stats["median"],
+        "random_median": random_stats["median"],
+        "median_edge_pct": _round_none(
+            _subtract(candidate_stats["median"], random_stats["median"])
+        ),
+        "candidate_gt_zero_rate_pct": candidate_stats["gt_zero_rate_pct"],
+        "random_gt_zero_rate_pct": random_stats["gt_zero_rate_pct"],
+        "win_rate_edge_pct": _round_none(
+            _subtract(
+                candidate_stats["gt_zero_rate_pct"],
+                random_stats["gt_zero_rate_pct"],
+            )
+        ),
+        "candidate_p10": candidate_stats["p10"],
+        "random_p10": random_stats["p10"],
+        "candidate_p90": candidate_stats["p90"],
+        "random_p90": random_stats["p90"],
+        "missing_random_control_count": missing_random,
+    }
+
+
+def _surviving_breakdown_rows(
+    breakdown_rows: list[dict[str, Any]],
+    *,
+    options: HfEventRandomBenchmarkBreakdownOptions,
+) -> list[dict[str, Any]]:
+    survivors = []
+    for row in breakdown_rows:
+        if row["metric"] != "return_pct":
+            continue
+        if row["benchmark_mode"] != options.primary_random_mode:
+            continue
+        if int(row["paired_sample_count"] or 0) < options.min_sample_count:
+            continue
+        if float(row["mean_edge_pct"] or 0.0) < options.min_mean_edge_pct:
+            continue
+        if float(row["median_edge_pct"] or 0.0) < options.min_median_edge_pct:
+            continue
+        if float(row["win_rate_edge_pct"] or 0.0) < options.min_win_rate_edge_pct:
+            continue
+        survivors.append(row)
+    return sorted(
+        survivors,
+        key=lambda row: (
+            -float(row["mean_edge_pct"] or 0.0),
+            -float(row["win_rate_edge_pct"] or 0.0),
+            -int(row["paired_sample_count"] or 0),
+            str(row["dimension"]),
+            str(row["dimension_value"]),
+        ),
+    )
+
+
 def _random_minute_for_event(event: dict[str, str], *, mode: str, seed: int) -> int:
     if mode == "same_time_bucket":
         start, end = BUCKET_MINUTE_RANGES.get(
@@ -728,6 +1075,52 @@ def _markdown_report(report: dict[str, Any], comparison_rows: list[dict[str, Any
             "",
             "- This is a conditional same ticker/day random-time benchmark.",
             "- It is gross OHLCV-only and does not resolve cost/fill/live tradability.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _markdown_breakdown_report(report: dict[str, Any]) -> str:
+    metadata = report.get("metadata", {})
+    gate = report.get("breakdown_gate", {})
+    survivors = report.get("top_surviving_pockets", [])
+    lines = [
+        "# Event Random Benchmark Breakdown",
+        "",
+        f"- Dataset: `{metadata.get('dataset')}`",
+        f"- Scope: `{metadata.get('scope')}`",
+        f"- Decision grade: `{metadata.get('decision_grade')}`",
+        f"- Cost grade: `{metadata.get('cost_grade')}`",
+        f"- Gate: `{gate.get('status')}`",
+        f"- Candidate events: {report.get('candidate_event_count', 0)}",
+        f"- Random events: {report.get('random_event_count', 0)}",
+        f"- Surviving pockets: {report.get('surviving_pocket_count', 0)}",
+        "",
+        "## Top Surviving Pockets",
+        "",
+    ]
+    if survivors:
+        for row in survivors[:10]:
+            lines.append(
+                "- "
+                f"{row['cohort']} {row['dimension']}={row['dimension_value']} "
+                f"{row['window_minutes']}m sample={row['paired_sample_count']} "
+                f"mean_edge={row['mean_edge_pct']} "
+                f"median_edge={row['median_edge_pct']} "
+                f"win_rate_edge={row['win_rate_edge_pct']}"
+            )
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Gate Reasons", ""])
+    for reason in gate.get("reasons", []):
+        lines.append(f"- {reason}")
+    lines.extend(
+        [
+            "",
+            "## Caveat",
+            "",
+            "- Breakdown pockets are not tradable signals.",
+            "- Any surviving pocket requires fresh holdout validation and cost/fill evidence.",
         ]
     )
     return "\n".join(lines) + "\n"

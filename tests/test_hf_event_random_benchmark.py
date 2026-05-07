@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 
 from penny_stock_radar.cli import app
 from penny_stock_radar.services.hf_event_random_benchmark import (
+    HfEventRandomBenchmarkBreakdownAuditor,
+    HfEventRandomBenchmarkBreakdownOptions,
     HfEventRandomBenchmarkOptions,
     HfEventRandomBenchmarkRunner,
 )
@@ -87,6 +89,28 @@ def test_hf_event_random_benchmark_compares_candidate_to_random_controls(
     assert return_row["paired_sample_count"] == "3"
     assert float(return_row["candidate_mean"]) > 0.0
     assert return_row["missing_random_control_count"] == "0"
+
+    breakdown = HfEventRandomBenchmarkBreakdownAuditor().audit(
+        HfEventRandomBenchmarkBreakdownOptions(
+            candidate_event_root=candidate_path,
+            benchmark_run_dir=result.export_dir,
+            output_root=tmp_path / "breakdown",
+            run_id="fixture",
+            dimensions=("event_time_et", "event_year"),
+            min_sample_count=1,
+            min_mean_edge_pct=-100.0,
+            min_win_rate_edge_pct=-100.0,
+        )
+    )
+    breakdown_report = json.loads(breakdown.summary_json_path.read_text(encoding="utf-8"))
+    assert breakdown_report["metadata"]["decision_grade"] is False
+    assert breakdown_report["metadata"]["cost_grade"] == "none"
+    assert breakdown_report["breakdown_gate"]["status"] == "PASS"
+    assert breakdown_report["surviving_pocket_count"] >= 1
+    breakdown_rows = list(
+        csv.DictReader(breakdown.csv_paths["breakdown_summary"].open(encoding="utf-8"))
+    )
+    assert {"event_time_et", "event_year"} <= {row["dimension"] for row in breakdown_rows}
 
 
 def test_hf_event_random_benchmark_cli_writes_outputs(tmp_path: Path) -> None:
@@ -177,6 +201,41 @@ def test_mito_event_random_benchmark_cli_accepts_directory_input(tmp_path: Path)
     assert (export_dir / "comparison_summary.csv").exists()
     assert "decision_grade=false" in result.output
     assert "cost_grade=none" in result.output
+
+    breakdown_result = CliRunner().invoke(
+        app,
+        [
+            "audit-mito-event-random-benchmark-breakdown",
+            "--candidate-event-root",
+            str(candidate_path),
+            "--benchmark-run-dir",
+            str(export_dir),
+            "--output-root",
+            str(tmp_path / "mito_breakdown"),
+            "--run-id",
+            "cli",
+            "--dimension",
+            "event_time_et",
+            "--min-sample-count",
+            "1",
+            "--min-mean-edge-pct",
+            "-100",
+            "--min-win-rate-edge-pct",
+            "-100",
+        ],
+    )
+
+    assert breakdown_result.exit_code == 0, breakdown_result.output
+    breakdown_dir = tmp_path / "mito_breakdown" / "cli"
+    breakdown_report = json.loads(
+        (breakdown_dir / "event_random_breakdown_summary.json").read_text(encoding="utf-8")
+    )
+    assert breakdown_report["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
+    assert breakdown_report["breakdown_gate"]["status"] == "PASS"
+    assert (breakdown_dir / "breakdown_summary.csv").exists()
+    assert (breakdown_dir / "surviving_pockets.csv").exists()
+    assert "decision_grade=false" in breakdown_result.output
+    assert "cost_grade=none" in breakdown_result.output
 
 
 def _write_minute_parquet(path: Path) -> None:
