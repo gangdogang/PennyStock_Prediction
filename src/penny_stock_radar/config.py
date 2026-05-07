@@ -173,7 +173,7 @@ class AppSettings(BaseSettings):
     paper_max_short_spread_pct: float = 0.02
     paper_min_short_pct_change: float = 15.0
     paper_short_stop_pct: float = 7.0
-    paper_short_target_pct: float = 5.0
+    paper_short_target_pct: float = 10.0
     paper_short_entry_size_fraction: float = 0.05
     paper_short_borrow_cost_pct_annual: float = 50.0
     paper_adaptive_max_open_positions: int = 5
