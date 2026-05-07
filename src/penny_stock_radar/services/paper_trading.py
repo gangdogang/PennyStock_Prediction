@@ -885,17 +885,29 @@ class PaperTradingEngine:
         equity: float,
         price: float | None,
         fraction: float,
+        spread_pct: float | None = None,
     ) -> int:
         if price is None or price <= 0:
             return 0
         fee_buffer = max(self.settings.paper_min_trade_fee, 0.0)
-        affordable_cash = max(min(cash_balance, equity * fraction) - fee_buffer, 0.0)
-        target_notional = affordable_cash / (
-            1.0 + self.settings.paper_notional_fee_rate_pct / 100.0
-        )
-        if target_notional < price:
+        max_notional_cap = max(min(cash_balance, equity * fraction) - fee_buffer, 0.0)
+        max_notional = max_notional_cap / (1.0 + self.settings.paper_notional_fee_rate_pct / 100.0)
+        if max_notional < price:
             return 0
-        return max(int(target_notional // price), 0)
+        fraction_qty = int(max_notional // price)
+        if not self.settings.paper_risk_based_sizing_enabled:
+            return max(fraction_qty, 0)
+        effective_spread = spread_pct or 0.0
+        stop_pct = max(
+            self.settings.paper_stop_loss_pct,
+            effective_spread * self.settings.paper_spread_stop_floor_multiplier * 100.0,
+        )
+        stop_distance = price * stop_pct / 100.0
+        if stop_distance <= 0:
+            return max(fraction_qty, 0)
+        risk_dollars = equity * self.settings.trade_plan_per_trade_risk_pct / 100.0
+        risk_qty = int(risk_dollars / stop_distance)
+        return max(min(risk_qty, fraction_qty), 0)
 
     def _has_tradeable_live_state(
         self,

@@ -144,7 +144,8 @@ class AppSettings(BaseSettings):
     kis_amex_master_path: Path = Path("data/kis_master/AMSMST.COD")
     premarket_min_dollar_volume: float = 100_000.0
     premarket_min_trade_count: int = 25
-    premarket_max_spread_pct: float = 0.08
+    premarket_max_spread_pct: float = 0.03
+    premarket_max_entry_pct_change: float = 50.0
     regular_opening_range_minutes: int = 5
     regular_extension_z_threshold: float = 2.0
     paper_trading_enabled: bool = True
@@ -166,6 +167,15 @@ class AppSettings(BaseSettings):
     paper_entry_score_min: float = 2.75
     paper_news_entry_score_min: float = 2.75
     paper_stop_loss_pct: float = 5.0
+    paper_spread_stop_floor_multiplier: float = 2.0
+    paper_trap_score_hard_gate_baseline: float = 65.0
+    paper_trap_score_hard_gate_adaptive: float = 60.0
+    paper_max_short_spread_pct: float = 0.02
+    paper_min_short_pct_change: float = 15.0
+    paper_short_stop_pct: float = 7.0
+    paper_short_target_pct: float = 5.0
+    paper_short_entry_size_fraction: float = 0.05
+    paper_short_borrow_cost_pct_annual: float = 50.0
     paper_adaptive_max_open_positions: int = 5
     paper_adaptive_predicted_entry_size_fraction: float = 0.06
     paper_adaptive_live_exception_entry_size_fraction: float = 0.04
@@ -221,6 +231,7 @@ class AppSettings(BaseSettings):
     predictor_max_hold_days_tier3_catalyst: float = 1.0
     predictor_max_hold_days_tier2_total: float = 4.5
     trade_plan_per_trade_risk_pct: float = 0.35
+    paper_risk_based_sizing_enabled: bool = True
     trade_plan_starter_notional_cap_pct: float = 8.0
     trade_plan_add_notional_cap_pct: float = 5.0
     trade_plan_daily_loss_lock_pct: float = 2.0
@@ -407,6 +418,10 @@ class AppSettings(BaseSettings):
         "trade_plan_daily_loss_lock_pct",
         "trade_plan_max_concurrent_open_risk_pct",
         "backtest_coverage_gate_pct",
+        "premarket_max_entry_pct_change",
+        "paper_spread_stop_floor_multiplier",
+        "paper_trap_score_hard_gate_baseline",
+        "paper_trap_score_hard_gate_adaptive",
     )
     @classmethod
     def _positive_floats(cls, value: float) -> float:

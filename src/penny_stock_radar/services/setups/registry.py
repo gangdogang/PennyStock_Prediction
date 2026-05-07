@@ -34,6 +34,7 @@ class SetupRegistry:
 
 
 def build_default_registry() -> SetupRegistry:
+    from .fade_short import FadeShortSetup
     from .legacy_momentum import LegacyMomentumSetup
 
-    return SetupRegistry((LegacyMomentumSetup(),))
+    return SetupRegistry((LegacyMomentumSetup(), FadeShortSetup()))

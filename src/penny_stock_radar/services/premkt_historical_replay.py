@@ -37,6 +37,7 @@ from .replay_grade_stamper import (
     stamp_replay_run,
 )
 from .setup_state import SETUP_STATES, AISetupJudgeV1, SetupContext, SetupContextBuilder, SetupJudgement
+from .setups.fade_short import FADE_SHORT_BUCKET
 
 EASTERN = ZoneInfo("America/New_York")
 DEFAULT_REPLAY_DB = Path("data/backtest_lab/penny_stock_radar.sqlite3")
@@ -46,7 +47,9 @@ REPLAY_BUCKETS = (
     PREDICTOR_WEIGHTED_BUCKET,
     MOMENTUM_ONLY_BUCKET,
     WATCHLIST_BLIND_MOMENTUM_BUCKET,
+    FADE_SHORT_BUCKET,
 )
+_FADE_SHORT_ENTRY_STATES = {"DEAD_PUMP", "FAILED_BREAKOUT", "EXIT_FAIL"}
 DEFAULT_ENTRY_LABELS = (
     "OPENING_RANGE_CANDIDATE",
     "CONDITIONAL_ENTRY",
@@ -107,6 +110,8 @@ class _Position:
     breakeven_stop_after_r: float | None = None
     breakeven_stop_activated_at: datetime | None = None
     entry_setup_judgement: SetupJudgement | None = None
+    direction: str = "LONG"
+    target_price: float | None = None
 
 
 @dataclass
@@ -553,6 +558,7 @@ class PremktHistoricalReplayRunner:
                     WATCHLIST_BLIND_MOMENTUM_BUCKET,
                     base_activity,
                 ),
+                FADE_SHORT_BUCKET: base_activity,
             }
             for bucket, state in states.items():
                 date_trade_rows.extend(
@@ -627,28 +633,50 @@ class PremktHistoricalReplayRunner:
             if position is None:
                 continue
             self._update_position_path(position, row=row, simulated_time=simulated_time)
-            stop_reference_price = row.bar_low_price if row.bar_low_price is not None else row.last_price
-            if stop_reference_price is not None and stop_reference_price <= position.stop_price:
-                if (
-                    row.bar_low_price is not None
-                    and row.last_price is not None
-                    and row.bar_low_price <= position.stop_price
-                    and row.last_price > position.stop_price
-                ):
-                    position.stop_trigger = "intrabar"
-                else:
-                    position.stop_trigger = "close"
-                trades.append(
-                    self._close_position(
-                        state,
-                        position,
-                        row=row,
-                        market_date=market_date,
-                        simulated_time=simulated_time,
-                        reason="stop_loss",
-                        setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
-                    )
+            if position.direction == "SHORT":
+                # short stop: price rises above stop_price
+                stop_ref = row.bar_high_price if row.bar_high_price is not None else row.last_price
+                target_hit = (
+                    position.target_price is not None
+                    and (row.bar_low_price or row.last_price or 0.0) <= position.target_price
                 )
+                stop_hit = stop_ref is not None and stop_ref >= position.stop_price
+                if stop_hit or target_hit:
+                    position.stop_trigger = "close"
+                    trades.append(
+                        self._close_position(
+                            state,
+                            position,
+                            row=row,
+                            market_date=market_date,
+                            simulated_time=simulated_time,
+                            reason="short_target" if (target_hit and not stop_hit) else "short_stop_loss",
+                            setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
+                        )
+                    )
+            else:
+                stop_reference_price = row.bar_low_price if row.bar_low_price is not None else row.last_price
+                if stop_reference_price is not None and stop_reference_price <= position.stop_price:
+                    if (
+                        row.bar_low_price is not None
+                        and row.last_price is not None
+                        and row.bar_low_price <= position.stop_price
+                        and row.last_price > position.stop_price
+                    ):
+                        position.stop_trigger = "intrabar"
+                    else:
+                        position.stop_trigger = "close"
+                    trades.append(
+                        self._close_position(
+                            state,
+                            position,
+                            row=row,
+                            market_date=market_date,
+                            simulated_time=simulated_time,
+                            reason="stop_loss",
+                            setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
+                        )
+                    )
         for row in activity:
             position = state.positions.get(row.symbol)
             if position is not None and row.analysis_label in self._exit_labels:
@@ -663,6 +691,33 @@ class PremktHistoricalReplayRunner:
                         setup_judgement=setup_by_symbol.get(row.symbol, (None, None))[1],
                     )
                 )
+        if state.bucket == FADE_SHORT_BUCKET:
+            for row in sorted(activity, key=lambda item: -(item.pct_change or 0.0), reverse=False):
+                if row.symbol in state.positions:
+                    continue
+                if len(state.positions) >= max(int(self.settings.paper_adaptive_max_open_positions), 1):
+                    break
+                entry_setup = setup_by_symbol.get(row.symbol)
+                if entry_setup is None:
+                    continue
+                _, judgement = entry_setup
+                if judgement.setup_state not in _FADE_SHORT_ENTRY_STATES:
+                    continue
+                if (row.pct_change or 0.0) < float(self.settings.paper_min_short_pct_change):
+                    continue
+                if (row.spread_pct or 0.0) > float(self.settings.paper_max_short_spread_pct):
+                    continue
+                entry = self._open_position_short(
+                    state,
+                    row=row,
+                    market_date=market_date,
+                    simulated_time=simulated_time,
+                    setup_judgement=judgement,
+                )
+                if entry is not None:
+                    trades.append(entry)
+            return trades
+
         for row in sorted(activity, key=lambda item: (-item.analysis_score, item.pct_rank or 9999, item.symbol)):
             if row.symbol in state.positions:
                 continue
@@ -852,8 +907,95 @@ class PremktHistoricalReplayRunner:
             "holding_minutes": "",
             "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
+            "direction": "LONG",
             **_setup_prefixed_fields(setup_judgement, "entry"),
             **_fill_metrics(fill),
+        }
+
+    def _open_position_short(
+        self,
+        state: _BucketState,
+        row: MarketActivity,
+        *,
+        market_date: str,
+        simulated_time: datetime,
+        setup_judgement: SetupJudgement | None,
+    ) -> dict[str, object] | None:
+        bid = row.bid_price if row.bid_price and row.bid_price > 0 else row.last_price
+        if bid is None or bid <= 0:
+            return None
+        stop_pct = float(self.settings.paper_short_stop_pct)
+        target_pct = float(self.settings.paper_short_target_pct)
+        stop_price = bid * (1.0 + stop_pct / 100.0)
+        target_price = bid * (1.0 - target_pct / 100.0)
+        risk_per_share = bid * stop_pct / 100.0
+        risk_dollars = state.cash * float(self.settings.trade_plan_per_trade_risk_pct) / 100.0
+        risk_qty = int(risk_dollars / risk_per_share) if risk_per_share > 0 else 0
+        max_notional = state.cash * float(self.settings.paper_short_entry_size_fraction)
+        max_qty = int(max_notional / bid) if bid > 0 else 0
+        quantity = max(min(risk_qty, max_qty), 0)
+        if quantity <= 0:
+            return None
+        borrow_cost_entry = bid * quantity * float(self.settings.paper_short_borrow_cost_pct_annual) / 252.0 / 100.0
+        transaction_cost = max(float(self.settings.paper_min_trade_fee), quantity * bid * float(self.settings.paper_notional_fee_rate_pct) / 100.0) + borrow_cost_entry
+        state.cash -= transaction_cost
+        reasons = [
+            FADE_SHORT_BUCKET,
+            f"setup_state:{setup_judgement.setup_state if setup_judgement else 'unknown'}",
+            f"pct_change:{row.pct_change:.1f}" if row.pct_change is not None else "",
+        ]
+        position = _Position(
+            symbol=row.symbol,
+            bucket=state.bucket,
+            quantity=quantity,
+            entry_price=bid,
+            stop_price=stop_price,
+            initial_stop_price=stop_price,
+            opened_at=simulated_time,
+            entry_score=row.analysis_score,
+            entry_label=row.analysis_label,
+            predictor_score=None,
+            predictor_weight=0.0,
+            entry_reasons=reasons,
+            fees_paid=transaction_cost,
+            best_close_price=bid,
+            worst_close_price=bid,
+            best_intrabar_price=bid,
+            worst_intrabar_price=bid,
+            direction="SHORT",
+            target_price=target_price,
+            entry_setup_judgement=setup_judgement,
+        )
+        state.positions[row.symbol] = position
+        return {
+            "run_id": self.run_id,
+            "market_date": market_date,
+            "bucket": state.bucket,
+            "symbol": row.symbol,
+            "event": "ENTRY",
+            "status": "OPEN",
+            "entry_at": simulated_time.isoformat(),
+            "exit_at": "",
+            "quantity": quantity,
+            "entry_price": round(bid, 6),
+            "exit_price": "",
+            "gross_pnl": "",
+            "net_pnl": "",
+            "realized_pnl_pct": "",
+            "transaction_cost": round(transaction_cost, 6),
+            "predictor_score": None,
+            "predictor_weight": 0.0,
+            "analysis_score": row.analysis_score,
+            "analysis_label": row.analysis_label,
+            "entry_analysis_label": row.analysis_label,
+            "exit_analysis_label": "",
+            "entry_reasons": ", ".join(r for r in reasons if r),
+            "exit_reason": "",
+            "holding_minutes": "",
+            "has_l1_quote": int(row.has_live_quote),
+            "fill_status": "FILLED",
+            "direction": "SHORT",
+            **_setup_prefixed_fields(setup_judgement, "entry"),
         }
 
     def _close_position(
@@ -888,13 +1030,30 @@ class PremktHistoricalReplayRunner:
             requested_quantity=position.quantity,
         )
         exit_price = fill.fill_price or row.last_price or position.entry_price
-        if reason == "stop_loss" and exit_price > position.stop_price:
-            exit_price = position.stop_price
-        gross_pnl = (exit_price - position.entry_price) * fill.quantity
-        net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost
-        state.cash += (exit_price * fill.quantity) - fill.transaction_cost
+        if position.direction == "SHORT":
+            # short: stop is above entry; clamp exit to stop on stop hit
+            if reason == "short_stop_loss" and exit_price < position.stop_price:
+                exit_price = position.stop_price
+            # short gross pnl = (entry - exit) * qty  (positive when price falls)
+            gross_pnl = (position.entry_price - exit_price) * fill.quantity
+            # borrow cost proportional to hold time
+            holding_days = (simulated_time - position.opened_at).total_seconds() / 86400.0
+            borrow_cost = (
+                position.entry_price * fill.quantity
+                * float(self.settings.paper_short_borrow_cost_pct_annual) / 365.0 / 100.0
+                * max(holding_days, 1.0 / 390.0)
+            )
+            net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost - borrow_cost
+            state.cash += net_pnl
+        else:
+            if reason == "stop_loss" and exit_price > position.stop_price:
+                exit_price = position.stop_price
+            gross_pnl = (exit_price - position.entry_price) * fill.quantity
+            net_pnl = gross_pnl - position.fees_paid - fill.transaction_cost
+            state.cash += (exit_price * fill.quantity) - fill.transaction_cost
+            borrow_cost = 0.0
         state.positions.pop(position.symbol, None)
-        if reason == "stop_loss":
+        if reason in ("stop_loss", "short_stop_loss"):
             state.last_stop_at_by_symbol[position.symbol] = simulated_time
         holding_minutes = (simulated_time - position.opened_at).total_seconds() / 60.0
         row_payload = {
@@ -924,6 +1083,7 @@ class PremktHistoricalReplayRunner:
             "holding_minutes": round(holding_minutes, 6),
             "has_l1_quote": int(row.has_live_quote),
             "fill_status": fill.fill_status,
+            "direction": position.direction,
             **_setup_prefixed_fields(position.entry_setup_judgement, "entry"),
             **_setup_prefixed_fields(setup_judgement, "exit"),
             **_position_path_metrics(
@@ -1042,6 +1202,7 @@ class PremktHistoricalReplayRunner:
                 PREDICTOR_WEIGHTED_BUCKET: "watchlist + predictor score/weight + live momentum from historical bars",
                 MOMENTUM_ONLY_BUCKET: "watchlist metadata + momentum; predictor score/weight ignored",
                 WATCHLIST_BLIND_MOMENTUM_BUCKET: "same scanned symbols; watchlist/predictor metadata removed before decision",
+                FADE_SHORT_BUCKET: "short-side fade on DEAD_PUMP/FAILED_BREAKOUT setup_state; direction=SHORT; P&L inverted",
             },
             "entry_label_policy": {
                 "include": list(self.options.entry_labels),

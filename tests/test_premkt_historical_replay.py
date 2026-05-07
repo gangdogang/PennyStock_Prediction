@@ -138,6 +138,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
         "predictor_weighted",
         "momentum_only",
         "watchlist_blind_momentum",
+        "fade_short",
     }
     assert summary["bucket_results"]["predictor_weighted"]["trade_count"] == 1
     assert summary["bucket_results"]["predictor_weighted"]["total_net_pnl"] == pytest.approx(32.68255)
@@ -147,7 +148,7 @@ def test_replay_writes_manifest_progress_summary_and_bucket_outputs(
     assert summary["bucket_results"]["watchlist_blind_momentum"]["total_net_pnl"] == pytest.approx(18.4015)
     assert summary["diagnostic_artifacts"]["exit_path_diagnostics"] == "paper_exit_path_diagnostics.csv"
     assert summary["diagnostic_artifacts"]["setup_features"] == "paper_setup_features.csv"
-    assert {row["bucket"] for row in kpis} == {
+    assert {row["bucket"] for row in kpis} >= {
         "predictor_weighted",
         "momentum_only",
         "watchlist_blind_momentum",

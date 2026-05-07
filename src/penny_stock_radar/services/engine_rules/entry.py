@@ -238,11 +238,17 @@ def apply_entry_rules(
         reasons = entry_reasons(deps, row, advice, entry_tag=entry_tag)
         fraction = entry_fraction(deps, row=row, entry_tag=entry_tag)
         reference_price = row.ask_price if row.ask_price is not None and row.ask_price > 0 else row.last_price
+        effective_spread = row.spread_pct or 0.0
+        effective_stop_pct = max(
+            deps.settings.paper_stop_loss_pct,
+            effective_spread * deps.settings.paper_spread_stop_floor_multiplier * 100.0,
+        )
         requested_quantity = deps.position_size(
             cash_balance=run.cash_balance,
             equity=run.equity,
             price=reference_price,
             fraction=fraction,
+            spread_pct=effective_spread,
         )
         fill = deps.fill_model.buy(
             row,
@@ -260,7 +266,7 @@ def apply_entry_rules(
             continue
         notional = fill_price * quantity
         strategy_bucket = entry_tag or ""
-        planned_stop_price = fill_price * (1 - deps.settings.paper_stop_loss_pct / 100.0)
+        planned_stop_price = fill_price * (1 - effective_stop_pct / 100.0)
         order_risk = quantity * max(fill_price - planned_stop_price, 0.0)
         if tracked_open_risk + order_risk > risk_cap:
             continue
@@ -286,6 +292,7 @@ def apply_entry_rules(
             fees_paid_total=transaction_cost,
             day_regime=day_regime,
             watchlist_rank_at_entry=row.watchlist_rank,
+            entry_spread_pct=row.spread_pct,
             entry_reasons=reasons + (["partial_fill_cap"] if remaining_quantity > 0 else []),
             opened_at=now,
             updated_at=now,
@@ -478,11 +485,13 @@ def passes_adaptive_guardrails(
         return False
     if row.behavioral_score > 0 and row.behavioral_score < 40.0:
         return False
-    if row.trap_score > 0 and row.trap_score >= 72.0:
+    if row.trap_score > 0 and row.trap_score >= deps.settings.paper_trap_score_hard_gate_adaptive:
         return False
     if row.spread_pct is not None and row.spread_pct > deps.settings.premarket_max_spread_pct:
         return False
     if row.dollar_volume is not None and row.dollar_volume < deps.settings.premarket_min_dollar_volume:
+        return False
+    if (row.pct_change or 0.0) > deps.settings.premarket_max_entry_pct_change:
         return False
     return True
 
@@ -684,9 +693,12 @@ def eligible_for_baseline_entry(
         return False
     if row.dollar_volume is not None and row.dollar_volume < deps.settings.premarket_min_dollar_volume:
         return False
-    if row.trap_score > 0 and row.trap_score >= 76.0:
+    if row.trap_score > 0 and row.trap_score >= deps.settings.paper_trap_score_hard_gate_baseline:
         return False
-    if (row.pct_change or 0.0) < 8.0:
+    pct = row.pct_change or 0.0
+    if pct < 8.0:
+        return False
+    if pct > deps.settings.premarket_max_entry_pct_change:
         return False
     return selector_rank(deps, row) <= 5
 

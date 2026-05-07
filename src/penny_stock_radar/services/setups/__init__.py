@@ -9,6 +9,7 @@ from .base import (
     SetupDecision,
     SetupEvalContext,
 )
+from .fade_short import FADE_SHORT_BUCKET, FadeShortSetup
 from .registry import SetupRegistry, build_default_registry
 
 __all__ = [
@@ -23,4 +24,6 @@ __all__ = [
     "SetupEvalContext",
     "SetupRegistry",
     "build_default_registry",
+    "FADE_SHORT_BUCKET",
+    "FadeShortSetup",
 ]

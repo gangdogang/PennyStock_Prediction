@@ -73,6 +73,8 @@ def upsert_paper_positions(
             row.day_regime,
             row.watchlist_rank_at_entry,
             row.pyramid_state,
+            row.entry_spread_pct,
+            row.direction,
             json.dumps(row.entry_reasons),
             json.dumps(row.exit_reasons),
             row.opened_at.isoformat(),
@@ -115,13 +117,15 @@ def upsert_paper_positions(
                 day_regime,
                 watchlist_rank_at_entry,
                 pyramid_state,
+                entry_spread_pct,
+                direction,
                 entry_reasons,
                 exit_reasons,
                 opened_at,
                 updated_at,
                 closed_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(position_id) DO UPDATE SET
                 run_id = excluded.run_id,
                 symbol = excluded.symbol,
@@ -150,6 +154,8 @@ def upsert_paper_positions(
                 day_regime = excluded.day_regime,
                 watchlist_rank_at_entry = excluded.watchlist_rank_at_entry,
                 pyramid_state = excluded.pyramid_state,
+                entry_spread_pct = excluded.entry_spread_pct,
+                direction = excluded.direction,
                 entry_reasons = excluded.entry_reasons,
                 exit_reasons = excluded.exit_reasons,
                 opened_at = excluded.opened_at,
@@ -219,6 +225,7 @@ def insert_paper_orders(
             row.watchlist_rank_at_entry,
             row.leg_index,
             row.setup_id,
+            row.direction,
             json.dumps(row.reasons),
             row.created_at.isoformat(),
             row.realized_pnl,
@@ -265,12 +272,13 @@ def insert_paper_orders(
                 watchlist_rank_at_entry,
                 leg_index,
                 setup_id,
+                direction,
                 reasons,
                 created_at,
                 realized_pnl,
                 realized_pnl_pct
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             payload,
         )

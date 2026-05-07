@@ -236,7 +236,10 @@ def stop_price(
     strategy_mode: str,
     position: PaperPosition,
 ) -> float:
-    base_stop = position.average_entry_price * (1 - settings.paper_stop_loss_pct / 100.0)
+    spread_pct = position.entry_spread_pct or 0.0
+    spread_floor_pct = spread_pct * settings.paper_spread_stop_floor_multiplier
+    effective_stop_pct = max(settings.paper_stop_loss_pct, spread_floor_pct * 100.0)
+    base_stop = position.average_entry_price * (1 - effective_stop_pct / 100.0)
     if strategy_mode == "adaptive":
         if position.partial_exit_count > 0:
             return max(base_stop, position.average_entry_price)

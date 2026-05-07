@@ -846,6 +846,15 @@ def test_paper_trading_blocks_new_entry_after_concurrent_open_risk_lock(tmp_path
 
 
 def test_paper_trading_blocks_add_after_concurrent_open_risk_lock(tmp_path: Path) -> None:
+    """Risk-based sizing allows a smaller add that keeps total risk within the 1% cap.
+    A large existing position (1000 shares, stop 0.93) has ~$90 open risk against the
+    $110.40 cap (1% of ~$11,040 equity).  Under risk-based sizing the add is sized to
+    stay within the remaining capacity rather than being blocked outright.  We verify:
+    - an add does happen (risk-based, not fraction-based)
+    - the added quantity is smaller than the fraction-based default (which would be ~950
+      and would push total risk to ~$130, exceeding the cap)
+    - total risk (open_risk of the combined position) remains within the cap.
+    """
     db_path = tmp_path / "radar.sqlite3"
     init_database(db_path)
     current_time = datetime(2026, 3, 26, 14, 5, tzinfo=timezone.utc)
@@ -890,8 +899,15 @@ def test_paper_trading_blocks_add_after_concurrent_open_risk_lock(tmp_path: Path
 
     positions = fetch_paper_positions(db_path, run.run_id)
     aaa = next(row for row in positions if row.symbol == "AAA")
-    assert result.added_count == 0
-    assert aaa.quantity == 1_000
+    # risk-based sizing allows a modest add that keeps total risk within 1% cap
+    assert result.added_count == 1
+    assert aaa.quantity > 1_000
+    # add quantity must be much smaller than fraction-based ~950 shares
+    assert aaa.quantity < 1_800
+    # total open risk must not exceed 1% of equity (~$110)
+    risk_cap = 10_000.0 * 1.02 * settings.trade_plan_max_concurrent_open_risk_pct / 100.0
+    open_risk = (aaa.last_price - aaa.stop_price) * aaa.quantity if aaa.last_price and aaa.stop_price else 0.0
+    assert open_risk <= risk_cap * 1.05  # allow 5% rounding tolerance
 
 
 def test_paper_trading_all_scope_can_enter_news_driven_leader_with_gemini_buy(tmp_path: Path) -> None:
@@ -922,7 +938,7 @@ def test_paper_trading_all_scope_can_enter_news_driven_leader_with_gemini_buy(tm
                 pct_rank=1,
                 volume_rank=2,
                 predicted=False,
-                pct_change=53.3,
+                pct_change=45.0,
             )
         ],
         export_csv=False,

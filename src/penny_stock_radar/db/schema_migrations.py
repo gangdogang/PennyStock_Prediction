@@ -398,6 +398,9 @@ def apply_schema_migrations(connection: sqlite3.Connection) -> None:
                 ON setup_alerts(symbol, market_date, observed_at)
                 """
             )
+            _ensure_column(connection, "paper_positions", "entry_spread_pct", "REAL")
+            _ensure_column(connection, "paper_positions", "direction", "TEXT NOT NULL DEFAULT 'LONG'")
+            _ensure_column(connection, "paper_orders", "direction", "TEXT NOT NULL DEFAULT 'LONG'")
 
 
 def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:

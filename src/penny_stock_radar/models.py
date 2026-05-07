@@ -404,6 +404,8 @@ class PaperPosition(BaseModel):
     day_regime: str | None = None
     watchlist_rank_at_entry: int | None = None
     pyramid_state: str | None = None
+    entry_spread_pct: float | None = None
+    direction: str = "LONG"
     entry_reasons: list[str] = Field(default_factory=list)
     exit_reasons: list[str] = Field(default_factory=list)
     opened_at: datetime = Field(default_factory=utc_now)
@@ -445,6 +447,7 @@ class PaperOrder(BaseModel):
     watchlist_rank_at_entry: int | None = None
     leg_index: int = 0
     setup_id: str = "legacy_momentum"
+    direction: str = "LONG"
     reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     realized_pnl: float | None = None
