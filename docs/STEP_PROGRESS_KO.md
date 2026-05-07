@@ -99,7 +99,8 @@
 - 2026-05-07: Windows 에서 Mito 308k candidate events random benchmark 가 native memory crash 를 낼 수 있어 random-control outcome 계산을 월별 chunk 로 나눴다. `run-mito-event-random-benchmark` 기본은 `--outcome-chunk-months 1` 이며 HF 명령도 같은 옵션을 지원한다.
 - 2026-05-07: `audit-mito-event-random-benchmark-breakdown` / `audit-hf-event-random-benchmark-breakdown` CLI 를 추가했다. 기존 benchmark run 의 `random_events.csv` 와 candidate events 를 재사용해 event_year, market_month, event_time_et, time_bucket 별 candidate-vs-random mean/median/win-rate edge 를 분해하고, 살아남은 pocket 은 fresh holdout 전용 hypothesis 로만 기록한다.
 - 2026-05-07: OHLCV-only candidate event 가 CryptoSpartan/Mito/random breakdown 에서 모두 실패했으므로 다음 edge-source inventory 로 `audit-filing-catalyst-tiers` CLI 를 추가했다. filings DB 또는 SEC PIT CSV 를 읽어 filing rows 를 `tier_1`, `tier_2`, `tier_3`, `trap`, `unknown` 으로 분류하고, dilution/trap override 를 bullish keyword 보다 우선한다. 주문/entry 로직에는 연결하지 않고 `decision_grade=False`, `cost_grade=none` 으로만 남긴다.
-- 같은 기준 전체 검증은 `.venv/bin/python -m pytest -q tests` 기준 `412 passed, 1 skipped`.
+- 2026-05-07: SEC provider 가 `data.sec.gov` submissions 요청에도 `Host: www.sec.gov` 를 강제하던 버그를 수정했다. Host header override 를 제거해 SEC submissions endpoint 가 실제 URL host 를 사용하도록 했다.
+- 같은 기준 전체 검증은 `.venv/bin/python -m pytest -q tests` 기준 `413 passed, 1 skipped`.
 - 다음 우선순위는 Windows 에서 Mito 2024-01~2026-03 파일로 `audit-mito-ohlcv-1m -> segment-mito-candidate-events -> audit-mito-candidate-event-robustness -> run-mito-event-random-benchmark` 를 실행한 뒤 candidate event 가 same ticker/day random event-time 을 이기는지 해석하는 것이다. 그래도 setup backtest 는 아직 금지이며, `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.

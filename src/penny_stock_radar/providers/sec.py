@@ -23,7 +23,6 @@ class SecDataProvider:
             headers={
                 "User-Agent": user_agent,
                 "Accept-Encoding": "gzip, deflate",
-                "Host": "www.sec.gov",
             },
             follow_redirects=True,
             timeout=30.0,
