@@ -24,6 +24,7 @@ class Hf1mBarsAuditOptions:
     output_root: Path = DEFAULT_AUDIT_ROOT
     run_id: str | None = None
     top_ticker_count: int = 50
+    dataset_name: str = DATASET_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,7 @@ class HfCandidateDayOptions:
     chunk_months: int = 3
     start_date: date | None = None
     end_date: date | None = None
+    dataset_name: str = DATASET_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +91,7 @@ class HfCandidateEventOptions:
     chunk_months: int = 3
     start_date: date | None = None
     end_date: date | None = None
+    dataset_name: str = DATASET_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +115,9 @@ class Hf1mBarsAuditor:
                 "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet."
             )
 
+        parquet_files = _parquet_files_for_path(path)
         pl = _load_polars()
-        lf = pl.scan_parquet(str(path))
+        lf = _scan_parquet_input(pl, parquet_files)
         schema = _collect_schema(lf)
         columns = list(schema.keys())
         mapping = _resolve_column_mapping(columns)
@@ -123,12 +127,11 @@ class Hf1mBarsAuditor:
         export_dir = _unique_export_dir(options.output_root / run_id)
         export_dir.mkdir(parents=True, exist_ok=True)
 
-        stat = path.stat()
         summary = {
             "run_id": run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {
-                "dataset": DATASET_NAME,
+                "dataset": options.dataset_name,
                 "audit_scope": "gross_ohlcv_falsification_data_only",
                 "decision_grade": False,
                 "cost_grade": "none",
@@ -137,12 +140,7 @@ class Hf1mBarsAuditor:
                 ),
             },
             "path_resolution": _path_resolution_payload(resolved),
-            "file": {
-                "path": str(path),
-                "exists": True,
-                "size_bytes": stat.st_size,
-                "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
-            },
+            "file": _parquet_input_payload(path, parquet_files),
             "schema": {
                 "columns": [{"name": name, "dtype": str(dtype)} for name, dtype in schema.items()],
                 "column_mapping": mapping,
@@ -176,8 +174,9 @@ class HfCandidateDaySegmenter:
                 "or set PSR_DATA_ROOT to the external data root containing "
                 "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet."
             )
+        parquet_files = _parquet_files_for_path(path)
         pl = _load_polars()
-        lf = pl.scan_parquet(str(path))
+        lf = _scan_parquet_input(pl, parquet_files)
         schema = _collect_schema(lf)
         mapping = _resolve_column_mapping(list(schema.keys()))
         if mapping.get("volume") is None:
@@ -217,6 +216,7 @@ class HfCandidateDaySegmenter:
             options=options,
             run_id=run_id,
             path=path,
+            parquet_files=parquet_files,
             resolved=resolved,
             schema=schema,
             mapping=mapping,
@@ -248,8 +248,9 @@ class HfCandidateEventSegmenter:
                 "or set PSR_DATA_ROOT to the external data root containing "
                 "raw/huggingface/cryptospartan_stocks_bars_1m/stocks_bars_1m.parquet."
             )
+        parquet_files = _parquet_files_for_path(path)
         pl = _load_polars()
-        lf = pl.scan_parquet(str(path))
+        lf = _scan_parquet_input(pl, parquet_files)
         schema = _collect_schema(lf)
         mapping = _resolve_column_mapping(list(schema.keys()))
         if mapping.get("volume") is None:
@@ -310,6 +311,7 @@ class HfCandidateEventSegmenter:
             options=options,
             run_id=run_id,
             path=path,
+            parquet_files=parquet_files,
             resolved=resolved,
             schema=schema,
             mapping=mapping,
@@ -341,6 +343,38 @@ def _load_polars():
             "`pip install polars` or `pip install .[hf]`. The audit intentionally "
             "does not use pandas for full-file parquet reads."
         ) from exc
+
+
+def _parquet_files_for_path(path: Path) -> list[Path]:
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        files = sorted(path.rglob("*.parquet"))
+        if files:
+            return files
+    raise Hf1mBarsAuditError(f"No parquet files found under {path}")
+
+
+def _scan_parquet_input(pl, parquet_files: list[Path]):
+    if len(parquet_files) == 1:
+        return pl.scan_parquet(str(parquet_files[0]))
+    return pl.scan_parquet([str(path) for path in parquet_files])
+
+
+def _parquet_input_payload(path: Path, parquet_files: list[Path]) -> dict[str, Any]:
+    mtimes = [
+        datetime.fromtimestamp(file_path.stat().st_mtime, timezone.utc).isoformat()
+        for file_path in parquet_files
+    ]
+    return {
+        "path": str(path),
+        "exists": True,
+        "input_type": "file" if path.is_file() else "directory",
+        "parquet_file_count": len(parquet_files),
+        "size_bytes": sum(file_path.stat().st_size for file_path in parquet_files),
+        "mtime": max(mtimes) if mtimes else None,
+        "parquet_files": [str(file_path) for file_path in parquet_files],
+    }
 
 
 def _collect_schema(lf) -> dict[str, Any]:
@@ -1103,6 +1137,7 @@ def _candidate_day_summary(
     options: HfCandidateDayOptions,
     run_id: str,
     path: Path,
+    parquet_files: list[Path],
     resolved: ResolvedDataPath,
     schema: dict[str, Any],
     mapping: dict[str, str],
@@ -1128,12 +1163,11 @@ def _candidate_day_summary(
         top_month_pct=top_month_pct,
         options=options,
     )
-    stat = path.stat()
     return {
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "metadata": {
-            "dataset": DATASET_NAME,
+            "dataset": options.dataset_name,
             "scope": "hf_1m_candidate_day_segmentation_gross_only",
             "decision_grade": False,
             "cost_grade": "none",
@@ -1141,12 +1175,7 @@ def _candidate_day_summary(
             "pass_meaning": "PASS only means there are enough gross candidate days to continue falsification work. It does not approve setup backtests or live trading.",
         },
         "path_resolution": _path_resolution_payload(resolved),
-        "file": {
-            "path": str(path),
-            "exists": True,
-            "size_bytes": stat.st_size,
-            "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
-        },
+        "file": _parquet_input_payload(path, parquet_files),
         "schema": {
             "columns": [{"name": name, "dtype": str(dtype)} for name, dtype in schema.items()],
             "column_mapping": mapping,
@@ -1207,6 +1236,7 @@ def _candidate_event_summary(
     options: HfCandidateEventOptions,
     run_id: str,
     path: Path,
+    parquet_files: list[Path],
     resolved: ResolvedDataPath,
     schema: dict[str, Any],
     mapping: dict[str, str],
@@ -1262,12 +1292,11 @@ def _candidate_event_summary(
         top_month_pct=top_month_pct,
         options=options,
     )
-    stat = path.stat()
     return {
         "run_id": run_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "metadata": {
-            "dataset": DATASET_NAME,
+            "dataset": options.dataset_name,
             "scope": "hf_1m_candidate_event_segmentation_gross_only",
             "decision_grade": False,
             "cost_grade": "none",
@@ -1275,12 +1304,7 @@ def _candidate_event_summary(
             "pass_meaning": "PASS only means there are enough event-time gross candidates to continue falsification work. It does not approve setup backtests or live trading.",
         },
         "path_resolution": _path_resolution_payload(resolved),
-        "file": {
-            "path": str(path),
-            "exists": True,
-            "size_bytes": stat.st_size,
-            "mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
-        },
+        "file": _parquet_input_payload(path, parquet_files),
         "schema": {
             "columns": [{"name": name, "dtype": str(dtype)} for name, dtype in schema.items()],
             "column_mapping": mapping,

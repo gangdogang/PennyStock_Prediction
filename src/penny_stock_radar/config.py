@@ -15,6 +15,12 @@ HF_STOCKS_1M_DATASET_RELATIVE_PATH = Path(
 HF_STOCKS_1M_FALLBACK_PATH = (
     Path("data/backtest_lab") / HF_STOCKS_1M_DATASET_RELATIVE_PATH
 )
+MITO_OHLCV_1M_DATASET_RELATIVE_PATH = Path(
+    "raw/huggingface/mito_ohlcv_1m/data"
+)
+MITO_OHLCV_1M_FALLBACK_PATH = (
+    Path("data/backtest_lab") / MITO_OHLCV_1M_DATASET_RELATIVE_PATH
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +54,25 @@ def resolve_hf_stocks_1m_path(path: Path | str | None = None) -> ResolvedDataPat
         )
 
     return ResolvedDataPath(HF_STOCKS_1M_FALLBACK_PATH, "fallback")
+
+
+def resolve_mito_ohlcv_1m_path(path: Path | str | None = None) -> ResolvedDataPath:
+    if path is not None:
+        return ResolvedDataPath(Path(path).expanduser(), "explicit")
+
+    env_path = os.getenv("PSR_MITO_OHLCV_1M_PATH")
+    if env_path is not None and env_path.strip():
+        return ResolvedDataPath(Path(env_path).expanduser(), "PSR_MITO_OHLCV_1M_PATH")
+
+    data_root = resolve_data_root()
+    if data_root is not None:
+        return ResolvedDataPath(
+            data_root / MITO_OHLCV_1M_DATASET_RELATIVE_PATH,
+            "PSR_DATA_ROOT",
+            data_root=data_root,
+        )
+
+    return ResolvedDataPath(MITO_OHLCV_1M_FALLBACK_PATH, "fallback")
 
 
 class AppSettings(BaseSettings):

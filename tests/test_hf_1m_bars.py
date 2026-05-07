@@ -12,7 +12,10 @@ from penny_stock_radar.cli import app
 from penny_stock_radar.config import (
     HF_STOCKS_1M_DATASET_RELATIVE_PATH,
     HF_STOCKS_1M_FALLBACK_PATH,
+    MITO_OHLCV_1M_DATASET_RELATIVE_PATH,
+    MITO_OHLCV_1M_FALLBACK_PATH,
     resolve_hf_stocks_1m_path,
+    resolve_mito_ohlcv_1m_path,
 )
 from penny_stock_radar.services.hf_1m_bars import (
     HfCandidateDayOptions,
@@ -51,6 +54,36 @@ def test_hf_1m_path_resolver_env_precedence(
 
     explicit_path = tmp_path / "explicit.parquet"
     explicit = resolve_hf_stocks_1m_path(explicit_path)
+    assert explicit.path == explicit_path
+    assert explicit.source == "explicit"
+
+
+def test_mito_ohlcv_1m_path_resolver_env_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("PSR_DATA_ROOT", raising=False)
+    monkeypatch.delenv("PSR_MITO_OHLCV_1M_PATH", raising=False)
+
+    fallback = resolve_mito_ohlcv_1m_path()
+    assert fallback.path == MITO_OHLCV_1M_FALLBACK_PATH
+    assert fallback.source == "fallback"
+
+    data_root = tmp_path / "external_data"
+    monkeypatch.setenv("PSR_DATA_ROOT", str(data_root))
+    from_data_root = resolve_mito_ohlcv_1m_path()
+    assert from_data_root.path == data_root / MITO_OHLCV_1M_DATASET_RELATIVE_PATH
+    assert from_data_root.source == "PSR_DATA_ROOT"
+    assert from_data_root.data_root == data_root
+
+    env_path = tmp_path / "mito_data"
+    monkeypatch.setenv("PSR_MITO_OHLCV_1M_PATH", str(env_path))
+    from_env_path = resolve_mito_ohlcv_1m_path()
+    assert from_env_path.path == env_path
+    assert from_env_path.source == "PSR_MITO_OHLCV_1M_PATH"
+
+    explicit_path = tmp_path / "explicit_mito"
+    explicit = resolve_mito_ohlcv_1m_path(explicit_path)
     assert explicit.path == explicit_path
     assert explicit.source == "explicit"
 
@@ -111,6 +144,51 @@ def test_hf_1m_schema_and_audit_work_on_tiny_fixture(tmp_path: Path) -> None:
     assert "gross OHLCV falsification data only" in result.summary_md_path.read_text(
         encoding="utf-8"
     )
+
+
+def test_hf_1m_audit_accepts_directory_of_parquet_files(tmp_path: Path) -> None:
+    parquet_dir = tmp_path / "multi_file"
+    _write_parquet(
+        parquet_dir / "ohlcv_2026-05.parquet",
+        [
+            {
+                "ticker": "ABCD",
+                "timestamp": datetime(2026, 5, 1, 13, 30, tzinfo=timezone.utc),
+                "open": 1.0,
+                "high": 1.2,
+                "low": 0.9,
+                "close": 1.1,
+                "volume": 100,
+            },
+        ],
+    )
+    _write_parquet(
+        parquet_dir / "ohlcv_2026-06.parquet",
+        [
+            {
+                "ticker": "WXYZ",
+                "timestamp": datetime(2026, 6, 1, 13, 30, tzinfo=timezone.utc),
+                "open": 2.0,
+                "high": 2.4,
+                "low": 1.9,
+                "close": 2.2,
+                "volume": 200,
+            },
+        ],
+    )
+
+    result = Hf1mBarsAuditor().run(
+        Hf1mBarsAuditOptions(
+            parquet_path=parquet_dir,
+            output_root=tmp_path / "audits",
+            run_id="directory",
+        )
+    )
+
+    assert result.summary["file"]["input_type"] == "directory"
+    assert result.summary["file"]["parquet_file_count"] == 2
+    assert result.summary["row_count"] == 2
+    assert result.summary["ticker_count"] == 2
 
 
 def test_hf_1m_ohlc_sanity_detects_bad_rows(tmp_path: Path) -> None:
@@ -189,6 +267,33 @@ def test_hf_1m_cli_writes_audit_artifacts(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     export_dir = tmp_path / "audits" / "cli"
     assert (export_dir / "audit_summary.json").exists()
+    assert (export_dir / "audit_summary.md").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
+def test_mito_ohlcv_cli_writes_audit_artifacts_from_directory(tmp_path: Path) -> None:
+    input_root = tmp_path / "mito" / "data"
+    _write_tiny_parquet(input_root / "ohlcv_2026-05.parquet")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "audit-mito-ohlcv-1m",
+            "--input-root",
+            str(input_root),
+            "--output-root",
+            str(tmp_path / "mito_audits"),
+            "--run-id",
+            "cli",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = tmp_path / "mito_audits" / "cli"
+    summary = json.loads((export_dir / "audit_summary.json").read_text(encoding="utf-8"))
+    assert summary["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
+    assert summary["file"]["input_type"] == "directory"
     assert (export_dir / "audit_summary.md").exists()
     assert "decision_grade=false" in result.output
     assert "cost_grade=none" in result.output
@@ -340,6 +445,52 @@ def test_hf_candidate_event_cli_writes_segmentation_artifacts(tmp_path: Path) ->
     assert (export_dir / "candidate_events.csv").exists()
     assert (export_dir / "candidate_event_summary.json").exists()
     assert (export_dir / "candidate_event_summary.md").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
+def test_mito_candidate_event_cli_writes_segmentation_artifacts_from_directory(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "mito" / "data"
+    _write_event_parquet(input_root / "ohlcv_2026-05.parquet")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "segment-mito-candidate-events",
+            "--input-root",
+            str(input_root),
+            "--output-root",
+            str(tmp_path / "mito_candidate_events"),
+            "--run-id",
+            "cli",
+            "--event-time",
+            "09:45",
+            "--forward-window",
+            "30",
+            "--min-rows-to-event",
+            "2",
+            "--min-event-dollar-volume",
+            "100",
+            "--min-event-move-pct",
+            "5",
+            "--min-candidate-events",
+            "1",
+            "--min-active-months",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = tmp_path / "mito_candidate_events" / "cli"
+    summary = json.loads(
+        (export_dir / "candidate_event_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
+    assert summary["file"]["input_type"] == "directory"
+    assert summary["candidate_event_count"] == 1
+    assert (export_dir / "candidate_events.csv").exists()
     assert "decision_grade=false" in result.output
     assert "cost_grade=none" in result.output
 

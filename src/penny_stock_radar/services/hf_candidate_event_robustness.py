@@ -33,6 +33,7 @@ class HfCandidateEventRobustnessOptions:
     min_remaining_events_after_top10: int = 500
     top_n: int = 25
     exclusion_levels: tuple[int, ...] = (0, 1, 5, 10)
+    dataset_name: str = "cryptospartan_stocks_bars_1m"
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,7 +114,7 @@ class HfCandidateEventRobustnessAuditor:
             "run_id": run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {
-                "dataset": "cryptospartan_stocks_bars_1m",
+                "dataset": options.dataset_name,
                 "scope": "hf_candidate_event_robustness_gross_only",
                 "decision_grade": False,
                 "cost_grade": "none",

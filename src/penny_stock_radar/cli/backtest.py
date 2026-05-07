@@ -14,6 +14,7 @@ import httpx
 import typer
 from rich.table import Table
 
+from ..config import resolve_mito_ohlcv_1m_path
 from ..db import (
     fetch_latest_passed_universe,
     fetch_latest_premkt_predictions,
@@ -121,6 +122,15 @@ from .common import console, format_optional_number, format_optional_percent, tr
 
 app = typer.Typer()
 EASTERN = ZoneInfo("America/New_York")
+MITO_DATASET_NAME = "mito0o852_OHLCV_1m"
+MITO_AUDIT_ROOT = Path("data/backtest_lab/audits/mito_ohlcv_1m")
+MITO_CANDIDATE_EVENT_ROOT = Path("data/backtest_lab/candidate_events/mito_ohlcv_1m")
+MITO_CANDIDATE_EVENT_ROBUSTNESS_ROOT = Path(
+    "data/backtest_lab/candidate_event_robustness/mito_ohlcv_1m"
+)
+MITO_EVENT_RANDOM_BENCHMARK_ROOT = Path(
+    "data/backtest_lab/event_random_benchmarks/mito_ohlcv_1m"
+)
 
 
 def _normalize_label_options(
@@ -180,6 +190,10 @@ def _normalize_optional_csv_filter(value: str | None) -> tuple[str, ...] | None:
         if normalized and normalized not in values:
             values.append(normalized)
     return tuple(values)
+
+
+def _resolve_mito_input_path(input_root: Path | None) -> Path:
+    return resolve_mito_ohlcv_1m_path(input_root).path
 
 
 def _normalize_symbol_list(
@@ -1957,6 +1971,326 @@ def audit_hf_candidate_event_robustness(
         "Summary: "
         f"events={result.report.get('event_count', 0)} "
         f"active_years={result.report.get('active_year_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("audit-mito-ohlcv-1m")
+def audit_mito_ohlcv_1m(
+    input_root: Path | None = typer.Option(
+        None,
+        "--input-root",
+        help=(
+            "Mito monthly parquet file or directory. Otherwise resolves "
+            "PSR_MITO_OHLCV_1M_PATH, then PSR_DATA_ROOT."
+        ),
+    ),
+    output_root: Path = typer.Option(
+        MITO_AUDIT_ROOT,
+        "--output-root",
+        help="Directory where mito OHLCV audit output is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    top_ticker_count: int = typer.Option(
+        50,
+        "--top-ticker-count",
+        min=1,
+        help="Number of top tickers to include in the audit.",
+    ),
+) -> None:
+    """Audit mito0o852/OHLCV-1m monthly parquet files as gross OHLCV data."""
+    try:
+        result = Hf1mBarsAuditor().run(
+            Hf1mBarsAuditOptions(
+                parquet_path=_resolve_mito_input_path(input_root),
+                output_root=output_root,
+                run_id=run_id,
+                top_ticker_count=top_ticker_count,
+                dataset_name=MITO_DATASET_NAME,
+            )
+        )
+    except Hf1mBarsAuditError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"Mito OHLCV 1m audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"rows={result.summary.get('row_count', 0)} "
+        f"tickers={result.summary.get('ticker_count', 0)} "
+        "decision_grade=false cost_grade=none"
+    )
+
+
+@app.command("segment-mito-candidate-events")
+def segment_mito_candidate_events(
+    input_root: Path | None = typer.Option(
+        None,
+        "--input-root",
+        help=(
+            "Mito monthly parquet file or directory. Otherwise resolves "
+            "PSR_MITO_OHLCV_1M_PATH, then PSR_DATA_ROOT."
+        ),
+    ),
+    output_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROOT,
+        "--output-root",
+        help="Directory where mito candidate-event segmentation output is written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    event_time: list[str] | None = typer.Option(
+        None,
+        "--event-time",
+        help="Event time in HH:MM ET. Repeat to override defaults: 09:45, 10:30, 14:00, 15:30.",
+    ),
+    forward_window: list[int] | None = typer.Option(
+        None,
+        "--forward-window",
+        help="Forward outcome window in minutes. Repeat to override defaults: 30, 60, 120.",
+    ),
+    min_price: float = typer.Option(0.25, "--min-price", help="Minimum event price."),
+    max_price: float = typer.Option(10.0, "--max-price", help="Maximum event price."),
+    min_rows_to_event: int = typer.Option(
+        5,
+        "--min-rows-to-event",
+        min=1,
+        help="Minimum regular-session bars up to the event time.",
+    ),
+    min_event_dollar_volume: float = typer.Option(
+        250_000.0,
+        "--min-event-dollar-volume",
+        help="Minimum cumulative dollar volume up to the event time.",
+    ),
+    min_event_move_pct: float = typer.Option(
+        5.0,
+        "--min-event-move-pct",
+        help="Minimum high-from-open percent observed by the event time.",
+    ),
+    min_candidate_events: int = typer.Option(
+        1000,
+        "--min-candidate-events",
+        min=1,
+        help="Minimum gross candidate events required for segmentation PASS.",
+    ),
+    min_active_months: int = typer.Option(
+        12,
+        "--min-active-months",
+        min=1,
+        help="Minimum active candidate months required for segmentation PASS.",
+    ),
+    chunk_months: int = typer.Option(
+        1,
+        "--chunk-months",
+        min=1,
+        help="Process the parquet in date chunks to reduce memory pressure.",
+    ),
+    start_date: str | None = typer.Option(
+        None,
+        "--start-date",
+        help="Optional inclusive ET start date, YYYY-MM-DD.",
+    ),
+    end_date: str | None = typer.Option(
+        None,
+        "--end-date",
+        help="Optional inclusive ET end date, YYYY-MM-DD.",
+    ),
+) -> None:
+    """Segment mito monthly OHLCV files into event-time gross candidates."""
+    try:
+        parsed_start = date.fromisoformat(start_date) if start_date is not None else None
+        parsed_end = date.fromisoformat(end_date) if end_date is not None else None
+        result = HfCandidateEventSegmenter().run(
+            HfCandidateEventOptions(
+                parquet_path=_resolve_mito_input_path(input_root),
+                output_root=output_root,
+                run_id=run_id,
+                min_price=min_price,
+                max_price=max_price,
+                min_rows_to_event=min_rows_to_event,
+                min_event_dollar_volume=min_event_dollar_volume,
+                min_event_move_pct=min_event_move_pct,
+                min_candidate_events=min_candidate_events,
+                min_active_months=min_active_months,
+                event_times_et=tuple(event_time or ("09:45", "10:30", "14:00", "15:30")),
+                forward_windows_minutes=tuple(forward_window or (30, 60, 120)),
+                chunk_months=chunk_months,
+                start_date=parsed_start,
+                end_date=parsed_end,
+                dataset_name=MITO_DATASET_NAME,
+            )
+        )
+    except (Hf1mBarsAuditError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    except OSError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.summary.get("candidate_event_gate", {})
+    console.print(f"Mito candidate-event segmentation wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"CSV: [bold]{result.event_csv_path}[/bold]")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_events={result.summary.get('candidate_event_count', 0)} "
+        f"active_months={result.summary.get('active_candidate_month_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("audit-mito-candidate-event-robustness")
+def audit_mito_candidate_event_robustness(
+    input_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROOT,
+        "--input-root",
+        help="Directory containing mito candidate-event run folders with candidate_events.csv.",
+    ),
+    output_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROBUSTNESS_ROOT,
+        "--output-root",
+        help="Directory where mito robustness audit outputs are written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    min_total_events: int = typer.Option(1000, "--min-total-events", min=1),
+    min_active_years: int = typer.Option(2, "--min-active-years", min=1),
+    max_top10_ticker_pct: float = typer.Option(50.0, "--max-top10-ticker-pct"),
+    min_remaining_pct_after_top10: float = typer.Option(
+        40.0,
+        "--min-remaining-pct-after-top10",
+    ),
+    min_remaining_events_after_top10: int = typer.Option(
+        500,
+        "--min-remaining-events-after-top10",
+        min=1,
+    ),
+    top_n: int = typer.Option(25, "--top-n", min=1),
+) -> None:
+    """Audit mito candidate-event robustness after top-ticker removal."""
+    try:
+        result = HfCandidateEventRobustnessAuditor().audit(
+            HfCandidateEventRobustnessOptions(
+                input_root=input_root,
+                output_root=output_root,
+                run_id=run_id,
+                min_total_events=min_total_events,
+                min_active_years=min_active_years,
+                max_top10_ticker_pct=max_top10_ticker_pct,
+                min_remaining_pct_after_top10=min_remaining_pct_after_top10,
+                min_remaining_events_after_top10=min_remaining_events_after_top10,
+                top_n=top_n,
+                dataset_name=MITO_DATASET_NAME,
+            )
+        )
+    except (HfCandidateEventRobustnessError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("candidate_event_robustness_gate", {})
+    console.print(f"Mito candidate-event robustness audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"events={result.report.get('event_count', 0)} "
+        f"active_years={result.report.get('active_year_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("run-mito-event-random-benchmark")
+def run_mito_event_random_benchmark(
+    input_root: Path | None = typer.Option(
+        None,
+        "--input-root",
+        help=(
+            "Mito monthly parquet file or directory. Otherwise resolves "
+            "PSR_MITO_OHLCV_1M_PATH, then PSR_DATA_ROOT."
+        ),
+    ),
+    candidate_event_root: Path = typer.Option(
+        MITO_CANDIDATE_EVENT_ROOT,
+        "--candidate-event-root",
+        help="candidate_events.csv file, or root containing mito candidate-event run folders.",
+    ),
+    output_root: Path = typer.Option(
+        MITO_EVENT_RANDOM_BENCHMARK_ROOT,
+        "--output-root",
+        help="Directory where mito random benchmark outputs are written.",
+    ),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    seed: int = typer.Option(20260507, "--seed"),
+    random_mode: list[str] | None = typer.Option(
+        None,
+        "--random-mode",
+        help="Random mode to run. Repeat to override defaults: same_time_bucket, any_regular_time.",
+    ),
+    primary_random_mode: str = typer.Option("same_time_bucket", "--primary-random-mode"),
+    primary_cohort: str = typer.Option("ex_top_10", "--primary-cohort"),
+    primary_window_minutes: int = typer.Option(120, "--primary-window-minutes", min=1),
+    min_primary_sample_count: int = typer.Option(500, "--min-primary-sample-count", min=1),
+    min_mean_edge_pct: float = typer.Option(0.10, "--min-mean-edge-pct"),
+    min_median_edge_pct: float = typer.Option(0.0, "--min-median-edge-pct"),
+    min_win_rate_edge_pct: float = typer.Option(2.0, "--min-win-rate-edge-pct"),
+) -> None:
+    """Compare mito candidate events with same ticker/day deterministic random times."""
+    try:
+        result = HfEventRandomBenchmarkRunner().run(
+            HfEventRandomBenchmarkOptions(
+                parquet_path=_resolve_mito_input_path(input_root),
+                candidate_event_root=candidate_event_root,
+                output_root=output_root,
+                run_id=run_id,
+                seed=seed,
+                random_modes=tuple(random_mode or ("same_time_bucket", "any_regular_time")),
+                primary_random_mode=primary_random_mode,
+                primary_cohort=primary_cohort,
+                primary_window_minutes=primary_window_minutes,
+                min_primary_sample_count=min_primary_sample_count,
+                min_mean_edge_pct=min_mean_edge_pct,
+                min_median_edge_pct=min_median_edge_pct,
+                min_win_rate_edge_pct=min_win_rate_edge_pct,
+                dataset_name=MITO_DATASET_NAME,
+            )
+        )
+    except (HfEventRandomBenchmarkError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("benchmark_gate", {})
+    console.print(f"Mito event random benchmark wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_events={result.report.get('candidate_event_count', 0)} "
+        f"random_controls={result.report.get('random_control_count', 0)} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"
     )

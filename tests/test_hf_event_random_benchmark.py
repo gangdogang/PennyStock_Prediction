@@ -131,6 +131,52 @@ def test_hf_event_random_benchmark_cli_writes_outputs(tmp_path: Path) -> None:
     assert "cost_grade=none" in result.output
 
 
+def test_mito_event_random_benchmark_cli_accepts_directory_input(tmp_path: Path) -> None:
+    input_root = tmp_path / "mito" / "data"
+    candidate_path = tmp_path / "candidate_events.csv"
+    _write_minute_parquet(input_root / "ohlcv_2026-05.parquet")
+    _write_candidate_events(candidate_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run-mito-event-random-benchmark",
+            "--input-root",
+            str(input_root),
+            "--candidate-event-root",
+            str(candidate_path),
+            "--output-root",
+            str(tmp_path / "mito_benchmark"),
+            "--run-id",
+            "cli",
+            "--random-mode",
+            "same_time_bucket",
+            "--primary-cohort",
+            "all",
+            "--primary-window-minutes",
+            "30",
+            "--min-primary-sample-count",
+            "1",
+            "--min-mean-edge-pct",
+            "-100",
+            "--min-win-rate-edge-pct",
+            "-100",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = tmp_path / "mito_benchmark" / "cli"
+    report = json.loads(
+        (export_dir / "hf_event_random_benchmark_summary.json").read_text(encoding="utf-8")
+    )
+    assert report["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
+    assert report["input"]["parquet"]["input_type"] == "directory"
+    assert report["input"]["parquet"]["parquet_file_count"] == 1
+    assert (export_dir / "comparison_summary.csv").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
 def _write_minute_parquet(path: Path) -> None:
     pl = pytest.importorskip("polars")
     rows = []

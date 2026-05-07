@@ -91,6 +91,40 @@ def test_hf_candidate_event_robustness_cli_writes_outputs(tmp_path: Path) -> Non
     assert "cost_grade=none" in result.output
 
 
+def test_mito_candidate_event_robustness_cli_writes_outputs(tmp_path: Path) -> None:
+    input_root = _write_candidate_event_runs(tmp_path / "candidate_events")
+    output_root = tmp_path / "mito_robustness"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "audit-mito-candidate-event-robustness",
+            "--input-root",
+            str(input_root),
+            "--output-root",
+            str(output_root),
+            "--run-id",
+            "cli",
+            "--min-total-events",
+            "10",
+            "--min-active-years",
+            "2",
+            "--min-remaining-events-after-top10",
+            "5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    export_dir = output_root / "cli"
+    report = json.loads(
+        (export_dir / "candidate_event_robustness_summary.json").read_text(encoding="utf-8")
+    )
+    assert report["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
+    assert (export_dir / "cohort_summary.csv").exists()
+    assert "decision_grade=false" in result.output
+    assert "cost_grade=none" in result.output
+
+
 def _write_candidate_event_runs(root: Path) -> Path:
     _write_run(
         root / "hf_events_2025",

@@ -18,7 +18,10 @@ from .hf_1m_bars import (
     _event_time_bucket,
     _load_polars,
     _minute_to_hhmm,
+    _parquet_files_for_path,
+    _parquet_input_payload,
     _resolve_column_mapping,
+    _scan_parquet_input,
     _with_audit_columns,
 )
 from .hf_candidate_event_robustness import DEFAULT_HF_CANDIDATE_EVENT_ROOT
@@ -62,6 +65,7 @@ class HfEventRandomBenchmarkOptions:
     min_median_edge_pct: float = 0.0
     min_win_rate_edge_pct: float = 2.0
     top_n: int = 25
+    dataset_name: str = DATASET_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,12 +140,12 @@ class HfEventRandomBenchmarkRunner:
             for index, row in enumerate(top_tickers[: options.top_n])
         ]
         random_quality_rows = _random_quality_rows(random_outcomes, random_modes=random_modes)
-        stat = parquet_path.stat()
+        parquet_files = _parquet_files_for_path(parquet_path)
         report = {
             "run_id": run_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "metadata": {
-                "dataset": DATASET_NAME,
+                "dataset": options.dataset_name,
                 "scope": "hf_event_same_ticker_day_random_time_benchmark_gross_only",
                 "decision_grade": False,
                 "cost_grade": "none",
@@ -158,9 +162,7 @@ class HfEventRandomBenchmarkRunner:
                 "candidate_event_root": str(options.candidate_event_root),
                 "candidate_file_count": len(input_files),
                 "candidate_files": [str(path) for path in input_files],
-                "parquet_path": str(parquet_path),
-                "parquet_size_bytes": stat.st_size,
-                "parquet_mtime": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+                "parquet": _parquet_input_payload(parquet_path, parquet_files),
                 "path_resolution": _path_resolution_payload(resolved),
             },
             "thresholds": {
@@ -289,7 +291,7 @@ def _compute_random_outcomes(
         return []
     pl = _load_polars()
     plan_df = pl.DataFrame(random_plan)
-    lf = pl.scan_parquet(str(parquet_path))
+    lf = _scan_parquet_input(pl, _parquet_files_for_path(parquet_path))
     schema = _collect_schema(lf)
     mapping = _resolve_column_mapping(list(schema.keys()))
     auditable = _with_audit_columns(lf, schema, mapping, pl)

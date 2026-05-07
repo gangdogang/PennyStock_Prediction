@@ -217,6 +217,18 @@ $env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
 
 이 명령은 같은 ticker/day 안에서 deterministic random event-time 을 만들고 HF parquet 로 동일한 30/60/120분 forward outcome 을 계산해 candidate event 와 비교한다. 기본 gate 는 `ex_top_10` cohort 의 120분 `same_time_bucket` random 대비 mean/median/win-rate 우위이며, 산출물은 계속 `decision_grade=false`, `cost_grade=none` 이다.
 
+Hugging Face mito0o852/OHLCV-1m monthly parquet audit:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 audit-mito-ohlcv-1m --run-id mito_audit_20260507
+.\scripts\psradar.ps1 segment-mito-candidate-events --run-id mito_events_20260507 --chunk-months 1
+.\scripts\psradar.ps1 audit-mito-candidate-event-robustness --run-id mito_robustness_20260507
+.\scripts\psradar.ps1 run-mito-event-random-benchmark --run-id mito_random_20260507
+```
+
+Mito 기본 경로는 `PSR_MITO_OHLCV_1M_PATH`, `PSR_DATA_ROOT\raw\huggingface\mito_ohlcv_1m\data`, repo-local fallback 순서다. 이 경로는 월별 parquet directory 입력을 받는다. Mito 결과도 CryptoSpartan 과 같은 gross OHLCV 반증 산출물일 뿐이며, random benchmark 를 명확히 이기기 전에는 setup backtest 로 승격하지 않는다.
+
 Coverage shortfall planning:
 
 ```bash
