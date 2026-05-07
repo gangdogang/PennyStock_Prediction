@@ -148,6 +148,20 @@ Phase 0 falsification data coverage audit:
 ./scripts/psradar audit-research-data-coverage --run-id coverage_$(date +%Y%m%d) --strategy-run-dir data/backtest_lab/replays/<run_id> --strategy-bucket predictor_weighted
 ```
 
+SEC filing catalyst tier/trap inventory:
+
+```bash
+./scripts/psradar audit-filing-catalyst-tiers --db-path data/backtest_lab/premkt_replay.sqlite3 --run-id filing_tiers_$(date +%Y%m%d)
+```
+
+Windows CSV example:
+
+```powershell
+.\scripts\psradar.ps1 audit-filing-catalyst-tiers --filings-csv C:\Dev\Penny_Stock\data\backtest_lab\research_runs\<run_id>\sec_edgar_pit_filings.csv --run-id filing_tiers_20260507
+```
+
+이 감사는 SEC filing rows 를 `tier_1`, `tier_2`, `tier_3`, `trap`, `unknown` 으로 분류하는 context inventory 다. trap/dilution 분리는 naive long setup 승격을 막기 위한 blocker 자료이며 산출물은 `decision_grade=false`, `cost_grade=none` 이다.
+
 Hugging Face CryptoSpartan 1m bars audit:
 
 ```bash

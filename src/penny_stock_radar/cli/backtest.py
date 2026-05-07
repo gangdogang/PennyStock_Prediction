@@ -76,6 +76,11 @@ from ..services.finra_otc_daily_list import (
     FinraOTCDailyListImporter,
     records_to_corporate_actions_hook,
 )
+from ..services.filing_catalyst_tier_audit import (
+    FilingCatalystTierAuditError,
+    FilingCatalystTierAuditOptions,
+    FilingCatalystTierAuditor,
+)
 from ..services.hf_1m_bars import (
     DEFAULT_AUDIT_ROOT as DEFAULT_HF_1M_BARS_AUDIT_ROOT,
     HfCandidateDayOptions,
@@ -1502,6 +1507,78 @@ def audit_research_data_coverage(
             console.print(f"- {blocker}")
     else:
         console.print("No coverage blockers in this report. Run falsification audit next.")
+
+
+@app.command("audit-filing-catalyst-tiers")
+def audit_filing_catalyst_tiers(
+    db_path: Path | None = typer.Option(
+        DEFAULT_REPLAY_DB,
+        "--db-path",
+        help="Database containing filings table. Ignored when --filings-csv is supplied.",
+    ),
+    filings_csv: Path | None = typer.Option(
+        None,
+        "--filings-csv",
+        help="Optional filings CSV, such as sec_edgar_pit_filings.csv.",
+    ),
+    output_root: Path = typer.Option(
+        Path("data/backtest_lab/filing_catalyst_tiers"),
+        "--output-root",
+        help="Directory where filing catalyst tier audit outputs are written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to filing_catalyst_tiers_<timestamp>.",
+    ),
+    scan_id: str | None = typer.Option(
+        None,
+        "--scan-id",
+        help="Optional filings scan_id when reading from database.",
+    ),
+    symbol: list[str] | None = typer.Option(
+        None,
+        "--symbol",
+        help="Optional symbol filter. Repeat for multiple symbols.",
+    ),
+    min_total_filings: int = typer.Option(
+        1,
+        "--min-total-filings",
+        min=1,
+        help="Minimum filing rows required for inventory PASS.",
+    ),
+) -> None:
+    """Classify SEC filing rows into catalyst tiers and dilution/trap buckets."""
+    try:
+        result = FilingCatalystTierAuditor().audit(
+            FilingCatalystTierAuditOptions(
+                db_path=db_path,
+                filings_csv=filings_csv,
+                output_root=output_root,
+                run_id=run_id,
+                scan_id=scan_id,
+                symbols=tuple(symbol or ()),
+                min_total_filings=min_total_filings,
+            )
+        )
+    except (FilingCatalystTierAuditError, OSError, sqlite3.Error) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.summary.get("filing_catalyst_tier_gate", {})
+    console.print(f"Filing catalyst tier audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"CSV: [bold]{result.classified_csv_path}[/bold]")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"filings={result.summary.get('filing_count', 0)} "
+        f"symbols={result.summary.get('symbol_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
 
 
 @app.command("audit-hf-1m-bars")
