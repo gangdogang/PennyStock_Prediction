@@ -1853,6 +1853,12 @@ def run_hf_event_random_benchmark(
         "--min-win-rate-edge-pct",
         help="Minimum candidate minus random win-rate edge in percentage points.",
     ),
+    outcome_chunk_months: int = typer.Option(
+        3,
+        "--outcome-chunk-months",
+        min=1,
+        help="Month chunks used when joining random controls back to parquet bars.",
+    ),
 ) -> None:
     """Compare HF candidate events with same ticker/day deterministic random times."""
     try:
@@ -1871,6 +1877,7 @@ def run_hf_event_random_benchmark(
                 min_mean_edge_pct=min_mean_edge_pct,
                 min_median_edge_pct=min_median_edge_pct,
                 min_win_rate_edge_pct=min_win_rate_edge_pct,
+                random_outcome_chunk_months=outcome_chunk_months,
             )
         )
     except (HfEventRandomBenchmarkError, OSError) as exc:
@@ -2258,6 +2265,12 @@ def run_mito_event_random_benchmark(
     min_mean_edge_pct: float = typer.Option(0.10, "--min-mean-edge-pct"),
     min_median_edge_pct: float = typer.Option(0.0, "--min-median-edge-pct"),
     min_win_rate_edge_pct: float = typer.Option(2.0, "--min-win-rate-edge-pct"),
+    outcome_chunk_months: int = typer.Option(
+        1,
+        "--outcome-chunk-months",
+        min=1,
+        help="Month chunks used when joining random controls back to mito parquet bars.",
+    ),
 ) -> None:
     """Compare mito candidate events with same ticker/day deterministic random times."""
     try:
@@ -2277,6 +2290,7 @@ def run_mito_event_random_benchmark(
                 min_median_edge_pct=min_median_edge_pct,
                 min_win_rate_edge_pct=min_win_rate_edge_pct,
                 dataset_name=MITO_DATASET_NAME,
+                random_outcome_chunk_months=outcome_chunk_months,
             )
         )
     except (HfEventRandomBenchmarkError, OSError) as exc:

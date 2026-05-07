@@ -224,10 +224,10 @@ $env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
 .\scripts\psradar.ps1 audit-mito-ohlcv-1m --run-id mito_audit_20260507
 .\scripts\psradar.ps1 segment-mito-candidate-events --run-id mito_events_20260507 --chunk-months 1
 .\scripts\psradar.ps1 audit-mito-candidate-event-robustness --run-id mito_robustness_20260507
-.\scripts\psradar.ps1 run-mito-event-random-benchmark --run-id mito_random_20260507
+.\scripts\psradar.ps1 run-mito-event-random-benchmark --run-id mito_random_20260507 --outcome-chunk-months 1
 ```
 
-Mito 기본 경로는 `PSR_MITO_OHLCV_1M_PATH`, `PSR_DATA_ROOT\raw\huggingface\mito_ohlcv_1m\data`, repo-local fallback 순서다. 이 경로는 월별 parquet directory 입력을 받는다. Mito 결과도 CryptoSpartan 과 같은 gross OHLCV 반증 산출물일 뿐이며, random benchmark 를 명확히 이기기 전에는 setup backtest 로 승격하지 않는다.
+Mito 기본 경로는 `PSR_MITO_OHLCV_1M_PATH`, `PSR_DATA_ROOT\raw\huggingface\mito_ohlcv_1m\data`, repo-local fallback 순서다. 이 경로는 월별 parquet directory 입력을 받는다. random benchmark 는 random-control parquet join 을 기본 1개월 chunk 로 처리해 Windows 메모리 압박을 낮춘다. Mito 결과도 CryptoSpartan 과 같은 gross OHLCV 반증 산출물일 뿐이며, random benchmark 를 명확히 이기기 전에는 setup backtest 로 승격하지 않는다.
 
 Coverage shortfall planning:
 

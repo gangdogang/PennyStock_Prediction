@@ -45,6 +45,7 @@ def test_hf_event_random_benchmark_compares_candidate_to_random_controls(
     assert report["metadata"]["cost_grade"] == "none"
     assert report["candidate_event_count"] == 3
     assert report["random_control_count"] == 3
+    assert report["processing"]["random_outcome_chunk_count"] == 1
     assert report["benchmark_gate"]["status"] == "PASS"
     assert report["primary_comparisons"][0]["metric"] == "return_pct"
 
@@ -172,6 +173,7 @@ def test_mito_event_random_benchmark_cli_accepts_directory_input(tmp_path: Path)
     assert report["metadata"]["dataset"] == "mito0o852_OHLCV_1m"
     assert report["input"]["parquet"]["input_type"] == "directory"
     assert report["input"]["parquet"]["parquet_file_count"] == 1
+    assert report["thresholds"]["random_outcome_chunk_months"] == 1
     assert (export_dir / "comparison_summary.csv").exists()
     assert "decision_grade=false" in result.output
     assert "cost_grade=none" in result.output

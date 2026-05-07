@@ -66,6 +66,7 @@ class HfEventRandomBenchmarkOptions:
     min_win_rate_edge_pct: float = 2.0
     top_n: int = 25
     dataset_name: str = DATASET_NAME
+    random_outcome_chunk_months: int = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +118,7 @@ class HfEventRandomBenchmarkRunner:
             parquet_path=parquet_path,
             forward_windows=forward_windows,
             max_event_staleness_minutes=options.max_event_staleness_minutes,
+            chunk_months=options.random_outcome_chunk_months,
         )
         random_by_key = {
             (int(row["candidate_row_id"]), str(row["benchmark_mode"])): row
@@ -177,6 +179,19 @@ class HfEventRandomBenchmarkRunner:
                 "min_mean_edge_pct": options.min_mean_edge_pct,
                 "min_median_edge_pct": options.min_median_edge_pct,
                 "min_win_rate_edge_pct": options.min_win_rate_edge_pct,
+                "random_outcome_chunk_months": max(
+                    int(options.random_outcome_chunk_months),
+                    1,
+                ),
+            },
+            "processing": {
+                "random_plan_count": len(random_plan),
+                "random_outcome_chunk_count": len(
+                    _chunk_random_plan_by_months(
+                        random_plan,
+                        months=options.random_outcome_chunk_months,
+                    )
+                ),
             },
             "candidate_event_count": len(candidate_events),
             "random_control_count": len(random_outcomes),
@@ -281,6 +296,77 @@ def _build_random_plan(
 
 
 def _compute_random_outcomes(
+    random_plan: list[dict[str, Any]],
+    *,
+    parquet_path: Path,
+    forward_windows: tuple[int, ...],
+    max_event_staleness_minutes: int,
+    chunk_months: int,
+) -> list[dict[str, Any]]:
+    if not random_plan:
+        return []
+    outcomes: list[dict[str, Any]] = []
+    for chunk in _chunk_random_plan_by_months(random_plan, months=chunk_months):
+        outcomes.extend(
+            _compute_random_outcomes_chunk(
+                chunk,
+                parquet_path=parquet_path,
+                forward_windows=forward_windows,
+                max_event_staleness_minutes=max_event_staleness_minutes,
+            )
+        )
+    return sorted(
+        outcomes,
+        key=lambda row: (
+            str(row["benchmark_mode"]),
+            int(row["candidate_row_id"]),
+            int(row["sample_key"]),
+        ),
+    )
+
+
+def _chunk_random_plan_by_months(
+    random_plan: list[dict[str, Any]],
+    *,
+    months: int,
+) -> list[list[dict[str, Any]]]:
+    if not random_plan:
+        return []
+    chunk_months = max(int(months), 1)
+    ordered = sorted(
+        random_plan,
+        key=lambda row: (row["market_date"], row["ticker"], row["benchmark_mode"]),
+    )
+    chunks: list[list[dict[str, Any]]] = []
+    chunk_start = _month_floor(ordered[0]["market_date"])
+    chunk_end = _add_months(chunk_start, chunk_months)
+    current: list[dict[str, Any]] = []
+    for row in ordered:
+        market_date = row["market_date"]
+        while market_date >= chunk_end:
+            if current:
+                chunks.append(current)
+                current = []
+            chunk_start = chunk_end
+            chunk_end = _add_months(chunk_start, chunk_months)
+        current.append(row)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _month_floor(value: date) -> date:
+    return date(value.year, value.month, 1)
+
+
+def _add_months(value: date, months: int) -> date:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
+
+
+def _compute_random_outcomes_chunk(
     random_plan: list[dict[str, Any]],
     *,
     parquet_path: Path,
