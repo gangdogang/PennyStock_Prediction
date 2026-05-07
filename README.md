@@ -199,6 +199,15 @@ $env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
 
 이 명령은 09:45/10:30/14:00/15:30 ET event-time 후보를 만들고, 후보 생성에는 event 시점까지의 OHLCV 만 사용한다. event 시점 최신 bar 가 기본 2분보다 오래됐으면 stale 로 제외한다. 이후 30/60/120분 regular-session gross return/max-up/max-down 은 결과 진단 컬럼일 뿐이며 산출물은 `decision_grade=false`, `cost_grade=none` 이다.
 
+Hugging Face candidate-event robustness audit:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 audit-hf-candidate-event-robustness --run-id hf_event_robustness_20260507
+```
+
+이 명령은 연도별 `candidate_events.csv` 를 합쳐 top1/top5/top10 ticker 제거 전후 event 수, event-time/time-bucket 분포, forward outcome 변화를 감사한다. `PASS` 는 top ticker 집중 착시가 약하다는 최소 조건일 뿐이며 setup backtest, cost/fill, live 가능 판정이 아니다.
+
 Coverage shortfall planning:
 
 ```bash

@@ -93,8 +93,9 @@
 - 2026-05-07: `build-setup-alerts-from-features` CLI, `setup_alerts` DB table, CSV/JSON/summary export, setup taxonomy/classifier 테스트를 추가했다.
 - 2026-05-07: 데이터 다운로드 완료 즉시 실행할 수 있도록 `segment-hf-candidate-days` CLI 를 추가했다. HF 1m parquet 를 ticker-day 단위로 분해해 low-price universe, early volume momentum, afternoon runner, posthoc high-move label, coverage/concentration gate 를 산출하며, 결과는 계속 `decision_grade=False`, `cost_grade=none` 이다. Windows full-file groupby 메모리 압박을 피하기 위해 기본 3개월 chunk 로 처리하고 `--chunk-months 1` 옵션을 지원한다.
 - 2026-05-07: `segment-hf-candidate-events` CLI 를 추가했다. ticker-day 가 아니라 09:45/10:30/14:00/15:30 ET event-time 후보를 만들고, 후보 생성에는 event 시점까지의 OHLCV 만 사용한다. event 시점 최신 bar 가 기본 2분보다 오래된 stale 후보는 제외하며, forward 30/60/120분 regular-session gross path 는 결과 진단 컬럼으로만 붙인다.
-- 같은 기준 전체 검증은 `.venv/bin/python -m pytest -q tests` 기준 `399 passed, 1 skipped`.
-- 다음 우선순위는 Windows 에서 `segment-hf-candidate-events` 를 실행한 뒤 event-time/time-bucket/concentration/forward outcome 분포를 해석하는 것이다. 그래도 setup backtest 는 아직 금지이며, `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
+- 2026-05-07: `audit-hf-candidate-event-robustness` CLI 를 추가했다. 연도별 event CSV 를 합쳐 top1/top5/top10 ticker 제거 전후 event 수, concentration, event-time/time-bucket 분포, forward outcome 변화를 먼저 반증한다. 여기서 붕괴하면 setup backtest 금지와 더 큰 OHLCV/NBBO 데이터 전환을 우선한다.
+- 같은 기준 전체 검증은 `.venv/bin/python -m pytest -q tests` 기준 `401 passed, 1 skipped`.
+- 다음 우선순위는 Windows 에서 `audit-hf-candidate-event-robustness` 를 실행한 뒤 top ticker 제거 후에도 분포가 살아남는지 해석하는 것이다. 그래도 setup backtest 는 아직 금지이며, `PASS` 전에는 setup_state filter tuning, entry label tuning, score cutoff tuning, stop/sizing/add/trim tuning, fixed parameter OOS, shadow/live paper 검증으로 넘어가지 않는다.
 - 그 다음 구현 우선순위는 Step 0 coverage 60% gate 확보와 6-12개월 이상 archive 적재다.
 - 3개월 검증은 실제 시간을 기다리는 방식이 아니라 과거 데이터 재생 기준이다. 구현 루프는 2일 smoke, 5-10일 sanity, 1개월 calibration, 3개월 이상 out-of-sample 순으로 빠르게 반복한다.
 - Step 단위 커밋 원칙을 유지하고, 한 커밋에 여러 Step 을 섞지 않는다.

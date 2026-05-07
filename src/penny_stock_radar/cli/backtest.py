@@ -85,6 +85,13 @@ from ..services.hf_1m_bars import (
     Hf1mBarsAuditOptions,
     Hf1mBarsAuditor,
 )
+from ..services.hf_candidate_event_robustness import (
+    DEFAULT_HF_CANDIDATE_EVENT_ROBUSTNESS_ROOT,
+    DEFAULT_HF_CANDIDATE_EVENT_ROOT,
+    HfCandidateEventRobustnessAuditor,
+    HfCandidateEventRobustnessError,
+    HfCandidateEventRobustnessOptions,
+)
 from ..services.point_in_time_universe_audit import (
     PointInTimeUniverseAuditOptions,
     PointInTimeUniverseAuditor,
@@ -1747,6 +1754,92 @@ def segment_hf_candidate_events(
         "Summary: "
         f"candidate_events={result.summary.get('candidate_event_count', 0)} "
         f"active_months={result.summary.get('active_candidate_month_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("audit-hf-candidate-event-robustness")
+def audit_hf_candidate_event_robustness(
+    input_root: Path = typer.Option(
+        DEFAULT_HF_CANDIDATE_EVENT_ROOT,
+        "--input-root",
+        help="Directory containing yearly candidate-event run folders with candidate_events.csv.",
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_HF_CANDIDATE_EVENT_ROBUSTNESS_ROOT,
+        "--output-root",
+        help="Directory where robustness audit outputs are written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    min_total_events: int = typer.Option(
+        1000,
+        "--min-total-events",
+        min=1,
+        help="Minimum total event rows required before robustness can pass.",
+    ),
+    min_active_years: int = typer.Option(
+        3,
+        "--min-active-years",
+        min=1,
+        help="Minimum active event years required before robustness can pass.",
+    ),
+    max_top10_ticker_pct: float = typer.Option(
+        50.0,
+        "--max-top10-ticker-pct",
+        help="Maximum all-events concentration allowed in the top 10 tickers.",
+    ),
+    min_remaining_pct_after_top10: float = typer.Option(
+        40.0,
+        "--min-remaining-pct-after-top10",
+        help="Minimum percent of events that must remain after removing top 10 tickers.",
+    ),
+    min_remaining_events_after_top10: int = typer.Option(
+        500,
+        "--min-remaining-events-after-top10",
+        min=1,
+        help="Minimum event count that must remain after removing top 10 tickers.",
+    ),
+    top_n: int = typer.Option(
+        25,
+        "--top-n",
+        min=1,
+        help="Number of top tickers to include in the report.",
+    ),
+) -> None:
+    """Audit HF candidate-event robustness after top-ticker removal."""
+    try:
+        result = HfCandidateEventRobustnessAuditor().audit(
+            HfCandidateEventRobustnessOptions(
+                input_root=input_root,
+                output_root=output_root,
+                run_id=run_id,
+                min_total_events=min_total_events,
+                min_active_years=min_active_years,
+                max_top10_ticker_pct=max_top10_ticker_pct,
+                min_remaining_pct_after_top10=min_remaining_pct_after_top10,
+                min_remaining_events_after_top10=min_remaining_events_after_top10,
+                top_n=top_n,
+            )
+        )
+    except (HfCandidateEventRobustnessError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("candidate_event_robustness_gate", {})
+    console.print(f"HF candidate-event robustness audit wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"events={result.report.get('event_count', 0)} "
+        f"active_years={result.report.get('active_year_count', 0)} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"
     )
