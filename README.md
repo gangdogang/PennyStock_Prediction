@@ -208,6 +208,15 @@ $env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
 
 이 명령은 연도별 `candidate_events.csv` 를 합쳐 top1/top5/top10 ticker 제거 전후 event 수, event-time/time-bucket 분포, forward outcome 변화를 감사한다. `PASS` 는 top ticker 집중 착시가 약하다는 최소 조건일 뿐이며 setup backtest, cost/fill, live 가능 판정이 아니다.
 
+Hugging Face event random benchmark:
+
+```powershell
+$env:PSR_DATA_ROOT="C:\Dev\Penny_Stock_Data"
+.\scripts\psradar.ps1 run-hf-event-random-benchmark --run-id hf_event_random_20260507
+```
+
+이 명령은 같은 ticker/day 안에서 deterministic random event-time 을 만들고 HF parquet 로 동일한 30/60/120분 forward outcome 을 계산해 candidate event 와 비교한다. 기본 gate 는 `ex_top_10` cohort 의 120분 `same_time_bucket` random 대비 mean/median/win-rate 우위이며, 산출물은 계속 `decision_grade=false`, `cost_grade=none` 이다.
+
 Coverage shortfall planning:
 
 ```bash

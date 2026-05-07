@@ -92,6 +92,12 @@ from ..services.hf_candidate_event_robustness import (
     HfCandidateEventRobustnessError,
     HfCandidateEventRobustnessOptions,
 )
+from ..services.hf_event_random_benchmark import (
+    DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT,
+    HfEventRandomBenchmarkError,
+    HfEventRandomBenchmarkOptions,
+    HfEventRandomBenchmarkRunner,
+)
 from ..services.point_in_time_universe_audit import (
     PointInTimeUniverseAuditOptions,
     PointInTimeUniverseAuditor,
@@ -1754,6 +1760,117 @@ def segment_hf_candidate_events(
         "Summary: "
         f"candidate_events={result.summary.get('candidate_event_count', 0)} "
         f"active_months={result.summary.get('active_candidate_month_count', 0)} "
+        f"gate={gate.get('status')} "
+        "decision_grade=false cost_grade=none"
+    )
+    for reason in gate.get("reasons", [])[:8]:
+        console.print(f"- {reason}")
+
+
+@app.command("run-hf-event-random-benchmark")
+def run_hf_event_random_benchmark(
+    parquet_path: Path | None = typer.Option(
+        None,
+        "--parquet-path",
+        help=(
+            "Optional parquet path. Otherwise resolves PSR_HF_STOCKS_1M_PATH, "
+            "then PSR_DATA_ROOT, then the repo-local fallback."
+        ),
+    ),
+    candidate_event_root: Path = typer.Option(
+        DEFAULT_HF_CANDIDATE_EVENT_ROOT,
+        "--candidate-event-root",
+        help="candidate_events.csv file, or root containing yearly candidate-event run folders.",
+    ),
+    output_root: Path = typer.Option(
+        DEFAULT_HF_EVENT_RANDOM_BENCHMARK_ROOT,
+        "--output-root",
+        help="Directory where random benchmark outputs are written.",
+    ),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Optional stable run id. Defaults to a UTC timestamp.",
+    ),
+    seed: int = typer.Option(
+        20260507,
+        "--seed",
+        help="Deterministic random seed for same ticker/day controls.",
+    ),
+    random_mode: list[str] | None = typer.Option(
+        None,
+        "--random-mode",
+        help="Random mode to run. Repeat to override defaults: same_time_bucket, any_regular_time.",
+    ),
+    primary_random_mode: str = typer.Option(
+        "same_time_bucket",
+        "--primary-random-mode",
+        help="Benchmark mode used for the gate.",
+    ),
+    primary_cohort: str = typer.Option(
+        "ex_top_10",
+        "--primary-cohort",
+        help="Cohort used for the gate. Defaults to top10 ticker excluded events.",
+    ),
+    primary_window_minutes: int = typer.Option(
+        120,
+        "--primary-window-minutes",
+        min=1,
+        help="Forward return window used for the gate.",
+    ),
+    min_primary_sample_count: int = typer.Option(
+        500,
+        "--min-primary-sample-count",
+        min=1,
+        help="Minimum paired candidate/random samples required for the gate.",
+    ),
+    min_mean_edge_pct: float = typer.Option(
+        0.10,
+        "--min-mean-edge-pct",
+        help="Minimum candidate minus random mean return edge in percentage points.",
+    ),
+    min_median_edge_pct: float = typer.Option(
+        0.0,
+        "--min-median-edge-pct",
+        help="Minimum candidate minus random median return edge in percentage points.",
+    ),
+    min_win_rate_edge_pct: float = typer.Option(
+        2.0,
+        "--min-win-rate-edge-pct",
+        help="Minimum candidate minus random win-rate edge in percentage points.",
+    ),
+) -> None:
+    """Compare HF candidate events with same ticker/day deterministic random times."""
+    try:
+        result = HfEventRandomBenchmarkRunner().run(
+            HfEventRandomBenchmarkOptions(
+                parquet_path=parquet_path,
+                candidate_event_root=candidate_event_root,
+                output_root=output_root,
+                run_id=run_id,
+                seed=seed,
+                random_modes=tuple(random_mode or ("same_time_bucket", "any_regular_time")),
+                primary_random_mode=primary_random_mode,
+                primary_cohort=primary_cohort,
+                primary_window_minutes=primary_window_minutes,
+                min_primary_sample_count=min_primary_sample_count,
+                min_mean_edge_pct=min_mean_edge_pct,
+                min_median_edge_pct=min_median_edge_pct,
+                min_win_rate_edge_pct=min_win_rate_edge_pct,
+            )
+        )
+    except (HfEventRandomBenchmarkError, OSError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+
+    gate = result.report.get("benchmark_gate", {})
+    console.print(f"HF event random benchmark wrote [bold]{result.export_dir}[/bold].")
+    console.print(f"JSON: [bold]{result.summary_json_path}[/bold]")
+    console.print(f"Markdown: [bold]{result.summary_md_path}[/bold]")
+    console.print(
+        "Summary: "
+        f"candidate_events={result.report.get('candidate_event_count', 0)} "
+        f"random_controls={result.report.get('random_control_count', 0)} "
         f"gate={gate.get('status')} "
         "decision_grade=false cost_grade=none"
     )
