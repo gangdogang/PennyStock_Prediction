@@ -211,6 +211,7 @@
 - 월별 결과는 2025-04 -$3,317, 2025-05 -$2,424, 2025-06 -$1,005 로 개선됐지만 전 기간 음수다. 4월 관세/레짐 충격을 포함하면 robust 하지 않다.
 - setup_state 별 3개월 결과는 `FAILED_BREAKOUT` avg -$4.98, `EXIT_FAIL` avg -$9.92, `DEAD_PUMP` avg -$11.38 이다. 다음 진단은 `FAILED_BREAKOUT` 만 남기고, fixed 7% stop 대신 더 넓은 stop 또는 structure/HOD stop 근사를 검증하는 쪽이 합리적이다.
 - 현재 로컬 코드에는 `paper_short_stop_pct=15.0` 과 `fade_short` entry state `FAILED_BREAKOUT` only 변경이 들어와 있다. 대화 중 나온 `09:45` 이후 진입 지연은 기본 코드 변경으로 들어와 있지 않으며, `--min-entry-time 09:45` replay 옵션으로 별도 검증해야 한다. 이 변경은 아직 replay 검증 전인 hypothesis 이며, PASS 전 stop/filter tuning 금지 원칙상 decision-grade 전략 변경이 아니라 diagnostic ablation 으로만 다룬다.
+- 2026-05-07 추가 보정: `fade_short` replay branch 도 이제 `--min-entry-time`, `--entry-setup-states`, `--require-l1-quotes-for-entries` 를 적용한다. Short exit fill 은 long `sell()` 재사용을 중단하고 ask-side `buy_to_cover()` 모델을 사용한다. 따라서 이 변경 전 `fade_short_3mo_fb_stop15_0945` 계열 결과는 filter/fill 검증용으로 재사용하지 않는다.
 
 ## 다음 우선순위
 

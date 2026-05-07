@@ -189,3 +189,43 @@ def test_fill_model_high_participation_has_nonlinear_slippage_and_capacity_flag(
         high_participation.fill_price * 200.0
     )
     assert high_participation.capacity_limited is True
+
+
+def test_buy_to_cover_uses_ask_side_and_adverse_slippage() -> None:
+    settings = AppSettings(live_market_provider="disabled")
+    fill_model = FillModel(settings)
+    position = _position().model_copy(
+        update={
+            "direction": "SHORT",
+            "stop_price": 1.05,
+        }
+    )
+    row = _activity(
+        market_cap=600_000_000,
+        bid_price=1.00,
+        ask_price=1.04,
+        last_price=1.06,
+        volume=100_000,
+    )
+
+    sell_fill = fill_model.sell(
+        position=position,
+        row=row,
+        reason="stop_loss",
+        market_phase="regular",
+        requested_quantity=position.quantity,
+    )
+    cover_fill = fill_model.buy_to_cover(
+        position=position,
+        row=row,
+        reason="short_stop_loss",
+        market_phase="regular",
+        requested_quantity=position.quantity,
+    )
+
+    assert sell_fill.fill_reference_price == pytest.approx(1.00)
+    assert cover_fill.fill_reference_price == pytest.approx(1.04)
+    assert cover_fill.fill_price is not None
+    assert sell_fill.fill_price is not None
+    assert cover_fill.fill_price > row.ask_price
+    assert cover_fill.fill_price > sell_fill.fill_price

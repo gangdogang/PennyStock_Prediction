@@ -186,6 +186,99 @@ class FillModel:
             **capacity,
         )
 
+    def buy_to_cover(
+        self,
+        *,
+        position: PaperPosition,
+        row: MarketActivity | None,
+        reason: str,
+        market_phase: str,
+        requested_quantity: int,
+    ) -> FillResult:
+        reference: float | None = None
+        if row is not None and row.ask_price is not None and row.ask_price > 0:
+            reference = row.ask_price
+        elif row is not None and row.last_price is not None and row.last_price > 0:
+            reference = row.last_price
+        else:
+            reference = position.last_price or position.average_entry_price
+        if reference is None or reference <= 0:
+            return FillResult(
+                quantity=0,
+                remaining_quantity=requested_quantity,
+                fill_status="CANCELLED",
+                fill_price=None,
+                fill_reference_price=None,
+                fill_slippage_pct=None,
+                transaction_cost=0.0,
+            )
+        quantity, remaining_quantity, fill_status = self._capped_fill_quantity(
+            row=row,
+            requested_quantity=requested_quantity,
+        )
+        participation_pct = self._shares_pct_of_bar_volume(
+            row=row,
+            quantity=quantity,
+        )
+        participation_slippage_pct = self._participation_slippage_pct(participation_pct)
+        halt_resume_elapsed_seconds = self._halt_resume_elapsed_seconds(row)
+        halt_resume = halt_resume_elapsed_seconds is not None
+        spread_abs = self._spread_abs(row, reference=reference) if row is not None else 0.0
+        spread_slippage_pct = (
+            (spread_abs / reference)
+            * self._session_spread_multiplier(
+                market_phase=market_phase,
+                halt_resume=halt_resume,
+            )
+            * 100.0
+            if reference > 0 and spread_abs > 0
+            else 0.0
+        )
+        base_slippage_pct = self._base_slippage_pct(spread_abs=spread_abs) if row is not None else 0.0
+        slippage_pct = spread_slippage_pct + base_slippage_pct + participation_slippage_pct
+        gap_pct = 0.0
+        if (
+            reason == "short_stop_loss"
+            and position.stop_price is not None
+            and row is not None
+            and row.last_price is not None
+            and row.last_price > position.stop_price
+        ):
+            gap_pct = max(gap_pct, self.settings.paper_stop_gap_slippage_pct)
+        if halt_resume:
+            halt_penalty_pct = (
+                self._spread_penalty_abs(
+                    spread_abs=spread_abs,
+                    market_phase=market_phase,
+                    halt_resume_elapsed_seconds=halt_resume_elapsed_seconds,
+                )
+                / reference
+                * 100.0
+                if reference > 0
+                else 0.0
+            )
+            slippage_pct = max(slippage_pct, halt_penalty_pct)
+        slippage_pct += gap_pct
+        fill_price = reference * (1.0 + slippage_pct / 100.0)
+        notional = fill_price * quantity
+        capacity = self._capacity_metrics(
+            row=row,
+            quantity=quantity,
+            price=fill_price,
+            remaining_quantity=remaining_quantity,
+        )
+        return FillResult(
+            quantity=quantity,
+            remaining_quantity=remaining_quantity,
+            fill_status=fill_status,
+            fill_price=fill_price,
+            fill_reference_price=reference,
+            fill_slippage_pct=slippage_pct if slippage_pct > 0 else None,
+            transaction_cost=self._transaction_cost(notional),
+            participation_slippage_pct=participation_slippage_pct,
+            **capacity,
+        )
+
     def _spread_abs(
         self,
         row: MarketActivity,

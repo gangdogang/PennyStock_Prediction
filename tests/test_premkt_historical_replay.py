@@ -18,8 +18,15 @@ from penny_stock_radar.db import (
     insert_universe_candidates,
     insert_watchlist,
 )
-from penny_stock_radar.models import HistoricalMinuteBar, UniverseCandidate, WatchlistEntry
-from penny_stock_radar.services.premkt_historical_replay import validate_replay_paths
+from penny_stock_radar.models import HistoricalMinuteBar, MarketActivity, UniverseCandidate, WatchlistEntry
+from penny_stock_radar.services.premkt_historical_replay import (
+    FADE_SHORT_BUCKET,
+    PremktHistoricalReplayRunner,
+    ReplayOptions,
+    _BucketState,
+    validate_replay_paths,
+)
+from penny_stock_radar.services.setup_state import SetupJudgement
 from penny_stock_radar.services.premkt_model_training import PremktModelArtifact
 from penny_stock_radar.services.premkt_training_dataset import FEATURE_VERSION
 
@@ -579,6 +586,111 @@ def test_replay_cli_supports_label_and_predictor_effect_overrides(
     assert manifest["replay_ablation_policy"]["max_entries_per_symbol_per_day"] == 1
     assert manifest["replay_ablation_policy"]["cooldown_after_stop_minutes"] == 30.0
     assert trade_log.read_text(encoding="utf-8") == ""
+
+
+def test_fade_short_respects_min_entry_time_and_setup_state_filter(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "radar.sqlite3"
+    init_database(db_path)
+    options = ReplayOptions(
+        start_date="2026-04-10",
+        end_date="2026-04-10",
+        db_path=db_path,
+        export_dir=tmp_path / "replays" / "fade_filters",
+        min_entry_time=datetime.strptime("09:45", "%H:%M").time(),
+        require_entry_setup_states=("FAILED_BREAKOUT",),
+    )
+    runner = PremktHistoricalReplayRunner(
+        _replay_test_settings(tmp_path).model_copy(
+            update={
+                "paper_min_short_pct_change": 10.0,
+                "paper_max_short_spread_pct": 0.05,
+            }
+        ),
+        options=options,
+    )
+
+    class _FakeContext:
+        def feature_row(self, judgement: SetupJudgement) -> dict[str, object]:
+            return {
+                "bucket": FADE_SHORT_BUCKET,
+                "symbol": "FADE",
+                "setup_state": judgement.setup_state,
+            }
+
+    def fake_setup_for_row(**kwargs):
+        return (
+            _FakeContext(),
+            SetupJudgement(
+                setup_state="FAILED_BREAKOUT",
+                quality=3,
+                risk=2,
+                action_bias="watch",
+                confidence=0.8,
+                invalidation="hod",
+                add_condition="",
+                trim_condition="",
+                reasons=("fixture",),
+            ),
+        )
+
+    monkeypatch.setattr(runner, "_setup_for_row", fake_setup_for_row)
+    row = MarketActivity(
+        symbol="FADE",
+        market_phase="regular",
+        source="test",
+        last_price=2.00,
+        bid_price=1.99,
+        ask_price=2.01,
+        previous_close=1.00,
+        pct_change=100.0,
+        volume=100_000,
+        dollar_volume=200_000,
+        spread_pct=0.01,
+        has_live_quote=True,
+        analysis_label="CONDITIONAL_ENTRY",
+        analysis_score=3.5,
+        reasons=["fixture"],
+    )
+
+    before_cutoff_trades = runner._process_bucket_time(
+        state=_BucketState(bucket=FADE_SHORT_BUCKET, cash=10_000.0),
+        market_date="2026-04-10",
+        simulated_time=datetime(2026, 4, 10, 9, 44, tzinfo=EASTERN),
+        activity=[row],
+        predictions_by_symbol={},
+        bar_cursor=None,
+        cutoff_at=datetime(2026, 4, 10, 8, 0, tzinfo=EASTERN),
+    )
+    assert before_cutoff_trades == []
+
+    runner._required_entry_setup_states = {"DEAD_PUMP"}
+    wrong_state_trades = runner._process_bucket_time(
+        state=_BucketState(bucket=FADE_SHORT_BUCKET, cash=10_000.0),
+        market_date="2026-04-10",
+        simulated_time=datetime(2026, 4, 10, 9, 45, tzinfo=EASTERN),
+        activity=[row],
+        predictions_by_symbol={},
+        bar_cursor=None,
+        cutoff_at=datetime(2026, 4, 10, 8, 0, tzinfo=EASTERN),
+    )
+    assert wrong_state_trades == []
+
+    runner._required_entry_setup_states = {"FAILED_BREAKOUT"}
+    allowed_trades = runner._process_bucket_time(
+        state=_BucketState(bucket=FADE_SHORT_BUCKET, cash=10_000.0),
+        market_date="2026-04-10",
+        simulated_time=datetime(2026, 4, 10, 9, 45, tzinfo=EASTERN),
+        activity=[row],
+        predictions_by_symbol={},
+        bar_cursor=None,
+        cutoff_at=datetime(2026, 4, 10, 8, 0, tzinfo=EASTERN),
+    )
+    assert len(allowed_trades) == 1
+    assert allowed_trades[0]["event"] == "ENTRY"
+    assert allowed_trades[0]["bucket"] == FADE_SHORT_BUCKET
 
 
 def test_replay_breakeven_stop_after_r_moves_stop_to_entry(

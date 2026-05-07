@@ -692,8 +692,13 @@ class PremktHistoricalReplayRunner:
                     )
                 )
         if state.bucket == FADE_SHORT_BUCKET:
+            if self.options.min_entry_time is not None and simulated_time.time() < self.options.min_entry_time:
+                return trades
+            allowed_short_states = self._required_entry_setup_states or _FADE_SHORT_ENTRY_STATES
             for row in sorted(activity, key=lambda item: -(item.pct_change or 0.0), reverse=False):
                 if row.symbol in state.positions:
+                    continue
+                if self.options.require_l1_quotes_for_entries and not row.has_live_quote:
                     continue
                 if len(state.positions) >= max(int(self.settings.paper_adaptive_max_open_positions), 1):
                     break
@@ -701,7 +706,7 @@ class PremktHistoricalReplayRunner:
                 if entry_setup is None:
                     continue
                 _, judgement = entry_setup
-                if judgement.setup_state not in _FADE_SHORT_ENTRY_STATES:
+                if judgement.setup_state not in allowed_short_states:
                     continue
                 if (row.pct_change or 0.0) < float(self.settings.paper_min_short_pct_change):
                     continue
@@ -1021,14 +1026,24 @@ class PremktHistoricalReplayRunner:
             strategy_bucket=state.bucket,
             fees_paid_total=position.fees_paid,
             opened_at=position.opened_at,
+            direction=position.direction,
         )
-        fill = self.fill_model.sell(
-            position=paper_position,
-            row=row,
-            reason=reason,
-            market_phase=row.market_phase,
-            requested_quantity=position.quantity,
-        )
+        if position.direction == "SHORT":
+            fill = self.fill_model.buy_to_cover(
+                position=paper_position,
+                row=row,
+                reason=reason,
+                market_phase=row.market_phase,
+                requested_quantity=position.quantity,
+            )
+        else:
+            fill = self.fill_model.sell(
+                position=paper_position,
+                row=row,
+                reason=reason,
+                market_phase=row.market_phase,
+                requested_quantity=position.quantity,
+            )
         exit_price = fill.fill_price or row.last_price or position.entry_price
         if position.direction == "SHORT":
             # short: stop is above entry; clamp exit to stop on stop hit
